@@ -12,7 +12,8 @@ A release is a version tag `vX.Y.Z` on `main`, a GitHub release with notes, and 
 
 - [x] **Marketplace file.** `.claude-plugin/marketplace.json` lists the plugin (`"source": "./"`, the same `version` as `plugin.json`). Install with `/plugin marketplace add tammai/bug-hunter`, then `/plugin install bug-hunter@bug-hunter`.
 - [x] **Smoke-test version check.** `tests/test_smoke.py` checks that `plugin.json` and `marketplace.json` agree, so a bump is one edit per file and a mismatch fails CI.
-- [ ] **Visibility.** The repo is private, so only people with access can install it. Making it public is the owner's decision; it isn't part of a release.
+- [x] **Visibility.** The repo is public (since 2026-11-06), so anyone can add the marketplace and install it.
+- [x] **License.** MIT (`LICENSE`), also declared in both manifests.
 
 ## When to release
 
@@ -56,7 +57,7 @@ Run from a clean clone of `main`, logged in to `gh` as a maintainer.
 - **Never move or delete a published tag.** Someone may have installed it.
 - **A bad release:** revert on `main` (`git revert <commit>`, through a PR), then release the next patch version (`vX.Y.Z+1`) with the problem under known issues in its notes.
 - **Bad release notes only:** `gh release edit vX.Y.Z --notes-file <fixed.md>`.
-- **Only when no one could have installed it yet** (minutes after publishing, private repo): `gh release delete vX.Y.Z --yes` and `git push --delete origin vX.Y.Z`. Only with the owner's yes.
+- **Only when no one could have installed it yet** (minutes after publishing; the repo is public, so assume someone has once the release is up): `gh release delete vX.Y.Z --yes` and `git push --delete origin vX.Y.Z`. Only with the owner's yes.
 
 ## Go-ahead
 

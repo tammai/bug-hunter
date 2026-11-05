@@ -23,8 +23,6 @@ cd /path/to/the/repo/you/want/hunted
 claude --plugin-dir /path/to/bug-hunter
 ```
 
-The repo is private for now, so both need access to it.
-
 ## Hunt
 
 From the root of the repo you want hunted:
@@ -105,3 +103,7 @@ uv run ruff check .
 | `tests/` | pytest for the scripts, and checks on the prompt files |
 
 Changes go through sdlc (`/sdlc:start`). Principles: [constitution](docs/sdlc/constitution.md). Background: [BRIEF.md](BRIEF.md) and the [PRD](docs/sdlc/prd.md). Releases: [release runbook](knowledge/runbooks/release.md).
+
+## License
+
+[MIT](LICENSE)
