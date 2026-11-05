@@ -135,7 +135,13 @@
       "template": "templates/project/lint/ruff.sdlc.toml"
     }
   },
-  "merged": {},
+  "merged": {
+    ".claude/settings.json": [
+      "Bash(uv sync --frozen:*)",
+      "Bash(uv run pytest:*)",
+      "Bash(uv run ruff check .:*)"
+    ]
+  },
   "migrations": {
     "applied": [],
     "skipped": {}
@@ -149,7 +155,8 @@
       "commands",
       "ci",
       "rules",
-      "guardrails"
+      "guardrails",
+      "lint"
     ],
     "complete": false
   },
