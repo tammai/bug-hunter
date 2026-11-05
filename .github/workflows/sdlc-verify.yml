@@ -1,0 +1,40 @@
+# Managed by the sdlc plugin v3.1.0 (seeded: replaced on upgrade only while unedited).
+# Generated from the commands in .sdlc/config.json: the same commands verify.py runs.
+name: sdlc verify
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+concurrency:
+  group: sdlc-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash  # Git Bash on Windows runners: same shell everywhere
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["ubuntu-latest"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      - name: "install"
+        run: |
+          uv sync --frozen
+      - name: "lint"
+        run: |
+          uv run ruff check .
+      - name: "test"
+        run: |
+          uv run pytest

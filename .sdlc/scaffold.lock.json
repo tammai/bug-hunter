@@ -3,7 +3,23 @@
   "hosts": [
     "claude-code"
   ],
-  "files": {},
+  "files": {
+    ".github/workflows/sdlc-verify.yml": {
+      "class": "seeded",
+      "sha256": "b125ecf9efddc7187dc7fbe38ae2ae93aa60ebae674779463ccf1a60d5aded1e",
+      "template": "builtin:ci"
+    },
+    ".sdlc/ci/invariants.py": {
+      "class": "seeded",
+      "sha256": "eef64f3401e131389b02008c2b3ee6ce479aedc8e2970d1e24540065c53a8d79",
+      "template": "templates/project/ci/invariants.py"
+    },
+    ".github/workflows/sdlc-invariants.yml": {
+      "class": "seeded",
+      "sha256": "730ad6df777ce9d53a59a47885da7253e4d98eab243b640912d4712e507082b8",
+      "template": "builtin:invariants"
+    }
+  },
   "merged": {},
   "migrations": {
     "applied": [],
@@ -14,7 +30,8 @@
     "completed_steps": [
       "detect",
       "stack",
-      "skeleton"
+      "skeleton",
+      "commands"
     ],
     "complete": false
   },
