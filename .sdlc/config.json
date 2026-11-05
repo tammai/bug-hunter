@@ -13,5 +13,6 @@
     "lint": "uv run ruff check .",
     "typecheck": null,
     "build": null
-  }
+  },
+  "prd": "docs/sdlc/prd.md"
 }
