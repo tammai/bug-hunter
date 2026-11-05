@@ -5,5 +5,18 @@
       "Bash(uv run pytest:*)",
       "Bash(uv run ruff check .:*)"
     ]
+  },
+  "extraKnownMarketplaces": {
+    "sdlc": {
+      "source": {
+        "source": "github",
+        "repo": "tammai/sdlc"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "sdlc@sdlc": true,
+    "sdlc-extras@sdlc": true,
+    "sdlc-stepper@sdlc": true
   }
 }

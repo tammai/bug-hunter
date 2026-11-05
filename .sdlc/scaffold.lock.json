@@ -140,7 +140,14 @@
       "Bash(uv sync --frozen:*)",
       "Bash(uv run pytest:*)",
       "Bash(uv run ruff check .:*)"
-    ]
+    ],
+    ".claude/settings.json#plugin": [
+      "extraKnownMarketplaces.sdlc",
+      "enabledPlugins.sdlc@sdlc",
+      "enabledPlugins.sdlc-extras@sdlc",
+      "enabledPlugins.sdlc-stepper@sdlc"
+    ],
+    ".claude/settings.local.json#plugin": []
   },
   "migrations": {
     "applied": [],
@@ -156,7 +163,8 @@
       "ci",
       "rules",
       "guardrails",
-      "lint"
+      "lint",
+      "allowlist"
     ],
     "complete": false
   },
