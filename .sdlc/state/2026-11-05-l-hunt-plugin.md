@@ -57,6 +57,7 @@ inline, in parts (backlog) because the user asked to break it down and autopilot
 - 2026-11-05 Stage 3: fail — review r2: code M4 to fix; user chose one more fix round, plus security tickets T-1 and T-3
 - 2026-11-05 Stage 2: pass
 - 2026-11-05 Stage 3: pass
+- 2026-11-06 deployed v0.1.0 to GitHub release: smoke test pass
 
 ## Deviations
 - 2026-11-05 scripts/drafts.py What: drafts_dir, numbered, title and problems are module functions, not only the CLI's dir/next/check. Why: known.py and post.py import them so the numbering and format rules live in one place. Effect: no new CLI surface; three scripts share one module.
