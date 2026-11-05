@@ -1,5 +1,5 @@
 # 2026-11-05-l-hunt-plugin
-Status: active
+Status: done
 Process: 3
 Change: docs/sdlc/changes/2026-11-05-l-hunt-plugin.md   (this feature's record for people)
 Track: L   (sized up because: several distinct parts: 4 scripts, 2 commands, 2 agents, edge-input lists; footprint: 17 files)
@@ -10,14 +10,14 @@ Started: 2026-11-05
 Base: ccca279
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: bef69ae tree 701a93fc725d3221dee98fccf5a193504123de2b
+Verified: d7a22cb tree 12810bb2f62abbbc746d5eb56661c43ee1aa9a0f
 Slice: B4   Slice base: 4a6b44b   Slice gates: none
-Current: Stage 3 – Review
+Current: Stage 4 – Ship
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
 - [x] 2 Build
-- [ ] 3 Review   — the change file's ## Review
+- [x] 3 Review   — the change file's ## Review
 - [ ] 4 Ship     — PR: (Learn: knowledge, recurring-defects.md)
 
 ## How the build runs
@@ -56,6 +56,7 @@ inline, in parts (backlog) because the user asked to break it down and autopilot
 - 2026-11-05 Stage 2: pass
 - 2026-11-05 Stage 3: fail — review r2: code M4 to fix; user chose one more fix round, plus security tickets T-1 and T-3
 - 2026-11-05 Stage 2: pass
+- 2026-11-05 Stage 3: pass
 
 ## Deviations
 - 2026-11-05 scripts/drafts.py What: drafts_dir, numbered, title and problems are module functions, not only the CLI's dir/next/check. Why: known.py and post.py import them so the numbering and format rules live in one place. Effect: no new CLI surface; three scripts share one module.

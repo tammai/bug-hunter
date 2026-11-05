@@ -75,3 +75,36 @@ Build the plugin the PRD describes ([prd.md](../prd.md), Core capabilities 1–5
 - Edge-input lists for Go, Node and web (PRD open question 2: later).
 - The PRD's success measure "a `/hunt` run on sdlc's pre-fix commit finds most of the 12 known bugs": a live run with real agents, not an automated test; the first run after merge.
 - Fixing bugs; style, design or load findings (PRD non-goals).
+
+## Review
+
+- **Recommended and chosen:** security + code high, because `Risk: high` (runs target code, posts with the owner's `gh` login, untrusted text reaches `gh`), the track is L, and `## Public Surface` isn't empty; chosen by the recommendation (autopilot, L). Round 3 was the user's choice ("go ahead and fix them") after round 2 failed.
+- **Verdicts:** security → `.sdlc/.work/findings/2026-11-05-l-hunt-plugin/security-r1.md` → FAIL (S-01, S-02, S-03); `security-r2.md` → PASS. Code → `code-reviewer-r1.md` → FAIL (H1–H4, M1, M2); `code-reviewer-r2.md` → FAIL (M4, a bug added by a fix); `code-reviewer-r3.md` → PASS. Dependency audit → `dependency-audit-r1.md`: not run, because there are no runtime dependencies (stdlib only) and `pip-audit` isn't installed. The dev-only dependencies (pytest, ruff) weren't audited.
+- **Fixed:**
+  - S-01: issue titles from anyone reached agents that hold the owner's `gh` login. The agents now treat repo text, the known list and drafts as data, never instructions. They unset `gh` tokens and point `GH_CONFIG_DIR` at scratch on every call. `/hunt` fences the known list as untrusted, and `known.py` strips control characters and caps titles. Proved by `test_agents_treat_input_as_data_and_work_in_a_throwaway_copy` and `test_titles_are_cleaned_and_a_full_page_is_flagged`.
+  - S-02, H4, S-04, M3, L2: `cp -R` of a git worktree or a `.venv` reached back into the target. The new `scripts/throwaway.py` makes a standalone clone with the uncommitted tracked diff, removes `origin`, and refuses symlinks that leave the copy and a destination inside the repo. Proved by the `tests/test_throwaway.py` tests.
+  - S-03: drafts folders collided (`acme-web/api` and `acme/web-api`). The folder is now `~/.bug-hunter/<host>/<owner>/<repo>/drafts`, and `.`/`..` parts are refused. Proved by `test_dir_names_never_collide_or_escape`.
+  - H1: a failed `posted.json` write lost a filed issue. The dir is checked for writes before filing, the URL prints first, and the record is fsynced and atomic. Proved by `test_shows_url_when_recording_fails_after_filing`.
+  - H2: raw tracebacks (no git, `²`, `posted.json` that's a directory, non-UTF-8 names). Proved by `test_refuses_odd_numbers_duplicates_and_unusable_record` and `test_skips_names_that_are_not_utf8`.
+  - H3: `3.md` next to `03.md` was filed silently. Now refused, naming both files.
+  - M1: `.`, `./` and absolute paths. Proved by `test_dot_and_absolute_paths_name_the_repo`.
+  - M2: an empty `# ` title, and L1: headings inside code fences. Proved by `test_check_rejects_empty_title_and_ignores_headings_in_output`.
+  - L3: a full page of 500 issues is now flagged.
+  - M4: `throwaway.py`'s `git diff` followed the owner's diff config. Its options are now pinned. Proved by `test_copy_ignores_the_owners_diff_config`.
+  - Security tickets T-1 (agents now also hide git and SSH credentials) and T-3 (a failed `origin` removal is refused, as is a destination inside the repo), at the user's request. Proved by `test_agents_keep_the_owners_git_credentials_out_of_reach` and `test_refuses_a_dest_inside_the_repo`. On this Mac, `GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git config --get-all credential.helper` prints nothing.
+- **Tickets:**
+  - S-05: `/hunt-post` should show draft bodies, or warn about secret-looking text, before filing.
+  - `throwaway.py`: catch `PermissionError` cleanly; test the `origin`-removal failure branch.
+  - `drafts.py`: match the closing fence to its opening one (``` vs `~~~`, fence length).
+  - `/hunt`: say "use the expanded value" for `SCRATCH` and `DRAFTS`, and fence the verifier's draft with markers longer than its own fences.
+  - Symlink loops in `throwaway.py` raise instead of a clean message (they still fail closed).
+- **Drift and manual checks:**
+  - `drafts.py` functions are shared by `known.py` and `post.py`.
+  - The edge-input keyword test compares case-insensitively.
+  - AC-005's folder layout changed (S-03).
+  - New `scripts/throwaway.py` (S-02, H4, S-04, M3, L2).
+  - Agents' input and `gh` isolation rules (S-01).
+  - Round-3 changes: the pinned diff, the refusals, git credential isolation.
+  - No `manual` ACs. The PRD success measure (a live `/hunt` on sdlc's pre-fix commit) is out of scope: it's the first run after merge.
+- **Security:** all of S-01 to S-04 are fixed, and the round-2 tickets T-1 and T-3 are fixed too. The agents' isolation is prompt rules plus environment variables, not a sandbox; container isolation is still out of scope. No secrets in the diff. Dependency audit: nothing to audit (see Verdicts).
+- **Lessons filed:** [knowledge/decisions/drafts-location.md](../../../knowledge/decisions/drafts-location.md), [knowledge/gotchas/copying-a-target-repo.md](../../../knowledge/gotchas/copying-a-target-repo.md), [recurring-defects.md](../recurring-defects.md)

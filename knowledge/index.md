@@ -14,10 +14,10 @@ Background: [BRIEF.md](../BRIEF.md) — where the recipe comes from; [PRD](../do
 -
 
 ## Decisions
--
+- [decisions/drafts-location.md](decisions/drafts-location.md) — where drafts and posted.json live, and why that layout
 
 ## Gotchas
--
+- [gotchas/copying-a-target-repo.md](gotchas/copying-a-target-repo.md) — why agents copy targets only with throwaway.py
 
 ## Runbooks
 -
