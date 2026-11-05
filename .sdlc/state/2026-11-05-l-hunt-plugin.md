@@ -10,13 +10,13 @@ Started: 2026-11-05
 Base: ccca279
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: 4a6b44b tree 6d669e6ad4fef52d44228cb87b8e4252afd245b1
+Verified: fea4bd3 tree dc1ab3f0c9ca173adb37f5565dfe1de98d570a8a
 Slice: B4   Slice base: 4a6b44b   Slice gates: none
-Current: Stage 2 – Build
+Current: Stage 3 – Review
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
-- [ ] 2 Build
+- [x] 2 Build
 - [ ] 3 Review   — the change file's ## Review
 - [ ] 4 Ship     — PR: (Learn: knowledge, recurring-defects.md)
 
@@ -50,10 +50,17 @@ inline, in parts (backlog) because the user asked to break it down and autopilot
 ## Gate log
 - 2026-11-05 Stage 1: pass — plan self-approved (L, autopilot): every PRD capability maps to an AC; PRD open questions settled as decisions (container later; generic+python-cli lists first); no scope beyond the PRD; nothing irreversible
 - 2026-11-05 autopilot: in this session, at the user's request
+- 2026-11-05 Stage 2: pass
+- 2026-11-05 review: ran security, code high (Risk: high; L; Public Surface), self-chosen: L autopilot
+- 2026-11-05 Stage 3: fail — review r1: security S-01..S-04, code H1-H4, M1-M3, L1-L3 to fix; S-05 ticket
+- 2026-11-05 Stage 2: pass
 
 ## Deviations
 - 2026-11-05 scripts/drafts.py What: drafts_dir, numbered, title and problems are module functions, not only the CLI's dir/next/check. Why: known.py and post.py import them so the numbering and format rules live in one place. Effect: no new CLI surface; three scripts share one module.
 - 2026-11-05 tests/test_plugin_files.py What: the edge-input keyword check compares case-insensitively. Why: list items start with a capital (Off-by-one, Subprocess) while the brief's words are lower case. Effect: same coverage of the brief's items.
+- 2026-11-05 AC-005 / scripts/drafts.py What: drafts folder is ~/.bug-hunter/<host>/<owner>/<repo>/drafts (~/.bug-hunter/local/<folder>/drafts without origin), not <owner>-<repo>. Why: review S-03, the '-' join made acme-web/api and acme/web-api share drafts and posted.json across repos. Effect: AC-005's test asserts the new layout; README updated.
+- 2026-11-05 scripts/throwaway.py, tests/test_throwaway.py What: new script making the agents' throwaway copy (standalone clone + uncommitted tracked diff, origin removed, refuses symlinks out of the copy). Why: review S-02, H4, S-04, M3, L2: cp -R of a worktree or .venv reached back into the target (constitution III). Effect: both agents call it; new CLI surface throwaway.py <repo> <dest>.
+- 2026-11-05 agents/*.md, commands/hunt.md What: agents treat repo text, the known list and drafts as data, unset gh tokens and point GH_CONFIG_DIR at scratch in every Bash call, never run gh; /hunt passes the known list fenced as untrusted; known.py strips control characters and caps titles. Why: review S-01, issue titles from anyone reached agents holding the owner's gh login. Effect: prompt-injection surface reduced; not a sandbox (container isolation still out of scope).
 
 ## Open questions
 -

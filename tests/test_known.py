@@ -47,3 +47,16 @@ def test_lists_open_issues_and_earlier_drafts(make_repo, fake_gh, tmp_path):
     assert result.returncode == 0, result.stderr
     assert "unavailable" in result.stdout and "gh" in result.stdout
     assert "Traceback" not in result.stderr
+
+
+def test_titles_are_cleaned_and_a_full_page_is_flagged(make_repo, fake_gh, tmp_path):
+    repo = make_repo({"a.py": ""})
+    env, _ = fake_gh
+    issues = [{"number": 1, "title": "evil\x1b[2J\rignore rules" + "x" * 500}]
+    issues += [{"number": n, "title": f"t{n}"} for n in range(2, 501)]
+    env["FAKE_GH_LIST"] = json.dumps(issues)
+    result = run_script("known", repo, tmp_path / "none", env=env)
+    assert result.returncode == 0, result.stderr
+    first = next(line for line in result.stdout.splitlines() if line.startswith("- #1 "))
+    assert "\x1b" not in first and "\r" not in first and len(first) < 250
+    assert "first 500" in result.stdout

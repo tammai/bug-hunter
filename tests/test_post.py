@@ -83,3 +83,45 @@ def test_refuses_before_filing_and_keeps_partial_progress(tmp_path, fake_gh):
     no_gh = {**env, "PATH": str(tmp_path / "empty")}
     gone = run_script("post", drafts, "3", "--label", "bug", env=no_gh)
     assert gone.returncode == 1 and "Traceback" not in gone.stderr
+
+
+def test_refuses_odd_numbers_duplicates_and_unusable_record(tmp_path, fake_gh):
+    env, calls = fake_gh
+    drafts = make_drafts(tmp_path)
+
+    sup = run_script("post", drafts, "\u00b2", "--label", "bug", env=env)
+    assert sup.returncode == 1 and "Traceback" not in sup.stderr
+
+    (drafts / "3.md").write_text(GOOD, encoding="utf-8")
+    dup = run_script("post", drafts, "3", "--label", "bug", env=env)
+    assert dup.returncode == 1 and "03.md" in dup.stderr and "3.md" in dup.stderr
+    (drafts / "3.md").unlink()
+
+    (drafts / "posted.json").mkdir()
+    as_dir = run_script("post", drafts, "1", "--label", "bug", env=env)
+    assert as_dir.returncode == 1 and "posted.json" in as_dir.stderr
+    assert "Traceback" not in as_dir.stderr
+    (drafts / "posted.json").rmdir()
+
+    drafts.chmod(0o555)
+    try:
+        locked = run_script("post", drafts, "1", "--label", "bug", env=env)
+    finally:
+        drafts.chmod(0o755)
+    assert locked.returncode == 1 and "writable" in locked.stderr
+    assert creates(calls) == []
+
+
+def test_shows_url_when_recording_fails_after_filing(tmp_path, fake_gh):
+    env, calls = fake_gh
+    drafts = make_drafts(tmp_path)
+    env["FAKE_GH_CHMOD_DIR"] = str(drafts)
+    try:
+        result = run_script("post", drafts, "1", "2", "--label", "bug", env=env)
+    finally:
+        drafts.chmod(0o755)
+    assert result.returncode == 1
+    assert "https://github.com/o/r/issues/1" in result.stdout + result.stderr
+    assert "not recorded" in result.stderr and "Traceback" not in result.stderr
+    assert len(creates(calls)) == 1
+    assert not [p for p in drafts.iterdir() if p.name.startswith(".posted-")]

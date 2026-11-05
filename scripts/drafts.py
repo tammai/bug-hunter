@@ -8,7 +8,16 @@ from pathlib import Path
 
 SECTIONS = ["What happens", "Steps to reproduce", "Expected", "Root cause"]
 DRAFT_NAME = re.compile(r"^(\d+)\.md$")
-ORIGIN = re.compile(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?/?$")
+URL_ORIGIN = re.compile(r"^[a-z][a-z0-9+.-]*://(?:[^@/]*@)?([^/:]+)(?::\d+)?/(.+)$", re.I)
+SCP_ORIGIN = re.compile(r"^(?:[^@/]*@)?([^/:]+):(?!/)(.+)$")
+
+
+def _origin_parts(url: str) -> list[str] | None:
+    match = URL_ORIGIN.match(url) or SCP_ORIGIN.match(url)
+    if not match:
+        return None
+    path = match[2].rstrip("/").removesuffix(".git")
+    return [match[1], *path.split("/")]
 
 
 def drafts_dir(repo: str) -> Path:
@@ -17,9 +26,14 @@ def drafts_dir(repo: str) -> Path:
         ["git", "-C", repo, "remote", "get-url", "origin"],
         capture_output=True, text=True, encoding="utf-8",
     )
-    match = ORIGIN.search(result.stdout.strip()) if result.returncode == 0 else None
-    name = f"{match[1]}-{match[2]}" if match else Path(repo).resolve().name
-    return Path.home() / ".bug-hunter" / name / "drafts"
+    parts = _origin_parts(result.stdout.strip()) if result.returncode == 0 else None
+    if parts is None:
+        parts = ["local", Path(repo).resolve().name]
+    # One folder level per URL part, so acme-web/api and acme/web-api never share a folder;
+    # a "." or ".." part would climb out of ~/.bug-hunter.
+    if any(part in ("", ".", "..") for part in parts):
+        raise ValueError(f"origin URL can't name a drafts folder: {result.stdout.strip()}")
+    return Path.home().joinpath(".bug-hunter", *parts, "drafts")
 
 
 def numbered(directory: Path) -> list[tuple[int, Path]]:
@@ -34,7 +48,7 @@ def title(path: Path) -> str | None:
     """A draft's `# ` title, or None when it has none."""
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if line.strip():
-            return line[2:].strip() if line.startswith("# ") else None
+            return (line[2:].strip() or None) if line.startswith("# ") else None
     return None
 
 
@@ -45,11 +59,16 @@ def problems(text: str) -> list[str]:
     first = next((line for line in lines if line.strip()), "")
     if not first.startswith("# "):
         found.append("missing a '# ' title line")
+    elif not first[2:].strip():
+        found.append("empty title after '# '")
 
     bodies: dict[str, list[str]] = {}
     current = None
+    in_fence = False
     for line in lines:
-        if line.startswith("## "):
+        if line.lstrip().startswith(("```", "~~~")):
+            in_fence = not in_fence
+        if line.startswith("## ") and not in_fence:
             current = line[3:].strip().rstrip(":").casefold()
             bodies.setdefault(current, [])
         elif current is not None:
@@ -80,7 +99,14 @@ def _main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "dir":
-        print(drafts_dir(args.repo))
+        try:
+            print(drafts_dir(args.repo))
+        except FileNotFoundError:
+            print("error: git is not installed", file=sys.stderr)
+            return 1
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
         return 0
     if args.command == "next":
         drafts = numbered(Path(args.dir))

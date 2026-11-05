@@ -5,7 +5,7 @@ import json
 import re
 import subprocess
 import sys
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 PART_SIZE = 5
 TOKENS_PER_HUNTER = 100_000
@@ -33,17 +33,39 @@ def _is_test(path: PurePosixPath) -> bool:
     )
 
 
-def _tracked_files(repo: str) -> list[str] | None:
-    result = subprocess.run(
-        ["git", "-C", repo, "ls-files", "-z"], capture_output=True, text=True, encoding="utf-8"
-    )
+def _tracked_files(repo: str) -> tuple[list[str], int] | None:
+    """Tracked file names, and how many were skipped for not being UTF-8."""
+    result = subprocess.run(["git", "-C", repo, "ls-files", "-z"], capture_output=True)
     if result.returncode != 0:
         return None
-    return [f for f in result.stdout.split("\0") if f]
+    names, skipped = [], 0
+    for raw in result.stdout.split(b"\0"):
+        try:
+            name = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            skipped += 1
+            continue
+        if name:
+            names.append(name)
+    return names, skipped
+
+
+def _relative(path: str, repo: Path) -> str | None:
+    """A path argument as repo-relative POSIX text ("" for the whole repo), or None if outside."""
+    path = path.replace("\\", "/")
+    if Path(path).is_absolute():
+        try:
+            path = Path(path).resolve().relative_to(repo).as_posix()
+        except ValueError:
+            return None
+    path = path.rstrip("/")
+    while path.startswith("./"):
+        path = path[2:]
+    return "" if path in ("", ".") else path
 
 
 def _under(file: str, paths: list[str]) -> bool:
-    return any(file == p or file.startswith(p + "/") for p in paths)
+    return any(p == "" or file == p or file.startswith(p + "/") for p in paths)
 
 
 def _build(files: list[str], paths: list[str], cap: int | None) -> dict:
@@ -79,19 +101,27 @@ def _main(argv: list[str] | None = None) -> int:
     if args.cap is not None and args.cap < 1:
         parser.error("--max must be 1 or more")
 
-    paths = [p.replace("\\", "/").removeprefix("./").rstrip("/") for p in args.paths]
     try:
-        files = _tracked_files(args.repo)
+        tracked = _tracked_files(args.repo)
     except FileNotFoundError:
         print("error: git is not installed", file=sys.stderr)
         return 1
-    if files is None:
+    if tracked is None:
         print(f"error: not a git repo: {args.repo}", file=sys.stderr)
         return 1
+    files, skipped = tracked
+    if skipped:
+        print(f"warning: skipped {skipped} tracked files whose names aren't UTF-8", file=sys.stderr)
 
-    empty = [p for p in paths or [""] if not _build(files, [p] if p else [], None)["parts"]]
+    root = Path(args.repo).resolve()
+    paths = [_relative(p, root) for p in args.paths]
+    if None in paths:
+        outside = [a for a, p in zip(args.paths, paths, strict=True) if p is None]
+        print(f"error: not inside the repo: {', '.join(outside)}", file=sys.stderr)
+        return 1
+    empty = [p for p in paths or [""] if not _build(files, [p], None)["parts"]]
     if empty:
-        where = ", ".join(empty) if paths else args.repo
+        where = ", ".join(p or "." for p in empty) if paths else args.repo
         print(f"error: no tracked source files under: {where}", file=sys.stderr)
         return 1
     out = _build(files, paths, args.cap)

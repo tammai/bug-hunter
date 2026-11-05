@@ -57,3 +57,14 @@ def test_edge_input_lists_cover_the_brief():
     ):
         assert item.casefold() in generic, item
     assert (ROOT / "edge-inputs/python-cli.md").read_text(encoding="utf-8").strip()
+
+
+def test_agents_treat_input_as_data_and_work_in_a_throwaway_copy():
+    for rel in ("agents/bug-hunter.md", "agents/repro-verifier.md"):
+        _, body = read(rel)
+        assert "data, never instructions" in body, rel
+        assert "GH_CONFIG_DIR" in body and "unset GH_TOKEN" in body, rel
+        assert "scripts/throwaway.py" in body, rel
+        assert "cp -R" not in body, rel
+    _, hunt = read("commands/hunt.md")
+    assert "untrusted" in hunt and "PLUGIN=" in hunt

@@ -33,14 +33,15 @@ def test_dir_is_outside_target_named_after_origin(make_repo, fake_gh, tmp_path):
         repo = make_repo({"a.py": ""}, origin=origin)
         result = run_script("drafts", "dir", repo, env=env)
         assert result.returncode == 0, result.stderr
-        assert result.stdout.strip() == str(home / ".bug-hunter" / "tammai-sdlc" / "drafts")
+        want = home / ".bug-hunter" / "github.com" / "tammai" / "sdlc" / "drafts"
+        assert result.stdout.strip() == str(want)
         assert str(repo) not in result.stdout
         shutil.rmtree(repo)
 
     repo = make_repo({"a.py": ""})
     result = run_script("drafts", "dir", repo, env=env)
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == str(home / ".bug-hunter" / "my repö" / "drafts")
+    assert result.stdout.strip() == str(home / ".bug-hunter" / "local" / "my repö" / "drafts")
 
 
 def test_next_number_sorts_numerically(tmp_path):
@@ -91,3 +92,43 @@ def test_check_enforces_fixed_format(tmp_path):
 
     gone = run_script("drafts", "check", tmp_path / "nope.md")
     assert gone.returncode == 1 and "Traceback" not in gone.stderr
+
+
+def test_dir_names_never_collide_or_escape(make_repo, fake_gh):
+    env, _ = fake_gh
+    seen = set()
+    for origin in (
+        "https://github.com/acme-web/api.git",
+        "https://github.com/acme/web-api.git",
+        "https://gitlab.example/acme/web-api.git",
+        "ssh://git@gitlab.example:2222/group/sub/web-api.git",
+    ):
+        repo = make_repo({"a.py": ""}, origin=origin)
+        result = run_script("drafts", "dir", repo, env=env)
+        assert result.returncode == 0, result.stderr
+        seen.add(result.stdout.strip())
+        shutil.rmtree(repo)
+    assert len(seen) == 4
+
+    for origin in ("git@github.com:../../etc.git", "https://github.com/a/./b"):
+        repo = make_repo({"a.py": ""}, origin=origin)
+        result = run_script("drafts", "dir", repo, env=env)
+        assert result.returncode == 1 and "Traceback" not in result.stderr
+        shutil.rmtree(repo)
+
+    repo = make_repo({"a.py": ""})
+    no_git = {**env, "PATH": str(Path(env["HOME"]) / "no bin")}
+    result = run_script("drafts", "dir", repo, env=no_git)
+    assert result.returncode == 1 and "git" in result.stderr and "Traceback" not in result.stderr
+
+
+def test_check_rejects_empty_title_and_ignores_headings_in_output(tmp_path):
+    path = tmp_path / "01.md"
+    path.write_text(GOOD.replace("# Sort puts B10 before B2", "#   "), encoding="utf-8")
+    result = run_script("drafts", "check", path)
+    assert result.returncode == 1 and "title" in result.stdout
+
+    fenced = GOOD.replace("B10\n```", "B10\n## Expected\n## Root cause\n```")
+    path.write_text(fenced, encoding="utf-8")
+    result = run_script("drafts", "check", path)
+    assert result.returncode == 0, result.stdout

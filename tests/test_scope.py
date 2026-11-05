@@ -1,4 +1,5 @@
 import json
+import subprocess
 
 from conftest import run_script
 
@@ -75,3 +76,34 @@ def test_paths_restrict_and_errors_are_clean(make_repo, tmp_path):
     assert result.returncode == 1
     assert "Traceback" not in result.stderr
     assert len(result.stderr.strip().splitlines()) == 1
+
+
+def test_dot_and_absolute_paths_name_the_repo(make_repo):
+    repo = make_repo(FILES)
+    _, whole = scope(repo)
+    for arg in (".", "./"):
+        result, out = scope(repo, arg)
+        assert result.returncode == 0, result.stderr
+        assert out == whole
+    result, out = scope(repo, repo / "src")
+    assert result.returncode == 0, result.stderr
+    assert [f for p in out["parts"] for f in p["files"]] == ["src/cli.py", "src/my dir/naïve.py"]
+
+    result = run_script("scope", repo, repo.parent)
+    assert result.returncode == 1 and "Traceback" not in result.stderr
+
+
+def test_skips_names_that_are_not_utf8(make_repo):
+    repo = make_repo({"ok.py": ""})
+    blob = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"], cwd=repo, input=b"", capture_output=True
+    ).stdout.decode().strip()
+    subprocess.run(
+        [b"git", b"update-index", b"--add", b"--cacheinfo",
+         f"100644,{blob},".encode() + b"bad\xff.py"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    result, out = scope(repo)
+    assert result.returncode == 0, result.stderr
+    assert [f for p in out["parts"] for f in p["files"]] == ["ok.py"]
+    assert "UTF-8" in result.stderr and "Traceback" not in result.stderr

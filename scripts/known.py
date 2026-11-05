@@ -8,12 +8,23 @@ from pathlib import Path
 
 from drafts import numbered, title
 
+LIMIT = 500
+TITLE_MAX = 200
+
+
+def _clean(text: str) -> str:
+    # Titles come from anyone who can open an issue and are shown to agents: drop control
+    # characters (terminal escapes, carriage returns) and cap the length.
+    text = "".join(ch for ch in text if ch.isprintable())
+    return text if len(text) <= TITLE_MAX else text[:TITLE_MAX] + "…"
+
 
 def _open_issues(repo: str) -> tuple[list[str], str | None]:
     """Lines for the open issues, or the reason they couldn't be listed."""
     try:
         result = subprocess.run(
-            ["gh", "issue", "list", "--state", "open", "--limit", "500", "--json", "number,title"],
+            ["gh", "issue", "list", "--state", "open", "--limit", str(LIMIT),
+             "--json", "number,title"],
             cwd=repo, capture_output=True, text=True, encoding="utf-8",
         )
     except FileNotFoundError:
@@ -27,7 +38,11 @@ def _open_issues(repo: str) -> tuple[list[str], str | None]:
         return [], "gh issue list printed something other than JSON"
     if not isinstance(issues, list) or not all(isinstance(i, dict) for i in issues):
         return [], "gh issue list printed an unexpected shape"
-    return [f"- #{i.get('number', '?')} {i.get('title') or '(no title)'}" for i in issues], None
+    lines = [f"- #{i.get('number', '?')} {_clean(str(i.get('title') or '')) or '(no title)'}"
+             for i in issues]
+    if len(issues) >= LIMIT:
+        lines.append(f"- (only the first {LIMIT} open issues were listed; more may exist)")
+    return lines, None
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -46,7 +61,7 @@ def _main(argv: list[str] | None = None) -> int:
     print("\n## Earlier findings")
     drafts = numbered(Path(args.drafts_dir))
     for _, path in drafts:
-        print(f"- {path.stem} {title(path) or '(no title)'}")
+        print(f"- {path.stem} {_clean(title(path) or '') or '(no title)'}")
     if not drafts:
         print("- none")
     return 0

@@ -54,6 +54,8 @@ if args[:2] == ["issue", "create"]:
         print("GraphQL: could not create issue", file=sys.stderr)
         sys.exit(1)
     open(counter, "w").write(str(n))
+    if os.environ.get("FAKE_GH_CHMOD_DIR"):
+        os.chmod(os.environ["FAKE_GH_CHMOD_DIR"], 0o555)
     print(f"https://github.com/o/r/issues/{{n}}")
     sys.exit(0)
 sys.exit(3)
@@ -79,6 +81,11 @@ def fake_gh(tmp_path):
         return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
 
     return env, calls
+
+
+def commit(repo: Path, message: str = "init") -> None:
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty",
+        "-m", message)
 
 
 def run_script(name: str, *args, cwd=None, env=None) -> subprocess.CompletedProcess:

@@ -3,12 +3,15 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 from drafts import numbered, problems, title
+
+UNREADABLE = "{} is unreadable; fix or remove it so nothing is filed twice"
 
 
 def _fail(message: str) -> int:
@@ -17,11 +20,27 @@ def _fail(message: str) -> int:
 
 
 def _record(posted_file: Path, posted: dict[str, str]) -> None:
-    # Written after every issue, atomically, so a crash part way never loses what was filed.
+    # Atomic and synced, so a crash part way never leaves a half-written record behind.
     fd, tmp = tempfile.mkstemp(dir=posted_file.parent, prefix=".posted-", suffix=".json")
-    with os.fdopen(fd, "w", encoding="utf-8") as out:
-        json.dump(posted, out, indent=2, sort_keys=True)
-    os.replace(tmp, posted_file)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            json.dump(posted, out, indent=2, sort_keys=True)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(tmp, posted_file)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _writable(directory: Path) -> bool:
+    try:
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".posted-")
+    except OSError:
+        return False
+    os.close(fd)
+    os.unlink(tmp)
+    return True
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -32,16 +51,22 @@ def _main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     drafts_dir = Path(args.drafts_dir)
 
-    if bad := [n for n in args.numbers if not n.isdigit()]:
+    if bad := [n for n in args.numbers if not re.fullmatch(r"[0-9]+", n)]:
         return _fail(f"not a draft number: {', '.join(bad)}")
-    by_number = dict(numbered(drafts_dir))
+    by_number: dict[int, list[Path]] = {}
+    for n, path in numbered(drafts_dir):
+        by_number.setdefault(n, []).append(path)
     wanted = list(dict.fromkeys(int(n) for n in args.numbers))
     if missing := [f"{n:02d}" for n in wanted if n not in by_number]:
         return _fail(f"no draft {', '.join(missing)} in {drafts_dir}")
+    if clashes := [paths for n in wanted if len(paths := by_number[n]) > 1]:
+        names = "; ".join(" and ".join(p.name for p in paths) for paths in clashes)
+        return _fail(f"more than one draft has the same number: {names}; rename one")
+    chosen = {n: by_number[n][0] for n in wanted}
     broken = [
         f"draft {n:02d}: {p}"
         for n in wanted
-        for p in problems(by_number[n].read_text(encoding="utf-8", errors="replace"))
+        for p in problems(chosen[n].read_text(encoding="utf-8", errors="replace"))
     ]
     if broken:
         return _fail("drafts fail the format check, nothing filed:\n" + "\n".join(broken))
@@ -49,10 +74,12 @@ def _main(argv: list[str] | None = None) -> int:
     posted_file = drafts_dir / "posted.json"
     try:
         posted = json.loads(posted_file.read_text(encoding="utf-8")) if posted_file.exists() else {}
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return _fail(f"{posted_file} is unreadable; fix or remove it so nothing is filed twice")
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return _fail(UNREADABLE.format(posted_file))
     if not isinstance(posted, dict):
-        return _fail(f"{posted_file} is unreadable; fix or remove it so nothing is filed twice")
+        return _fail(UNREADABLE.format(posted_file))
+    if not _writable(drafts_dir):
+        return _fail(f"{drafts_dir} isn't writable, so filed drafts couldn't be recorded")
 
     try:
         auth = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True)
@@ -62,7 +89,7 @@ def _main(argv: list[str] | None = None) -> int:
         return _fail("gh is not logged in; run `gh auth login`, then post again")
 
     for n in wanted:
-        key, path = f"{n:02d}", by_number[n]
+        key, path = f"{n:02d}", chosen[n]
         if key in posted:
             print(f"{key}: already filed as {posted[key]}, skipped")
             continue
@@ -75,9 +102,15 @@ def _main(argv: list[str] | None = None) -> int:
             reason = (result.stderr.strip().splitlines() or ["no message"])[-1]
             return _fail(f"draft {key} not filed: {reason}. Drafts filed before it are recorded.")
         url = (result.stdout.strip().splitlines() or [""])[-1]
+        print(f"{key}: {url}", flush=True)
         posted[key] = url
-        _record(posted_file, posted)
-        print(f"{key}: {url}")
+        try:
+            _record(posted_file, posted)
+        except OSError as exc:
+            return _fail(
+                f"draft {key} was filed as {url} but not recorded in {posted_file} ({exc}); "
+                f"add it there by hand before posting again"
+            )
     return 0
 
 
