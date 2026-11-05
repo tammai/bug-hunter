@@ -10,8 +10,8 @@ Started: 2026-11-05
 Base: ccca279
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: 8e87196 tree 19c5c53b36613c75fab4319f6955fc9d706f9c54
-Slice: B3   Slice base: 8e87196   Slice gates: none
+Verified: 4a6b44b tree 6d669e6ad4fef52d44228cb87b8e4252afd245b1
+Slice: B4   Slice base: 4a6b44b   Slice gates: none
 Current: Stage 2 – Build
 
 ## Stages
@@ -53,6 +53,7 @@ inline, in parts (backlog) because the user asked to break it down and autopilot
 
 ## Deviations
 - 2026-11-05 scripts/drafts.py What: drafts_dir, numbered, title and problems are module functions, not only the CLI's dir/next/check. Why: known.py and post.py import them so the numbering and format rules live in one place. Effect: no new CLI surface; three scripts share one module.
+- 2026-11-05 tests/test_plugin_files.py What: the edge-input keyword check compares case-insensitively. Why: list items start with a capital (Off-by-one, Subprocess) while the brief's words are lower case. Effect: same coverage of the brief's items.
 
 ## Open questions
 -
