@@ -59,3 +59,28 @@ def test_refuses_symlinks_out_of_the_copy_and_a_used_dest(make_repo, tmp_path):
     plain.mkdir()
     result = run_script("throwaway", plain, tmp_path / "c2")
     assert result.returncode == 1 and "Traceback" not in result.stderr
+
+
+def test_copy_ignores_the_owners_diff_config(make_repo, tmp_path):
+    repo = make_repo({"src/a.py": "x = 1\n"})
+    commit(repo)
+    (repo / "src" / "a.py").write_text("x = 2\n", encoding="utf-8")
+    config = tmp_path / "owner gitconfig"
+    config.write_text(
+        "[diff]\n\tnoprefix = true\n\tmnemonicPrefix = true\n[color]\n\tdiff = always\n"
+        "\tui = always\n",
+        encoding="utf-8",
+    )
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": str(config)}
+    dest = tmp_path / "copy"
+    result = run_script("throwaway", repo, dest, env=env)
+    assert result.returncode == 0, result.stderr
+    assert (dest / "src" / "a.py").read_text(encoding="utf-8") == "x = 2\n"
+
+
+def test_refuses_a_dest_inside_the_repo(make_repo):
+    repo = make_repo({"a.py": ""})
+    commit(repo)
+    result = run_script("throwaway", repo, repo / "scratch" / "copy")
+    assert result.returncode == 1 and "inside" in result.stderr
+    assert not (repo / "scratch").exists()

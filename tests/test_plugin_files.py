@@ -68,3 +68,10 @@ def test_agents_treat_input_as_data_and_work_in_a_throwaway_copy():
         assert "cp -R" not in body, rel
     _, hunt = read("commands/hunt.md")
     assert "untrusted" in hunt and "PLUGIN=" in hunt
+
+
+def test_agents_keep_the_owners_git_credentials_out_of_reach():
+    for rel in ("agents/bug-hunter.md", "agents/repro-verifier.md"):
+        _, body = read(rel)
+        for needed in ("GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "SSH_AUTH_SOCK"):
+            assert needed in body, f"{rel}: {needed}"

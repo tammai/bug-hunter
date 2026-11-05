@@ -31,7 +31,9 @@ def _make(repo: Path, dest: Path) -> str | None:
     top = _git("-C", str(repo), "rev-parse", "--show-toplevel", text=True)
     if top.returncode != 0:
         return f"not a git repo: {repo}"
-    repo = Path(top.stdout.strip())
+    repo = Path(top.stdout.strip()).resolve()
+    if dest.resolve().is_relative_to(repo):
+        return f"{dest} is inside the repo; the copy must go outside it"
 
     # A clone, not cp -R: a worktree's .git file, a .venv's absolute paths and other untracked
     # environments would all point back into the real repo.
@@ -40,9 +42,16 @@ def _make(repo: Path, dest: Path) -> str | None:
     if clone.returncode != 0:
         return f"git clone failed: {clone.stderr.decode(errors='replace').strip()}"
     # Without this, a repro's `git push` would write into the real repo.
-    _git("-C", str(dest), "remote", "remove", "origin")
+    if _git("-C", str(dest), "remote", "remove", "origin").returncode != 0:
+        shutil.rmtree(dest)
+        return "couldn't remove the copy's origin remote, which points at the real repo"
 
-    diff = _git("-C", str(repo), "diff", "HEAD", "--binary")
+    # Pinned options, since the owner's diff config (noprefix, color, external tools) would
+    # otherwise give a patch that git apply can't read.
+    diff = _git(
+        "-C", str(repo), "diff", "HEAD", "--binary", "--no-ext-diff", "--no-textconv",
+        "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
+    )
     if diff.returncode != 0:
         shutil.rmtree(dest)
         return "couldn't read the repo's uncommitted changes"

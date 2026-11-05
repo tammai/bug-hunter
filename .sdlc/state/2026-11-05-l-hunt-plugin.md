@@ -10,7 +10,7 @@ Started: 2026-11-05
 Base: ccca279
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: fea4bd3 tree dc1ab3f0c9ca173adb37f5565dfe1de98d570a8a
+Verified: bef69ae tree 701a93fc725d3221dee98fccf5a193504123de2b
 Slice: B4   Slice base: 4a6b44b   Slice gates: none
 Current: Stage 3 – Review
 
@@ -54,6 +54,8 @@ inline, in parts (backlog) because the user asked to break it down and autopilot
 - 2026-11-05 review: ran security, code high (Risk: high; L; Public Surface), self-chosen: L autopilot
 - 2026-11-05 Stage 3: fail — review r1: security S-01..S-04, code H1-H4, M1-M3, L1-L3 to fix; S-05 ticket
 - 2026-11-05 Stage 2: pass
+- 2026-11-05 Stage 3: fail — review r2: code M4 to fix; user chose one more fix round, plus security tickets T-1 and T-3
+- 2026-11-05 Stage 2: pass
 
 ## Deviations
 - 2026-11-05 scripts/drafts.py What: drafts_dir, numbered, title and problems are module functions, not only the CLI's dir/next/check. Why: known.py and post.py import them so the numbering and format rules live in one place. Effect: no new CLI surface; three scripts share one module.
@@ -61,6 +63,7 @@ inline, in parts (backlog) because the user asked to break it down and autopilot
 - 2026-11-05 AC-005 / scripts/drafts.py What: drafts folder is ~/.bug-hunter/<host>/<owner>/<repo>/drafts (~/.bug-hunter/local/<folder>/drafts without origin), not <owner>-<repo>. Why: review S-03, the '-' join made acme-web/api and acme/web-api share drafts and posted.json across repos. Effect: AC-005's test asserts the new layout; README updated.
 - 2026-11-05 scripts/throwaway.py, tests/test_throwaway.py What: new script making the agents' throwaway copy (standalone clone + uncommitted tracked diff, origin removed, refuses symlinks out of the copy). Why: review S-02, H4, S-04, M3, L2: cp -R of a worktree or .venv reached back into the target (constitution III). Effect: both agents call it; new CLI surface throwaway.py <repo> <dest>.
 - 2026-11-05 agents/*.md, commands/hunt.md What: agents treat repo text, the known list and drafts as data, unset gh tokens and point GH_CONFIG_DIR at scratch in every Bash call, never run gh; /hunt passes the known list fenced as untrusted; known.py strips control characters and caps titles. Why: review S-01, issue titles from anyone reached agents holding the owner's gh login. Effect: prompt-injection surface reduced; not a sandbox (container isolation still out of scope).
+- 2026-11-05 scripts/throwaway.py, agents/*.md What: diff pinned (--no-ext-diff --no-textconv --no-color, a/ b/ prefixes); a failed origin removal or a dest inside the repo is refused; agents also hide git credentials (GIT_CONFIG_GLOBAL=/dev/null, GIT_CONFIG_NOSYSTEM, GIT_TERMINAL_PROMPT=0, SSH_AUTH_SOCK unset). Why: review r2 code M4 and security tickets T-1, T-3, fixed at the user's request. Effect: copies work under any owner diff config; repros that commit pass their own -c user.name/-c user.email.
 
 ## Open questions
 -
