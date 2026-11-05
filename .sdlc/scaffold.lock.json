@@ -164,7 +164,9 @@
       "rules",
       "guardrails",
       "lint",
-      "allowlist"
+      "allowlist",
+      "enable-plugin",
+      "context-diet"
     ],
     "complete": false
   },
