@@ -16,8 +16,13 @@ testpaths = ["tests"]
 pythonpath = ["scripts"]
 
 [tool.ruff]
+extend = ".sdlc/lint/ruff.sdlc.toml"
+extend-exclude = [".sdlc"]  # plugin-owned files
 target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/**" = ["T20"]  # scripts are CLIs; print() is their output

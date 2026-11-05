@@ -128,6 +128,11 @@
       "class": "seeded",
       "sha256": "d7f4d41d1230d4c7b1b6de2b58597556b9783ab160ba8cf2471a79e8e9934cd2",
       "template": "templates/project/hookify/sdlc-ui-hardcoded-values.md"
+    },
+    ".sdlc/lint/ruff.sdlc.toml": {
+      "class": "seeded",
+      "sha256": "c6367a7b12f79e1423a6e5c2dfa6c97f34aee39ffb34756d348f79fc9c532341",
+      "template": "templates/project/lint/ruff.sdlc.toml"
     }
   },
   "merged": {},
@@ -143,7 +148,8 @@
       "skeleton",
       "commands",
       "ci",
-      "rules"
+      "rules",
+      "guardrails"
     ],
     "complete": false
   },
