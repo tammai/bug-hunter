@@ -147,7 +147,14 @@
       "enabledPlugins.sdlc-extras@sdlc",
       "enabledPlugins.sdlc-stepper@sdlc"
     ],
-    ".claude/settings.local.json#plugin": []
+    ".claude/settings.local.json#plugin": [],
+    ".gitignore": [
+      ".sdlc/.work/",
+      ".sdlc/state/*.json",
+      ".sdlc/state/*.events.jsonl",
+      ".sdlc/state/*.commands/",
+      ".claude/*.local.md"
+    ]
   },
   "migrations": {
     "applied": [],
@@ -166,7 +173,8 @@
       "lint",
       "allowlist",
       "enable-plugin",
-      "context-diet"
+      "context-diet",
+      "agents"
     ],
     "complete": false
   },

@@ -2,3 +2,8 @@
 __pycache__/
 .pytest_cache/
 .ruff_cache/
+.sdlc/.work/
+.sdlc/state/*.json
+.sdlc/state/*.events.jsonl
+.sdlc/state/*.commands/
+.claude/*.local.md
