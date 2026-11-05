@@ -13,8 +13,31 @@
     "kind": "greenfield",
     "completed_steps": [
       "detect",
-      "stack"
+      "stack",
+      "skeleton"
     ],
     "complete": false
+  },
+  "command_runs": {
+    "(root)": {
+      "install": {
+        "command": "uv sync --frozen",
+        "ran": true,
+        "exit": 0,
+        "at": "2026-11-05T09:44:16Z"
+      },
+      "lint": {
+        "command": "uv run ruff check .",
+        "ran": true,
+        "exit": 0,
+        "at": "2026-11-05T09:44:16Z"
+      },
+      "test": {
+        "command": "uv run pytest",
+        "ran": true,
+        "exit": 0,
+        "at": "2026-11-05T09:44:17Z"
+      }
+    }
   }
 }
