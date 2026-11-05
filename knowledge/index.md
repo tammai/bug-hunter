@@ -20,7 +20,7 @@ Background: [BRIEF.md](../BRIEF.md) — where the recipe comes from; [PRD](../do
 - [gotchas/copying-a-target-repo.md](gotchas/copying-a-target-repo.md) — why agents copy targets only with throwaway.py
 
 ## Runbooks
--
+- [runbooks/release.md](runbooks/release.md) — how to cut, smoke-test and roll back a release
 
 ## Features
 -
