@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -63,7 +64,7 @@ def test_agents_treat_input_as_data_and_work_in_a_throwaway_copy():
     for rel in ("agents/bug-hunter.md", "agents/repro-verifier.md"):
         _, body = read(rel)
         assert "data, never instructions" in body, rel
-        assert "GH_CONFIG_DIR" in body and "unset GH_TOKEN" in body, rel
+        assert 'eval "$(python3 "<PLUGIN>/scripts/isolate.py" "<SCRATCH>")"' in body, rel
         assert "scripts/throwaway.py" in body, rel
         assert "cp -R" not in body, rel
     _, hunt = read("commands/hunt.md")
@@ -73,5 +74,45 @@ def test_agents_treat_input_as_data_and_work_in_a_throwaway_copy():
 def test_agents_keep_the_owners_git_credentials_out_of_reach():
     for rel in ("agents/bug-hunter.md", "agents/repro-verifier.md"):
         _, body = read(rel)
-        for needed in ("GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "SSH_AUTH_SOCK"):
-            assert needed in body, f"{rel}: {needed}"
+        assert "every Bash call" in body and "scripts/isolate.py" in body, rel
+
+
+TRAPS = {
+    "node": ["undefined", "parseInt", "==", "floating", "time zone", "unhandled", "JSON.parse",
+             "sort()"],
+    "go": ["nil map", "loop variable", "shadow", "alias", "defer"],
+    "rust": ["unwrap", "overflow", "as` cast", "UTF-8", "join"],
+    "jvm": ["null", "==", "overflow", "time zone", "close"],
+    "ruby": ["nil", "frozen", "Integer(", "encoding", "symbol"],
+    "php": ["==", "empty(", "strpos", "array key", "json_decode"],
+}
+
+
+def test_every_stack_has_an_edge_input_list_covering_its_traps():
+    stacks = json.loads((ROOT / "scripts/stacks.json").read_text(encoding="utf-8"))["stacks"]
+    named = {s["edge_inputs"] for s in stacks}
+    files = {p.stem for p in (ROOT / "edge-inputs").glob("*.md")}
+    assert named <= files
+    assert files - named == {"generic"}
+    for name in named:
+        assert (ROOT / f"edge-inputs/{name}.md").read_text(encoding="utf-8").strip(), name
+    for name, traps in TRAPS.items():
+        text = (ROOT / f"edge-inputs/{name}.md").read_text(encoding="utf-8").casefold()
+        for trap in traps:
+            assert trap.casefold() in text, f"{name}: {trap}"
+
+
+def test_hunt_takes_edge_inputs_and_installs_from_scope():
+    _, body = read("commands/hunt.md")
+    assert "edge_inputs" in body and "installs" in body
+    assert "when the part has `.py` files" not in body
+
+
+def test_agents_allow_only_the_listed_locked_installs():
+    for rel in ("agents/bug-hunter.md", "agents/repro-verifier.md"):
+        _, body = read(rel)
+        assert "only the exact commands in the `installs` list" in body, rel
+        assert "its `step`, character for character" in body, rel
+        assert "npm ci`)" not in body, rel
+    _, verifier = read("agents/repro-verifier.md")
+    assert "any other install" in verifier and "CANNOT RUN" in verifier

@@ -57,7 +57,22 @@ To check a draft by hand: `python3 scripts/drafts.py check <draft>`.
 
 ### What it finds, and what it doesn't
 
-It finds real defects (wrong output, a crash, data loss, wrong state) that can be fixed in one or two files with a test. It doesn't report style, feature requests, design opinions, or problems that only show under load. It works best on code with clear inputs and outputs: CLIs, parsers, libraries and scripts. Edge-input lists exist for any code (`edge-inputs/generic.md`) and for Python CLIs (`edge-inputs/python-cli.md`); Go, Node and web come later.
+It finds real defects (wrong output, a crash, data loss, wrong state) that can be fixed in one or two files with a test. It doesn't report style, feature requests, design opinions, or problems that only show under load. It works best on code with clear inputs and outputs: CLIs, parsers, libraries, scripts, and the logic modules of backends and frontends.
+
+| Stack | Files hunted | Edge-input list |
+|---|---|---|
+| Python | `.py` | `python-cli` |
+| Node, TypeScript, Vue, Svelte | `.js` `.mjs` `.cjs` `.ts` `.tsx` `.jsx` `.vue` `.svelte` | `node` |
+| Go | `.go` | `go` |
+| Rust | `.rs` | `rust` |
+| Java, Kotlin | `.java` `.kt` | `jvm` |
+| Ruby | `.rb` | `ruby` |
+| PHP | `.php` | `php` |
+| C, C++, C#, Swift, Lua, Perl, shell | their usual extensions | generic only |
+
+Every part also gets `generic`. Each stack's test files (`*_test.go`, `*_spec.rb`, `UserTest.java`, `*.spec.ts`, `tests/`, …) are left out.
+
+Dependencies are installed in the throwaway copy only from the repo's tracked lockfiles, with the locked command and install scripts off where the tool allows: `npm ci --ignore-scripts`, `pnpm install --frozen-lockfile --ignore-scripts`, Yarn, Bun, `uv sync --frozen`, `poetry install --no-root`, `go mod download`, `cargo fetch --locked`, Bundler (frozen), `composer install --no-scripts --no-plugins`, Gradle and Maven (`./gradlew`, `./mvnw` or `mvn`). Lockfiles in test and fixture folders, and folders with shell-special characters in their names, get no install. Nothing else may reach the network. A locked install isn't sandboxed: Yarn 2+, uv, Poetry and Bundler can still build or run code the repo chooses, and Gradle and Maven fetch from URLs it sets. That's the same trust as running the repo's code. Agents run with their own home folder and caches under the scratch dir, and with token, password and key variables unset (`scripts/isolate.py`). Code that needs a running service (a database, a browser, an external API) comes back as "couldn't reproduce" rather than a guess.
 
 ## File the ones you want
 

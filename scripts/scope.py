@@ -9,10 +9,11 @@ from pathlib import Path, PurePosixPath
 
 PART_SIZE = 5
 TOKENS_PER_HUNTER = 100_000
-SOURCE_EXTENSIONS = {
-    ".py", ".sh", ".bash", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".go", ".rs", ".rb",
-    ".java", ".kt", ".php", ".cs", ".swift", ".c", ".h", ".cc", ".cpp", ".hpp", ".lua", ".pl",
-}
+STACKS = json.loads((Path(__file__).resolve().parent / "stacks.json").read_text(encoding="utf-8"))
+SOURCE_EXTENSIONS = set(STACKS["other_extensions"]).union(
+    *(stack["extensions"] for stack in STACKS["stacks"])
+)
+TEST_SUFFIXES = tuple(suffix for stack in STACKS["stacks"] for suffix in stack["test_suffixes"])
 TEST_DIRS = {"test", "tests", "__tests__", "spec", "specs"}
 
 
@@ -27,7 +28,7 @@ def _is_test(path: PurePosixPath) -> bool:
     return (
         any(part in TEST_DIRS for part in path.parts[:-1])
         or (name.startswith("test_") and name.endswith(".py"))
-        or name.endswith(("_test.py", "_test.go"))
+        or name.endswith(TEST_SUFFIXES)
         or ".test." in name
         or ".spec." in name
     )
@@ -68,6 +69,51 @@ def _under(file: str, paths: list[str]) -> bool:
     return any(p == "" or file == p or file.startswith(p + "/") for p in paths)
 
 
+def _tag(part: dict) -> dict:
+    suffixes = {PurePosixPath(f).suffix for f in part["files"]}
+    stacks = [s for s in STACKS["stacks"] if suffixes & set(s["extensions"])]
+    part["stacks"] = [s["name"] for s in stacks]
+    part["edge_inputs"] = ["generic", *(s["edge_inputs"] for s in stacks)]
+    return part
+
+
+def _safe_folder(folder: PurePosixPath) -> bool:
+    # The folder goes into a shell step inside single quotes, so anything that could end the
+    # quotes, expand, or read as an option is refused rather than escaped.
+    text = str(folder)
+    return text.isprintable() and not set(text) & set("'\"$`\\") and not any(
+        part.startswith("-") for part in folder.parts
+    )
+
+
+def _installs(files: list[str]) -> list[dict]:
+    """The locked install command for each tracked lockfile outside test and fixture folders."""
+    tracked = set(files)
+    skip_dirs = TEST_DIRS | set(STACKS["fixture_dirs"])
+    found: dict[tuple[str, str], dict] = {}
+    for f in files:
+        path = PurePosixPath(f)
+        folder = path.parent
+        if any(part in skip_dirs for part in folder.parts):
+            continue
+        for rule in STACKS["installs"]:
+            if path.name != rule["lockfile"]:
+                continue
+            marker = (folder / rule.get("when", rule.get("unless", ""))).as_posix()
+            if "when" in rule and marker not in tracked:
+                continue
+            if "unless" in rule and marker in tracked:
+                continue
+            if not _safe_folder(folder):
+                print(f"warning: no install for {str(folder)!r}: unsafe folder name",
+                      file=sys.stderr)
+                continue
+            dir_, command = str(folder), rule["command"]
+            step = command if dir_ == "." else f"(cd '{dir_}' && {command})"
+            found[(dir_, command)] = {"dir": dir_, "command": command, "step": step}
+    return sorted(found.values(), key=lambda i: (_natural_key(i["dir"]), i["command"]))
+
+
 def _build(files: list[str], paths: list[str], cap: int | None) -> dict:
     wanted = [PurePosixPath(f) for f in files if not paths or _under(f, paths)]
     wanted = [p for p in wanted if p.suffix in SOURCE_EXTENSIONS and not _is_test(p)]
@@ -79,9 +125,9 @@ def _build(files: list[str], paths: list[str], cap: int | None) -> dict:
     parts = []
     for directory, names in by_dir.items():
         for start in range(0, len(names), PART_SIZE):
-            parts.append(
+            parts.append(_tag(
                 {"id": len(parts) + 1, "dir": directory, "files": names[start : start + PART_SIZE]}
-            )
+            ))
 
     kept = parts if cap is None else parts[:cap]
     return {
@@ -125,6 +171,7 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"error: no tracked source files under: {where}", file=sys.stderr)
         return 1
     out = _build(files, paths, args.cap)
+    out["installs"] = _installs(files)
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 
