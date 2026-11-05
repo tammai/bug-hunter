@@ -178,9 +178,11 @@
       "gitignore",
       "prd",
       "constitution",
-      "design-system"
+      "design-system",
+      "knowledge",
+      "finalize"
     ],
-    "complete": false
+    "complete": true
   },
   "command_runs": {
     "(root)": {
