@@ -2,11 +2,20 @@
 
 A Claude Code plugin that hunts reproducible edge-case bugs in a repo and writes an issue draft for each. A bug is kept only when its repro was run by a hunter and re-run by a separate verifier from the draft alone. It never posts anything: you pick what gets filed.
 
-> **Status:** v0.1.0, not yet released. The scripts are tested, but there hasn't been a live `/hunt` run yet, so start with `--max 1`. Installing it by name (`/plugin install`) isn't set up yet; load it from a clone (below).
+> **Status:** v0.1.0, not yet released. The scripts are tested, but there hasn't been a live `/hunt` run yet, so start with `--max 1`.
 
 ## Install
 
 You need Python 3.12 or newer and `git`. `/hunt-post` and the open-issues check also need `gh`, logged in.
+
+In Claude Code:
+
+```
+/plugin marketplace add tammai/bug-hunter
+/plugin install bug-hunter@bug-hunter
+```
+
+Or load it from a clone for one session:
 
 ```
 git clone https://github.com/tammai/bug-hunter.git
@@ -14,7 +23,7 @@ cd /path/to/the/repo/you/want/hunted
 claude --plugin-dir /path/to/bug-hunter
 ```
 
-The repo is private for now, so cloning needs access to it.
+The repo is private for now, so both need access to it.
 
 ## Hunt
 
