@@ -10,8 +10,8 @@ Started: 2026-11-05
 Base: ccca279
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Slice: B1   Slice base: ccca279   Slice gates: none
-Verified: ccca279 tree e44547eca2da062f2aef08bf354c1aa240abc3ce
+Verified: b2abbb6 tree de6d41cd2cfe7182161bffbb031054aa3c16b4e3
+Slice: B2   Slice base: b2abbb6   Slice gates: none
 Current: Stage 2 – Build
 
 ## Stages
@@ -52,7 +52,7 @@ inline, in parts (backlog) because the user asked to break it down and autopilot
 - 2026-11-05 autopilot: in this session, at the user's request
 
 ## Deviations
--
+- 2026-11-05 scripts/drafts.py What: drafts_dir, numbered, title and problems are module functions, not only the CLI's dir/next/check. Why: known.py and post.py import them so the numbering and format rules live in one place. Effect: no new CLI surface; three scripts share one module.
 
 ## Open questions
 -
