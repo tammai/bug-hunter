@@ -1,0 +1,31 @@
+{
+  "name": "bug-hunter",
+  "description": "Marketplace for the bug-hunter plugin: hunts reproducible bugs in a repo and drafts an issue for each.",
+  "owner": {
+    "name": "Tam Mai",
+    "email": "tam.mai@bigin.vn"
+  },
+  "plugins": [
+    {
+      "name": "bug-hunter",
+      "source": "./",
+      "version": "0.1.0",
+      "description": "Hunts edge-case bugs in a repo, proves each with a repro a separate verifier re-runs, and writes an issue draft per bug. Never posts on its own: /hunt-post files only the drafts you name.",
+      "author": {
+        "name": "Tam Mai",
+        "email": "tam.mai@bigin.vn"
+      },
+      "homepage": "https://github.com/tammai/bug-hunter",
+      "repository": "https://github.com/tammai/bug-hunter",
+      "keywords": [
+        "bugs",
+        "bug-hunting",
+        "testing",
+        "edge-cases",
+        "repro",
+        "github-issues",
+        "claude-code-plugin"
+      ]
+    }
+  ]
+}

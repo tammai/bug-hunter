@@ -8,10 +8,10 @@ description: How to cut a bug-hunter release: checks, version bump, tag, GitHub 
 
 A release is a version tag `vX.Y.Z` on `main`, a GitHub release with notes, and the plugin installable at that version. `/sdlc:deploy` follows this runbook; nothing else releases.
 
-## One-time setup (not done yet)
+## One-time setup
 
-- [ ] **Marketplace file.** Add `.claude-plugin/marketplace.json` listing the plugin (`"source": "./"`, the same `version` as `plugin.json`), through sdlc as an S change. Until it exists, people can only install with `claude --plugin-dir <clone>`.
-- [ ] **Smoke-test version check.** `tests/test_smoke.py` hard-codes the version. Change it to check that `plugin.json` and `marketplace.json` agree, so a bump is one edit per file and a mismatch fails CI.
+- [x] **Marketplace file.** `.claude-plugin/marketplace.json` lists the plugin (`"source": "./"`, the same `version` as `plugin.json`). Install with `/plugin marketplace add tammai/bug-hunter`, then `/plugin install bug-hunter@bug-hunter`.
+- [x] **Smoke-test version check.** `tests/test_smoke.py` checks that `plugin.json` and `marketplace.json` agree, so a bump is one edit per file and a mismatch fails CI.
 - [ ] **Visibility.** The repo is private, so only people with access can install it. Making it public is the owner's decision; it isn't part of a release.
 
 ## When to release
@@ -33,7 +33,7 @@ Run from a clean clone of `main`, logged in to `gh` as a maintainer.
    - In a trusted repo you know has a bug (the reference target is tammai/sdlc at its pre-fix commit), run `/hunt --max 1`.
    - Pass: it shows the cost and waits for a yes, the hunter and verifier run, and every draft it writes passes `python3 scripts/drafts.py check <draft>`.
    - Don't run `/hunt-post` on a real repo just to test.
-3. **Bump the version** in `.claude-plugin/plugin.json` (and `marketplace.json` once it exists). Open a PR titled `release: vX.Y.Z` and merge it once CI is green.
+3. **Bump the version** in `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, and run `claude plugin validate .`. Open a PR titled `release: vX.Y.Z` and merge it once CI is green.
 4. **Tag `main` at the merge commit:**
    ```
    git switch main && git pull --ff-only
@@ -46,7 +46,7 @@ Run from a clean clone of `main`, logged in to `gh` as a maintainer.
    ```
    The notes cover what's new, **Breaking** (drafts layout or format changes, and how to move old drafts), known issues, and how to install.
 6. **Smoke test the release.**
-   - Install it the way users do: through the marketplace once it exists, else `--plugin-dir` on a fresh clone at the tag.
+   - Install it the way users do: `/plugin marketplace add tammai/bug-hunter`, then `/plugin install bug-hunter@bug-hunter` (or `/plugin marketplace update bug-hunter` if it's already added).
    - Check that `/hunt` and `/hunt-post` are listed, and that `/hunt --max 1` reaches the cost question.
    - Answer no at the cost question, so nothing runs.
 7. **Record it** in `.sdlc/state/<feature>/release.md` (version, steps, smoke-test result, rollback). Then run `state.py log <feature> "deployed vX.Y.Z to GitHub release: smoke test pass"`.
