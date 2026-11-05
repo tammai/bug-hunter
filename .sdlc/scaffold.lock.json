@@ -176,7 +176,9 @@
       "context-diet",
       "agents",
       "gitignore",
-      "prd"
+      "prd",
+      "constitution",
+      "design-system"
     ],
     "complete": false
   },
