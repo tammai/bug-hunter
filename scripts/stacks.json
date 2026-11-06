@@ -26,5 +26,10 @@
     {"lockfile": "gradlew", "command": "./gradlew --no-daemon dependencies"},
     {"lockfile": "mvnw", "command": "./mvnw -B -q dependency:go-offline"},
     {"lockfile": "pom.xml", "command": "mvn -B -q dependency:go-offline", "unless": "mvnw"}
+  ],
+  "security": {"extensions": [".sql", ".prisma", ".graphql", ".gql", ".yaml", ".yml", ".toml", ".ini", ".conf", ".html"], "names": ["Dockerfile"], "name_prefixes": ["docker-compose", ".env"], "name_excludes": [".env.example", ".env.sample"], "folders": ["migrations"], "exclude_dirs": ["docs"], "keywords": ["auth", "login", "session", "token", "user", "account", "admin", "role", "permission", "route", "router", "controller", "middleware", "handler", "api", "model", "schema", "db", "migration", "log", "payment", "upload", "webhook", "config", "env"], "checklists": {"always": ["generic", "pii"], "stacks": {"node": "node"}, "vue": {"extensions": [".vue"], "dependency": "vue"}}},
+  "audits": [
+    {"lockfile": "package-lock.json", "command": "npm audit --omit=dev --json"},
+    {"lockfile": "composer.lock", "command": "composer audit --format=json"}
   ]
 }
