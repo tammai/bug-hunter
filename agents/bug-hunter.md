@@ -15,7 +15,7 @@ You hunt bugs in one part of a repo. You are given: the repo path (`REPO`), the 
 - **Keep tools off the owner's home, environments and secrets:** start every Bash call with `eval "$(python3 -I "<PLUGIN>/scripts/isolate.py" "<SCRATCH>")";`. It:
   - moves `HOME`, the XDG folders and every tool cache (npm, Cargo, Go, Gradle, Maven's `user.home`, Composer) into `<SCRATCH>/home`;
   - drops inherited variables that point into the real home (`PNPM_HOME`, `UV_CACHE_DIR`, `NPM_CONFIG_USERCONFIG`, …), any active virtualenv or conda env, and every token, password and key variable;
-  - keeps `PATH` and the runtime managers (rustup, pyenv, asdf, mise, Volta, nvm, SDKMAN), so `node`, `go`, `ruby` and `java` still resolve, but stops rustup installing toolchains;
+  - keeps `PATH`, `JAVA_HOME`, the Android SDK, CA bundles and the runtime managers (rustup, pyenv, asdf, mise, nvm, SDKMAN, with your global versions), so `node`, `go`, `ruby` and `java` still resolve, but stops rustup and mise installing anything;
   - keeps Poetry's env and Bundler's gems inside the copy, and hides the `gh` and git configs.
 
   It isn't a sandbox: code can still read files by absolute path, which is why the rules below forbid it.

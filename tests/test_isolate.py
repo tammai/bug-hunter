@@ -2,6 +2,7 @@ import os
 import shlex
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 from conftest import SCRIPTS, run_script
@@ -88,7 +89,7 @@ def test_inherited_paths_into_the_real_home_are_dropped_but_toolchains_kept(tmp_
         assert gone not in got, gone
     assert got["PATH"] == path
     assert got["ASDF_DATA_DIR"] == f"{real}/.asdf"
-    assert got["VOLTA_HOME"] == f"{real}/.volta"
+    assert "VOLTA_HOME" not in got
     assert got["GOROOT"] == f"{real}/sdk/go"
     assert got["OTHER"] == "/usr/local/share"
 
@@ -100,8 +101,8 @@ def test_toolchain_locators_default_to_the_real_home(tmp_path):
     got = isolated_env(scratch, {"PATH": os.environ["PATH"], "HOME": str(real)})
     assert got["ASDF_DATA_DIR"] == str(real / ".asdf")
     assert got["MISE_DATA_DIR"] == str(real / ".local/share/mise")
-    assert got["MISE_CONFIG_DIR"] == str(real / ".config/mise")
-    assert got["VOLTA_HOME"] == str(real / ".volta")
+    assert got["MISE_CONFIG_DIR"] == str(scratch / "home/.config/mise")
+    assert "VOLTA_HOME" not in got
     assert got["NVM_DIR"] == str(real / ".nvm")
     assert got["SDKMAN_DIR"] == str(real / ".sdkman")
 
@@ -114,3 +115,58 @@ def test_installs_stay_in_the_copy_and_off_the_keyring(tmp_path):
     assert got["BUNDLE_PATH"] == "vendor/bundle"
     assert got["RUSTUP_AUTO_INSTALL"] == "0"
     assert got["PYTHON_KEYRING_BACKEND"] == "keyring.backends.null.Keyring"
+
+
+def test_repo_files_cant_install_into_the_real_home(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    got = isolated_env(scratch, {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "h")})
+    assert got["POETRY_VIRTUALENVS_CREATE"] == "true"
+    for key in ("MISE_AUTO_INSTALL", "MISE_NOT_FOUND_AUTO_INSTALL", "MISE_EXEC_AUTO_INSTALL",
+                "MISE_TASK_RUN_AUTO_INSTALL"):
+        assert got[key] == "0", key
+
+
+def test_java_android_and_ca_bundles_are_kept_and_java_options_dropped(tmp_path):
+    real = tmp_path / "real"
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    kept = {
+        "JAVA_HOME": f"{real}/.jdks/temurin-21", "ANDROID_HOME": f"{real}/Library/Android/sdk",
+        "ANDROID_SDK_ROOT": f"{real}/Library/Android/sdk", "SSL_CERT_FILE": f"{real}/corp-ca.pem",
+        "NODE_EXTRA_CA_CERTS": f"{real}/corp-ca.pem", "REQUESTS_CA_BUNDLE": f"{real}/corp-ca.pem",
+        "CURL_CA_BUNDLE": f"{real}/corp-ca.pem",
+    }
+    env = {"PATH": os.environ["PATH"], "HOME": str(real), **kept,
+           "_JAVA_OPTIONS": "-Duser.home=/elsewhere", "JDK_JAVA_OPTIONS": "-Dx=1"}
+    got = isolated_env(scratch, env)
+    for key, value in kept.items():
+        assert got[key] == value, key
+    assert "_JAVA_OPTIONS" not in got and "JDK_JAVA_OPTIONS" not in got
+
+
+def test_global_runtime_versions_come_along_without_mise_env_secrets(tmp_path):
+    real = tmp_path / "real"
+    (real / ".config/mise").mkdir(parents=True)
+    (real / ".tool-versions").write_text("nodejs 20.11.0\nruby 3.3.0\n", encoding="utf-8")
+    (real / ".config/mise/config.toml").write_text(
+        '[tools]\nnode = "20"\npython = ["3.12", "3.11"]\n\n[env]\nAPI_TOKEN = "s3cret"\n',
+        encoding="utf-8",
+    )
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    isolated_env(scratch, {"PATH": os.environ["PATH"], "HOME": str(real)})
+    home = scratch / "home"
+    assert (home / ".tool-versions").read_text(encoding="utf-8") == "nodejs 20.11.0\nruby 3.3.0\n"
+    mise = (home / ".config/mise/config.toml").read_text(encoding="utf-8")
+    assert tomllib.loads(mise) == {"tools": {"node": "20", "python": ["3.12", "3.11"]}}
+    assert "s3cret" not in mise
+
+
+def test_a_root_like_home_drops_nothing(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    for home in ("/", "//"):
+        got = isolated_env(scratch, {"PATH": os.environ["PATH"], "HOME": home,
+                                     "OTHER": "/usr/local/share"})
+        assert got["OTHER"] == "/usr/local/share", home
