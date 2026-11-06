@@ -1,6 +1,8 @@
 """A local stand-in for a third-party HTTP service: scripted responses, every request logged."""
 
 import argparse
+import email.parser
+import email.policy
 import json
 import math
 import re
@@ -11,10 +13,19 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote_plus, urlsplit
 
-SECRET_HEADER = re.compile(r"authorization|cookie|token|secret|api[-_]?key|password", re.I)
-MAX_BODY = 65536
+# A name or a value with one of these words may carry a credential.
+SECRET_WORD = re.compile(
+    r"token|secret|api[-_ ]?key|password|passwd|authorization|cookie|credential"
+    r"|private[-_ ]?key|session", re.I,
+)
+SECRET_HEADER = SECRET_WORD
+MAX_BODY = 65536  # logged
+PARSE_LIMIT = 10 * 1024 * 1024  # read and parsed for redaction
+MAX_CHUNK = 64 * 1024 * 1024
+MAX_DELAY = 3600
+REDACTED = "<redacted>"
 
 
 class _BadScenario(Exception):
@@ -45,17 +56,17 @@ def _load(path: Path) -> list[dict]:
 
 def _check_response(r: dict, where: str) -> None:
     status = r.get("status", 200)
-    if not isinstance(status, int) or isinstance(status, bool) or not 100 <= status <= 599:
-        raise _BadScenario(f"{where}: status must be a number from 100 to 599")
+    if not isinstance(status, int) or isinstance(status, bool) or not 200 <= status <= 599:
+        raise _BadScenario(f"{where}: status must be a number from 200 to 599")
     headers = r.get("headers", {})
     if not isinstance(headers, dict) or not all(
         isinstance(k, str) and isinstance(v, (str, int)) for k, v in headers.items()
     ):
         raise _BadScenario(f"{where}: headers must be an object of text values")
     delay = r.get("delay", 0)
-    if (not isinstance(delay, (int, float)) or isinstance(delay, bool)
-            or not math.isfinite(delay) or delay < 0):
-        raise _BadScenario(f"{where}: delay must be a finite number of seconds")
+    if (not isinstance(delay, (int, float)) or isinstance(delay, bool) or delay < 0
+            or delay > MAX_DELAY or (isinstance(delay, float) and not math.isfinite(delay))):
+        raise _BadScenario(f"{where}: delay must be 0 to {MAX_DELAY} seconds")
     truncate = r.get("truncate")
     if truncate is not None and (not isinstance(truncate, int) or isinstance(truncate, bool)
                                  or truncate < 0):
@@ -65,35 +76,104 @@ def _check_response(r: dict, where: str) -> None:
             raise _BadScenario(f"{where}: {flag} must be true or false")
 
 
-SECRET_NAME = r"[\w.-]*(?:token|secret|api[-_]?key|password|passwd|authorization|cookie)[\w.-]*"
-# Secret-named fields in any body shape, matched as text so a body cut at 64 KB, sent with
-# the wrong content type, or split into multipart parts is still redacted.
-JSON_STRING = re.compile(rf'("{SECRET_NAME}"\s*:\s*)"(?:[^"\\]|\\.)*"?', re.I)
-JSON_BARE = re.compile(rf'("{SECRET_NAME}"\s*:\s*)(?!["{{\[\s])[^,}}\s]+', re.I)
-FORM_FIELD = re.compile(rf"((?:^|[&\s;]){SECRET_NAME}=)[^&\s;]*", re.I)
-MULTIPART = re.compile(
-    rf'(name="{SECRET_NAME}"[^\r\n]*\r?\n(?:[^\r\n]+\r?\n)*\r?\n)[^\r\n]*', re.I
-)
+class _Withhold(Exception):
+    """The body may hold a secret that structured redaction couldn't isolate."""
 
 
-def _redact_text(text: str) -> str:
-    text = JSON_STRING.sub(lambda m: m.group(1) + '"<redacted>"', text)
-    text = JSON_BARE.sub(lambda m: m.group(1) + '"<redacted>"', text)
-    text = FORM_FIELD.sub(lambda m: m.group(1) + "<redacted>", text)
-    return MULTIPART.sub(lambda m: m.group(1) + "<redacted>", text)
+def _secret_name(name: str) -> bool:
+    return bool(SECRET_WORD.search(unquote_plus(name)))
+
+
+def _redact_json(value: object) -> object:
+    if isinstance(value, dict):
+        return {k: REDACTED if _secret_name(str(k)) else _redact_json(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_json(v) for v in value]
+    if isinstance(value, str) and SECRET_WORD.search(value):
+        raise _Withhold  # e.g. JSON escaped inside a string, or prose naming a password
+    return value
+
+
+def _redact_json_text(text: str) -> str:
+    try:
+        return json.dumps(_redact_json(json.loads(text)))
+    except json.JSONDecodeError:
+        lines = [line for line in text.splitlines() if line.strip()]
+        try:  # newline-delimited JSON
+            return "\n".join(json.dumps(_redact_json(json.loads(line))) for line in lines)
+        except json.JSONDecodeError:
+            raise _Withhold from None
+
+
+def _redact_pairs(text: str) -> str:
+    """name=value pairs (forms, queries) with secret-named values replaced, raw text kept."""
+    parts = []
+    for item in text.split("&"):
+        name, eq, value = item.partition("=")
+        if eq and _secret_name(name):
+            parts.append(f"{name}={REDACTED}")
+        elif SECRET_WORD.search(unquote_plus(value)):
+            raise _Withhold
+        else:
+            parts.append(item)
+    return "&".join(parts)
+
+
+def _redact_multipart(raw: bytes, content_type: str) -> str:
+    message = email.parser.BytesParser(policy=email.policy.HTTP).parsebytes(
+        f"Content-Type: {content_type}\r\n\r\n".encode() + raw
+    )
+    if not message.is_multipart():
+        raise _Withhold
+    fields = []
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition") or ""
+        value = part.get_payload(decode=True) or b""
+        text = value.decode("utf-8", errors="replace")
+        if _secret_name(name):
+            text = REDACTED
+        elif SECRET_WORD.search(text):
+            raise _Withhold
+        fields.append(f"{name}={text}")
+    return "\n".join(fields)
+
+
+def _redact_body(raw: bytes, content_type: str, complete: bool) -> str:
+    """The body for the log: parsed and redacted, or withheld if it can't be made safe."""
+    text = raw.decode("utf-8", errors="replace")
+    if not text.strip():
+        return text
+    try:
+        if not complete:
+            raise _Withhold  # cut short, so no parser sees the whole thing
+        kind = content_type.lower()
+        if "multipart/" in kind:
+            return _redact_multipart(raw, content_type)
+        if "json" in kind or text.lstrip()[:1] in ("{", "["):
+            return _redact_json_text(text)
+        if "x-www-form-urlencoded" in kind or re.fullmatch(r"[^\s=&]+=[^\s]*", text.strip()):
+            return _redact_pairs(text.strip())
+        if SECRET_WORD.search(text):
+            raise _Withhold
+        return text
+    except (_Withhold, ValueError, TypeError, LookupError):
+        if complete and not SECRET_WORD.search(text):
+            return text
+        # Better to lose a log line than to paste a credential into a draft.
+        return f"<body withheld: {len(raw)} bytes; it may hold a secret>"
 
 
 def _redact_query(query: str) -> str:
     """Secret-named query values redacted, everything else exactly as the client sent it."""
-    parts = []
-    for item in query.split("&") if query else []:
-        name, eq, _ = item.partition("=")
-        secret = re.fullmatch(SECRET_NAME, name, re.I)
-        parts.append(f"{name}=<redacted>" if eq and secret else item)
-    return "&".join(parts)
+    if not query:
+        return ""
+    try:
+        return _redact_pairs(query)
+    except _Withhold:
+        return "<query withheld: it may hold a secret>"
 
 
-def _handler(rules: list[dict], log: Path) -> type[BaseHTTPRequestHandler]:
+def _handler(rules: list[dict], log: Path, seen: list[float]) -> type[BaseHTTPRequestHandler]:
     calls: dict[int, int] = {}
     lock = threading.Lock()
 
@@ -103,38 +183,46 @@ def _handler(rules: list[dict], log: Path) -> type[BaseHTTPRequestHandler]:
 
         def _read_body(self) -> tuple[bytes, int]:
             """The whole request body (chunked or sized), so the socket is left clean."""
-            kept, total = bytearray(), 0
+            self._kept, self._total = bytearray(), 0
+
+            def keep(chunk: bytes) -> None:
+                self._total += len(chunk)
+                self._kept += chunk[: max(0, PARSE_LIMIT - len(self._kept))]
+
             if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
                 while True:
                     size = int(self.rfile.readline().split(b";")[0].strip() or b"0", 16)
+                    if size > MAX_CHUNK:
+                        raise ValueError("chunk too large")
                     if size == 0:
                         while self.rfile.readline().strip():
                             pass  # trailers
                         break
-                    chunk = self.rfile.read(size)
+                    keep(self.rfile.read(size))
                     self.rfile.readline()
-                    total += len(chunk)
-                    kept += chunk[: max(0, MAX_BODY - len(kept))]
-                return bytes(kept), total
+                return bytes(self._kept), self._total
             remaining = int(self.headers.get("Content-Length") or 0)
             while remaining > 0:
                 chunk = self.rfile.read(min(remaining, 65536))
                 if not chunk:
                     break
                 remaining -= len(chunk)
-                total += len(chunk)
-                kept += chunk[: max(0, MAX_BODY - len(kept))]
-            return bytes(kept), total
+                keep(chunk)
+            return bytes(self._kept), self._total
 
         def _record(self, body: bytes, total: int, note: str = "") -> None:
             url = urlsplit(self.path)
-            text = body.decode("utf-8", errors="replace")
+            if note:
+                logged = body.decode("utf-8", errors="replace")  # already screened
+            else:
+                logged = _redact_body(body, self.headers.get("Content-Type", ""),
+                                      complete=total == len(body))
             entry = {
                 "time": round(time.time(), 3), "method": self.command, "path": url.path,
                 "query": _redact_query(url.query),
                 "headers": {k: "<redacted>" if SECRET_HEADER.search(k) else v
                             for k, v in self.headers.items()},
-                "body": _redact_text(text),
+                "body": logged[:MAX_BODY],
                 "body_bytes": total,
             }
             if note:
@@ -143,12 +231,17 @@ def _handler(rules: list[dict], log: Path) -> type[BaseHTTPRequestHandler]:
                 out.write(json.dumps(entry) + "\n")
 
         def _respond(self) -> None:
+            seen[0] = time.monotonic()
             try:
                 body, total = self._read_body()
-            except ValueError:
-                # The client under test sent a broken body: that's evidence, so log it and
-                # answer instead of dropping the connection.
-                self._record(b"", 0, note="malformed chunk size or Content-Length")
+            except (ValueError, MemoryError):
+                # The client under test sent a broken body: that's evidence, so log what
+                # arrived and answer instead of dropping the connection.
+                partial = bytes(getattr(self, "_kept", b""))
+                if SECRET_WORD.search(partial.decode("utf-8", errors="replace")):
+                    partial = b""
+                self._record(partial, getattr(self, "_total", 0),
+                             note="malformed chunk size or Content-Length")
                 self.close_connection = True
                 return self._send({"status": 400, "body": {"error": "malformed request body"}})
             self._record(body, total)
@@ -182,13 +275,14 @@ def _handler(rules: list[dict], log: Path) -> type[BaseHTTPRequestHandler]:
             body = response.get("body", "")
             data = (json.dumps(body) if not isinstance(body, str) else body).encode("utf-8")
             status = int(response.get("status", 200))
-            bodiless = status < 200 or status in (204, 304)
+            bodiless = status in (204, 304)
             if bodiless:
                 data = b""  # these statuses carry no body; one would corrupt the next response
-            headers = {"content-type": ("Content-Type", "application/json"
-                                        if not isinstance(body, str)
-                                        else "text/plain; charset=utf-8"),
-                       "content-length": ("Content-Length", str(len(data)))}
+            headers = {} if bodiless else {
+                "content-type": ("Content-Type", "application/json" if not isinstance(body, str)
+                                 else "text/plain; charset=utf-8"),
+                "content-length": ("Content-Length", str(len(data))),
+            }
             for name, value in response.get("headers", {}).items():
                 headers[name.lower()] = (name, str(value))  # scripted values replace defaults
             self.send_response(status)
@@ -214,11 +308,15 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scenario", required=True)
     parser.add_argument("--log", required=True)
     parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--idle-exit", type=float, default=600,
+                        help="exit after this many seconds without a request")
     args = parser.parse_args(argv)
+    seen = [time.monotonic()]
     try:
         rules = _load(Path(args.scenario))
         # Loopback only: the stub must never be reachable from outside this machine.
-        server = ThreadingHTTPServer(("127.0.0.1", args.port), _handler(rules, Path(args.log)))
+        server = ThreadingHTTPServer(("127.0.0.1", args.port),
+                                     _handler(rules, Path(args.log), seen))
     except _BadScenario as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -226,6 +324,14 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"error: can't listen on 127.0.0.1:{args.port}: {exc.strerror}", file=sys.stderr)
         return 1
     print(f"listening on http://127.0.0.1:{server.server_address[1]}", flush=True)
+
+    def watch() -> None:
+        # A stub nobody stopped stops itself, so a forgotten one can't linger.
+        while time.monotonic() - seen[0] < args.idle_exit:
+            time.sleep(min(1.0, args.idle_exit / 4))
+        server.shutdown()
+
+    threading.Thread(target=watch, daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

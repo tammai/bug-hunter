@@ -192,6 +192,8 @@ def _depends_on(root: Path, tracked: set[str], folder: PurePosixPath, package: s
 
 INTEGRATIONS = STACKS["integrations"]
 CALLS_OUT = re.compile("|".join(INTEGRATIONS["markers"]), re.M)
+# A bare fetch( is only an HTTP call in JavaScript; elsewhere it's Hash#fetch, a cache method.
+CALLS_OUT_JS = re.compile("|".join(INTEGRATIONS["markers"] + INTEGRATIONS["js_markers"]), re.M)
 
 
 def _calls_third_parties(root: Path, files: list[str]) -> bool:
@@ -205,7 +207,8 @@ def _calls_third_parties(root: Path, files: list[str]) -> bool:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        if CALLS_OUT.search(text):
+        markers = CALLS_OUT_JS if path.suffix in INTEGRATIONS["js_extensions"] else CALLS_OUT
+        if markers.search(text):
             return True
     return False
 

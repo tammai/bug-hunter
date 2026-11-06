@@ -208,3 +208,72 @@ def test_non_finite_and_boolean_values_fail_at_start(tmp_path):
         path.write_text(text, encoding="utf-8")
         result = run_script("stub_server", "--scenario", path, "--log", tmp_path / "l.jsonl")
         assert result.returncode == 1 and "Traceback" not in result.stderr, text
+
+
+def test_structured_redaction_fails_closed(tmp_path):
+    proc, base, log = start(tmp_path, [
+        {"method": "POST", "path": "/in", "responses": [{"status": 200, "body": "ok"}]},
+        {"path": "/q", "responses": [{"status": 200}]},
+    ])
+    secrets = ("Sk1Zq9Xw", "K1zz9Qpl", "Ab3Cd4Ef", "Zz9Yy8Xx", "Hu9nter2", "Tq8Rs7Uv",
+               "Qa1Ws2Ed", "Ed3Rf4Tg", "Ml7Nk8Op", "Line2Zq9", "Un9Qt8Ed", "Bg5Hn6Jm")
+    try:
+        call(base + "/in", "POST", json.dumps({
+            "secrets": {"stripe": "Sk1Zq9Xw"}, "api_keys": ["K1zz9Qpl"], "Auth Token": "Ab3Cd4Ef",
+            "pad": "x" * 70_000}).encode(), {"Content-Type": "application/json"})
+        call(base + "/in", "POST", json.dumps({"payload": '{"token": "Zz9Yy8Xx"}'}).encode(),
+             {"Content-Type": "application/json"})
+        call(base + "/in", "POST", b"user[password]=Hu9nter2&user%5Btoken%5D=Tq8Rs7Uv&n=1",
+             {"Content-Type": "application/x-www-form-urlencoded"})
+        call(base + "/q?user[token]=Qa1Ws2Ed&api%5Fkey=Ed3Rf4Tg&x=1")
+        multipart = (b'--B\r\nContent-Disposition: form-data; name="client_secret"\r\n\r\n'
+                     b"Ml7Nk8Op\r\nLine2Zq9\r\n--B\r\n"
+                     b"Content-Disposition: form-data; name=token\r\n\r\nUn9Qt8Ed\r\n--B--\r\n")
+        call(base + "/in", "POST", multipart, {"Content-Type": "multipart/form-data; boundary=B"})
+        call(base + "/in", "POST", b"note: the password is Bg5Hn6Jm",
+             {"Content-Type": "text/plain"})
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+    text = log.read_text(encoding="utf-8")
+    for secret in secrets:
+        assert secret not in text, secret
+    entries = [json.loads(line) for line in text.splitlines()]
+    assert any(e["path"] == "/q" and e["query"].endswith("&x=1") for e in entries)
+    assert any("withheld" in e["body"] for e in entries)
+
+
+def test_limits_statuses_and_idle_exit(tmp_path):
+    import socket
+    for n, text in enumerate(('[{"path": "/a", "responses": [{"delay": 1' + "0" * 400 + '}]}]',
+                              '[{"path": "/a", "responses": [{"delay": 1e300}]}]',
+                              '[{"path": "/a", "responses": [{"delay": 4000}]}]',
+                              '[{"path": "/a", "responses": [{"status": 100}]}]')):
+        path = tmp_path / f"s{n}.json"
+        path.write_text(text, encoding="utf-8")
+        result = run_script("stub_server", "--scenario", path, "--log", tmp_path / "l.jsonl")
+        assert result.returncode == 1 and "Traceback" not in result.stderr, n
+
+    proc, base, log = start(tmp_path, [{"path": "/e", "responses": [{"status": 204}]}])
+    host, port = base.removeprefix("http://").split(":")
+    try:
+        status, headers, _ = call(base + "/e")
+        assert status == 204 and "Content-Length" not in headers
+        raw = socket.create_connection((host, int(port)), timeout=5)
+        raw.sendall(b"POST /e HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
+                    b"4\r\nabcd\r\nfffffffffff\r\n")
+        assert b" 400 " in raw.recv(200).split(b"\r\n")[0]
+        raw.close()
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+    entries = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    bad = [e for e in entries if "malformed" in e.get("note", "")]
+    assert bad and bad[0]["body"] == "abcd" and bad[0]["body_bytes"] == 4
+
+    path = tmp_path / "idle.json"
+    path.write_text(json.dumps([{"path": "/a", "responses": [{}]}]), encoding="utf-8")
+    idle = subprocess.Popen([sys.executable, str(SCRIPTS / "stub_server.py"), "--scenario",
+                             str(path), "--log", str(tmp_path / "i.jsonl"), "--idle-exit", "1"],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    assert idle.wait(timeout=10) == 0

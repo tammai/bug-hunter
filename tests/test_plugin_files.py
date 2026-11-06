@@ -216,4 +216,12 @@ def test_stub_lifecycle_rules_in_both_agents():
     _, hunter = read("agents/bug-hunter.md")
     assert "mktemp -d" in hunter and "listening" in hunter
     _, verifier = read("agents/repro-verifier.md")
-    assert "stub.pid" in verifier and "kill %1" not in verifier
+    assert "kill %1" not in verifier
+
+
+def test_stub_start_and_stop_are_safe_as_written():
+    _, hunter = read("agents/bug-hunter.md")
+    assert hunter.index("$S/s.json") < hunter.index('--scenario "$S/s.json"')
+    assert "kill -0" in hunter and 'echo "$S"' in hunter and "--idle-exit" in hunter
+    _, verifier = read("agents/repro-verifier.md")
+    assert "also save its PID" not in verifier and "--idle-exit" in verifier

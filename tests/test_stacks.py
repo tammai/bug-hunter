@@ -189,3 +189,22 @@ def test_fetch_markers_skip_definitions_and_catch_globals(make_repo):
         assert "integrations" not in by_dir[d], d
     for d in ("browser", "glob"):
         assert by_dir[d][-1] == "integrations", d
+
+
+def test_fetch_counts_only_as_a_js_global_call(make_repo):
+    repo = make_repo({
+        "pycache/a.py": "class C:\n    def get(self):\n        return self.fetch(key)\n",
+        "go/a.go": "func fetch(url string) error { return nil }\n",
+        "rs/a.rs": "fn fetch(&self) {}\n",
+        "kt/A.kt": "fun fetch(url: String) {}\n",
+        "jsclass/a.js": "class Api {\n  async fetch(url) {\n    return 1\n  }\n"
+                        "  fetch(u) {\n  }\n}\n",
+        "rb/a.rb": "value = fetch(:k)\n",
+        "jscall/a.js": "const r = await fetch('/api')\n",
+        "tscall/b.ts": "export const get = (u: string) => fetch(u)\n",
+    })
+    by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
+    for d in ("pycache", "go", "rs", "kt", "jsclass", "rb"):
+        assert "integrations" not in by_dir[d], d
+    for d in ("jscall", "tscall"):
+        assert by_dir[d][-1] == "integrations", d
