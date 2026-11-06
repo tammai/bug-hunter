@@ -344,3 +344,40 @@ def test_idle_exit_must_be_positive(tmp_path):
             capture_output=True, text=True, timeout=10)
         assert result.returncode != 0 and "Traceback" not in result.stderr, value
         assert "idle-exit" in result.stderr, value
+
+
+def test_encoded_pair_separators_and_clients_that_hang_up(tmp_path):
+    import socket
+    proc, base, log = start(tmp_path, [{"method": "POST", "path": "/in",
+                                        "responses": [{"status": 200}]}])
+    host, port = base.removeprefix("http://").split(":")
+    try:
+        call(base + "/in", "POST", b"x=1&%2574oken%3DQq7Pp1",
+             {"Content-Type": "application/x-www-form-urlencoded"})
+        call(base + "/in?%74oken%3DRr5Ss2", "POST", b"")
+        for head, rest in ((b"Transfer-Encoding: chunked", b"4\r\nabcd\r\n"),
+                           (b"Content-Length: 50", b"abcd")):
+            raw = socket.create_connection((host, int(port)), timeout=5)
+            raw.sendall(b"POST /in HTTP/1.1\r\nHost: x\r\n" + head + b"\r\n\r\n" + rest)
+            raw.close()
+        deadline = time.monotonic() + 5
+        while log.read_text(encoding="utf-8").count("closed") < 2 and time.monotonic() < deadline:
+            time.sleep(0.05)
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+    text = log.read_text(encoding="utf-8")
+    assert "Qq7Pp1" not in text and "Rr5Ss2" not in text
+    closed = [e for e in map(json.loads, text.splitlines()) if "closed" in e.get("note", "")]
+    assert len(closed) == 2 and all(e["body"] == "abcd" for e in closed)
+    assert "Traceback" not in proc.stderr.read()
+
+
+def test_idle_exit_below_a_second_is_refused(tmp_path):
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps([{"path": "/a", "responses": [{}]}]), encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "stub_server.py"), "--scenario", str(path),
+         "--log", str(tmp_path / "l.jsonl"), "--idle-exit", "1e-9"],
+        capture_output=True, text=True, timeout=10)
+    assert result.returncode != 0 and "idle-exit" in result.stderr

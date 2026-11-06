@@ -126,7 +126,7 @@ def _redact_pairs(text: str) -> str:
         name, eq, value = item.partition("=")
         if eq and _has_secret(name):
             parts.append(f"{name}={REDACTED}")
-        elif _has_secret(value):
+        elif _has_secret(item):  # also an encoded = (%3D) hiding a name=value pair
             raise _Withhold
         else:
             parts.append(item)
@@ -206,7 +206,10 @@ def _handler(rules: list[dict], log: Path, seen: list) -> type[BaseHTTPRequestHa
 
             if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
                 while True:
-                    size_text = self.rfile.readline().split(b";")[0].strip()
+                    line = self.rfile.readline()
+                    if not line:
+                        raise ConnectionError("client closed mid-body")
+                    size_text = line.split(b";")[0].strip()
                     if not re.fullmatch(rb"[0-9a-fA-F]+", size_text):
                         raise ValueError("chunk size isn't hex")
                     size = int(size_text, 16)
@@ -223,7 +226,7 @@ def _handler(rules: list[dict], log: Path, seen: list) -> type[BaseHTTPRequestHa
             while remaining > 0:
                 chunk = self.rfile.read(min(remaining, 65536))
                 if not chunk:
-                    break
+                    raise ConnectionError("client closed mid-body")
                 remaining -= len(chunk)
                 keep(chunk)
             return bytes(self._kept), self._total
@@ -261,16 +264,20 @@ def _handler(rules: list[dict], log: Path, seen: list) -> type[BaseHTTPRequestHa
         def _answer(self) -> None:
             try:
                 body, total = self._read_body()
-            except (ValueError, MemoryError):
-                # The client under test sent a broken body: that's evidence, so log what
-                # arrived and answer instead of dropping the connection.
+            except (ValueError, MemoryError, ConnectionError) as exc:
+                # A broken or abandoned body is evidence: log what arrived. Answer only a
+                # client still listening; writing to a closed socket prints a traceback.
                 partial = bytes(getattr(self, "_kept", b""))
                 if _has_secret(partial.decode("utf-8", errors="replace")):
                     partial = b""
+                closed = isinstance(exc, ConnectionError)
                 self._record(partial, getattr(self, "_total", 0),
-                             note="malformed chunk size or Content-Length")
+                             note="client closed mid-body" if closed
+                             else "malformed chunk size or Content-Length")
                 self.close_connection = True
-                return self._send({"status": 400, "body": {"error": "malformed request body"}})
+                if not closed:
+                    self._send({"status": 400, "body": {"error": "malformed request body"}})
+                return
             self._record(body, total)
             path = urlsplit(self.path).path
             match = next((n for n, r in enumerate(rules)
@@ -335,8 +342,8 @@ def _idle_seconds(text: str) -> float:
         value = float(text)
     except ValueError:
         value = math.nan
-    if not (math.isfinite(value) and value > 0):
-        raise argparse.ArgumentTypeError("must be a number of seconds above 0")
+    if not (math.isfinite(value) and value >= 1):
+        raise argparse.ArgumentTypeError("must be at least 1 second")
     return value
 
 

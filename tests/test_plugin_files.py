@@ -240,3 +240,8 @@ def test_draft_stub_uses_a_free_port_and_stops():
     assert "8765" not in hunter and "--port 0" in hunter
     assert "echo $! > stub.pid" in hunter and 'kill "$(cat stub.pid)"' in hunter
     assert "s/^listening on //p" in hunter
+
+
+def test_draft_stub_prose_names_no_fixed_port():
+    _, hunter = read("agents/bug-hunter.md")
+    assert "fixed port" not in hunter

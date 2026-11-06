@@ -236,3 +236,14 @@ def test_fetch_in_a_ternary_is_a_call(make_repo):
     by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
     assert by_dir["tern"][-1] == "integrations" and by_dir["ternlines"][-1] == "integrations"
     assert "integrations" not in by_dir["tsrepo"]
+
+
+def test_fetch_ternary_without_space_and_method_brace_on_next_line(make_repo):
+    repo = make_repo({
+        "tight/a.js": "const r = x ? fetch(u): {}\n",
+        "nextline/b.ts": "class Repo {\n  fetch(url: string): Promise<Response>\n  {\n"
+                         "    return x\n  }\n}\n",
+    })
+    by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
+    assert by_dir["tight"][-1] == "integrations"
+    assert "integrations" not in by_dir["nextline"]
