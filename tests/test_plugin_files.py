@@ -245,3 +245,17 @@ def test_draft_stub_uses_a_free_port_and_stops():
 def test_draft_stub_prose_names_no_fixed_port():
     _, hunter = read("agents/bug-hunter.md")
     assert "fixed port" not in hunter
+
+
+def test_command_and_agent_frontmatter_values_parse_as_written():
+    # A plain YAML value can't start with an indicator or hold ": " / " #"; Claude Code then
+    # drops the whole frontmatter (description, argument hint) without an error at runtime.
+    bad = []
+    for path in sorted([*ROOT.glob("commands/*.md"), *ROOT.glob("agents/*.md")]):
+        meta, _ = read(path.relative_to(ROOT).as_posix())
+        for key, value in meta.items():
+            quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'"
+            if not quoted and (value[:1] in "[]{},&*!|>%@`'\"#" or ": " in value
+                               or " #" in value):
+                bad.append(f"{path.name}: {key}")
+    assert bad == []

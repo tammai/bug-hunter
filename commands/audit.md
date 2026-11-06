@@ -1,6 +1,6 @@
 ---
 description: Audit this repo for security and personal-data problems before deploy; each finding has path:line evidence a second agent failed to disprove. Shows the cost first; never posts anything.
-argument-hint: [paths…] [--max N]
+argument-hint: "[paths…] [--max N]"
 ---
 
 # /audit

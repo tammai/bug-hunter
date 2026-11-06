@@ -1,6 +1,6 @@
 ---
 description: Hunt reproducible bugs in this repo and write a verified issue draft for each. Shows the cost and waits for your go first; never posts anything.
-argument-hint: [paths…] [--max N]
+argument-hint: "[paths…] [--max N]"
 ---
 
 # /hunt
