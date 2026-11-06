@@ -134,7 +134,7 @@ def _forms(value: str) -> set[str]:
     encoded |= {re.sub(r"%[0-9A-F]{2}", lambda m: m.group().lower(), e) for e in encoded}
     # HTML templates escape &, <, >, quotes, and Go's also + and =, as named or numeric entities.
     entities = {html.escape(value)}
-    for style in ("&#{:d};", "&#x{:X};"):
+    for style in ("&#{:d};", "&#x{:X};", "&#x{:x};"):
         for chars in ("+=", "+=/"):
             entities.add("".join(style.format(ord(c)) if c in chars else c for c in value))
     return {value, escaped, escaped.replace("/", "\\/"), value.replace("/", "\\/")} \
@@ -180,6 +180,8 @@ def _password_warnings(target: dict) -> list[str]:
     warnings = set()
     for name, decoded in _basic_passwords(target):
         password = decoded.partition(":")[2]
+        if not password:
+            continue  # a key sent as the user name, masked whole; nothing short to warn about
         if len(password) < 6:
             warnings.add(f"account {name}'s password is shorter than 6 characters, so the proxy "
                          "can't hide it if the target echoes it alone; use a longer one")

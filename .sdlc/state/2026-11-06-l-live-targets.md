@@ -10,7 +10,7 @@ Started: 2026-11-06
 Base: c4ffa8d
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: c318977 tree a9da2cb164032b963ccd31dc62d0b5d8dd710f9f
+Verified: e8eefb2 tree c3e45938c01f0541497f644ac9dfcf7d7dfd1810
 Current: Stage 3 – Review
 
 ## Stages
@@ -59,6 +59,9 @@ inline, one part
 - 2026-11-06 round 4: security PASS, code PASS; low findings S4-1..S4-3, C4-1..C4-3 fixed in round 5 per the user's 'continue until no findings'
 - 2026-11-06 Stage 3: pass — round 5: fixing the round 4 low findings
 - 2026-11-06 Stage 2: pass
+- 2026-11-06 round 5: security PASS, code PASS; low findings S5-1, S5-2, C5-1, C5-2 fixed in round 6
+- 2026-11-06 Stage 3: pass — round 6: fixing the round 5 low findings
+- 2026-11-06 Stage 2: pass
 
 ## Deviations
 - 2026-11-06 tests/test_plugin_files.py What: the every-stack edge-list test now allows live-http.md, and the constitution test expects version 1.2.0. Why: live-http is chosen by routes, not stack, like integrations; principle III was amended to 1.2.0 (approved in Define). Effect: both still fail on any other unnamed list or version.
@@ -70,6 +73,7 @@ inline, one part
 - 2026-11-06 scripts/live_proxy.py What: round 3. Masking covers every form derived from each account value: as is, JSON-escaped (with and without \/), percent-encoded (quote, quote with /, quote_plus, either hex case), and for Basic the decoded user:password and the password alone; a bare host is masked only at word boundaries and a dotless one only with its port; a compressed response (Content-Encoding not identity) gets 502 instead of being relayed unmasked. Why: security r2 S2-1, S2-2; code r2 C2-1. Effect: a target named by a short dotless host keeps that word visible in responses when it appears without its port.
 - 2026-11-06 scripts/live_proxy.py, tests/test_live_proxy.py What: round 4. Account values are masked exactly (case-sensitive), with lower-case-hex copies of the percent-encoded forms; one combined pattern per kind, built once per proxy; Basic logins decode as UTF-8 and Latin-1 and tolerate extra spaces; a bare IPv6 host is masked; HEAD, 204 and 304 replies pass whatever their Content-Encoding, and the 502 for a compressed body no longer echoes the encoding; --check warns when a Basic password is a plain word. The round 3 test's fully lower-cased token form became a lower-case-hex form. Why: code r3 C3-1 (case-insensitive masking mangled words matching a word password), tickets S3-1, S3-2, C3-2, C3-3, C3-4 in the same code. Effect: a word password is still masked where it appears exactly, which --check now says.
 - 2026-11-06 scripts/live_proxy.py, tests/test_live_proxy.py What: round 5. The ':' host lookbehind applies only to a bare IPv6 host; HTML-escaped forms (html.escape, and + = / as decimal or hex entities) are masked; values are matched as UTF-8 and Latin-1 bytes, and a Basic credential that isn't valid UTF-8 is no longer decoded lossily; --check warns that passwords under 6 characters can't be hidden and keeps the plain-word warning for the rest; a round 4 assertion that passed without masking now checks a lower-case-hex form. Why: round 4 low findings S4-1..S4-3, C4-1..C4-3, fixed at the user's 'continue until no findings'. Effect: none beyond the fixes.
+- 2026-11-06 scripts/live_proxy.py, tests/test_live_proxy.py What: round 6. Lower-case hex entities are masked; a Basic login with an empty password (a key as the user name) gets no short-password warning; the IPv6 test now proves the colon rule and covers ::ffff:<ipv4>. Why: round 5 low findings S5-1, S5-2, C5-1, C5-2. Effect: none beyond the fixes.
 
 ## Open questions
 -

@@ -477,7 +477,10 @@ def test_masking_round_five_forms():
                       "ab/cd&#x2B;ef&#x3D;Gh12"):
         assert html_form.encode() not in dotted(html_form.encode()), html_form
     v6 = _masker({"url": "https://[fd00::1]", "accounts": {}}, "http://127.0.0.1:9")
-    assert v6(b"at fd00::1 and ::ffff:fd00::1x") == b"at <target> and ::ffff:fd00::1x"
+    assert v6(b"at fd00::1 and 2001:fd00::1 end") == b"at <target> and 2001:fd00::1 end"
+    v4 = _masker({"url": "https://10.0.0.5:8443", "accounts": {}}, "http://127.0.0.1:9")
+    assert v4(b"peer ::ffff:10.0.0.5 up") == b"peer ::ffff:<target> up"
+    assert b"Gh12" not in dotted(b"ab/cd&#x2b;ef&#x3d;Gh12")
 
 
 def test_check_warns_about_short_passwords(make_repo, tmp_path):
@@ -490,3 +493,14 @@ def test_check_warns_about_short_passwords(make_repo, tmp_path):
                     tmp_path / "l.jsonl", "--check", env=env)
     out = ok.stdout + ok.stderr
     assert ok.returncode == 0 and "shorter than 6" in out and "will show <redacted>" not in out
+
+
+def test_no_short_password_warning_for_key_only_basic(make_repo, tmp_path):
+    import base64
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    write_targets(targets, {"uat": {"url": "https://uat.example.com", "accounts": {
+        "api": {"Authorization": "Basic " + base64.b64encode(b"sk_test_Rr4Tt5Yy6:").decode()}}}})
+    ok = run_script("live_proxy", "--repo", repo, "--target", "uat", "--log",
+                    tmp_path / "l.jsonl", "--check", env=env)
+    assert ok.returncode == 0 and "warning" not in ok.stdout + ok.stderr
