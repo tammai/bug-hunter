@@ -46,6 +46,9 @@ def _open_issues(repo: str) -> tuple[list[str], str | None]:
 
 
 def _main(argv: list[str] | None = None) -> int:
+    # Windows Python before 3.15 writes in the ANSI code page; the commands read UTF-8.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors=stream.errors)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo")
     parser.add_argument("drafts_dir")

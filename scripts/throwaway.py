@@ -28,7 +28,7 @@ def _make(repo: Path, dest: Path) -> str | None:
     """Copy repo to dest; returns the reason when it can't be done safely."""
     if dest.exists() and (not dest.is_dir() or any(dest.iterdir())):
         return f"{dest} already exists and isn't empty"
-    top = _git("-C", str(repo), "rev-parse", "--show-toplevel", text=True)
+    top = _git("-C", str(repo), "rev-parse", "--show-toplevel", text=True, encoding="utf-8")
     if top.returncode != 0:
         return f"not a git repo: {repo}"
     repo = Path(top.stdout.strip()).resolve()
@@ -70,6 +70,9 @@ def _make(repo: Path, dest: Path) -> str | None:
 
 
 def _main(argv: list[str] | None = None) -> int:
+    # Windows Python before 3.15 writes in the ANSI code page; the commands read UTF-8.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors=stream.errors)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo")
     parser.add_argument("dest")

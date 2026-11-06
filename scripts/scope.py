@@ -227,6 +227,9 @@ def _checklists(part: dict, root: Path, tracked: set[str]) -> list[str]:
 
 
 def _main(argv: list[str] | None = None) -> int:
+    # Windows Python before 3.15 writes in the ANSI code page; the commands read UTF-8.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors=stream.errors)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo")
     parser.add_argument("paths", nargs="*", help="limit to files under these repo-relative paths")

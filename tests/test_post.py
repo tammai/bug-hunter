@@ -1,4 +1,7 @@
 import json
+import os
+import shutil
+from pathlib import Path
 
 from conftest import run_script
 from test_drafts import GOOD
@@ -125,3 +128,14 @@ def test_shows_url_when_recording_fails_after_filing(tmp_path, fake_gh):
     assert "not recorded" in result.stderr and "Traceback" not in result.stderr
     assert len(creates(calls)) == 1
     assert not [p for p in drafts.iterdir() if p.name.startswith(".posted-")]
+
+
+def test_tests_can_never_reach_a_logged_in_real_gh():
+    # A placeholder, not an unset name: gh would otherwise use a login from the OS keyring.
+    for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
+        assert os.environ[name] == "test-no-token", name
+    config = Path(os.environ["GH_CONFIG_DIR"])
+    assert config.is_dir() and not any(config.iterdir())
+    for folder in os.environ["PATH"].split(os.pathsep):
+        if folder and shutil.which("gh", path=folder):
+            assert shutil.which("git", path=folder), f"a real gh is reachable in {folder}"

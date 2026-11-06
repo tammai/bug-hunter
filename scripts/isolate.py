@@ -2,9 +2,11 @@
 
 import argparse
 import json
+import ntpath
 import os
 import re
 import shlex
+import stat
 import sys
 import tomllib
 from pathlib import Path
@@ -38,7 +40,19 @@ KEEP_IF_SET = [
     "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE",
     "CURL_CA_BUNDLE", "PIP_CERT", "npm_config_cafile", "NPM_CONFIG_CAFILE", "GIT_SSL_CAINFO",
     "CARGO_HTTP_CAINFO", "AWS_CA_BUNDLE",
+    # nvm-windows and pyenv-win
+    "NVM_HOME", "NVM_SYMLINK", "PYENV", "PYENV_HOME",
 ]
+WINDOWS = os.name == "nt"
+# Opening each folder relative to its parent's descriptor leaves no gap for a link to be swapped
+# in. Windows Python has none of these calls, so there the checks go by path instead.
+def _dir_fd() -> bool:
+    # CPython lists os.rename, never os.replace, in supports_dir_fd; both take dir_fd.
+    return (hasattr(os, "O_DIRECTORY") and hasattr(os, "O_NOFOLLOW")
+            and {os.open, os.mkdir, os.rename, os.unlink} <= os.supports_dir_fd)
+
+
+DIR_FD = _dir_fd()
 
 
 def _toolchains(env: dict[str, str], real: Path) -> dict[str, str]:
@@ -59,18 +73,44 @@ def _toolchains(env: dict[str, str], real: Path) -> dict[str, str]:
     return found
 
 
-def _points_into(value: str, root: Path) -> bool:
-    prefix = str(root).rstrip("/")
+def _win_path(path: str) -> str:
+    path = path.strip().strip('"')
+    # Long-path forms name the same folder: \\?\C:\x is C:\x, \\?\UNC\srv\p is \\srv\p.
+    for prefix, plain in (("\\\\?\\UNC\\", "\\\\"), ("//?/UNC/", "//"), ("\\\\?\\", ""),
+                          ("//?/", "")):
+        if path.upper().startswith(prefix):
+            path = plain + path[len(prefix):]
+            break
+    return ntpath.normcase(ntpath.normpath(path)).rstrip("\\") if path else ""
+
+
+def _points_into(value: str, root: Path | str) -> bool:
+    if not WINDOWS:
+        prefix = str(root).rstrip("/")
+        return any(
+            part == prefix or part.startswith(prefix + "/") for part in value.split(os.pathsep)
+        )
+    prefix = _win_path(str(root))
+    # A drive root (C:\, \) holds everything, so it can't mark a value as the owner's.
+    if not ntpath.splitdrive(prefix)[1]:
+        return False
     return any(
-        part == prefix or part.startswith(prefix + "/") for part in value.split(os.pathsep)
+        part == prefix or part.startswith(prefix + "\\")
+        for part in map(_win_path, value.split(";"))
     )
+
+
+def _lookup(env: dict[str, str]) -> dict[str, str]:
+    """env for reading: Windows names are case-insensitive, so read them uppercased there."""
+    return {k.upper(): v for k, v in env.items()} if WINDOWS else env
 
 
 def _plan(scratch: Path, env: dict[str, str]) -> tuple[list[str], dict[str, str]]:
     """The variables to unset and to export."""
-    real = Path(env.get("HOME") or Path.home())
+    view = _lookup(env)
+    real = Path(view.get("HOME") or Path.home())
     home = scratch / "home"
-    keep = _toolchains(env, real)
+    keep = _toolchains(view, real)
     exports = {
         **keep,
         "HOME": str(home),
@@ -85,7 +125,7 @@ def _plan(scratch: Path, env: dict[str, str]) -> tuple[list[str], dict[str, str]
         "npm_config_cache": str(home / ".npm"),
         # Java reads user.home from the password database, not HOME, so Maven would still find
         # ~/.m2/settings.xml and its server credentials without this.
-        "JAVA_TOOL_OPTIONS": " ".join([f"-Duser.home={home}", *_proxy_flags(env)]),
+        "JAVA_TOOL_OPTIONS": " ".join([f"-Duser.home={home}", *_proxy_flags(view)]),
         "MISE_CONFIG_DIR": str(home / ".config/mise"),
         # Never created: points mise away from /etc/mise and its [env].
         "MISE_SYSTEM_CONFIG_FILE": str(scratch / "no-mise-system.toml"),
@@ -104,20 +144,55 @@ def _plan(scratch: Path, env: dict[str, str]) -> tuple[list[str], dict[str, str]
         "RUSTUP_AUTO_INSTALL": "0",
         "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring",
         "GH_CONFIG_DIR": str(scratch / "no-gh"),
+        # Set rather than unset: gh prefers these to a login stored in Windows Credential
+        # Manager or the macOS Keychain, which an empty config doesn't hide.
+        "GH_TOKEN": "isolated-no-token",
+        "GH_ENTERPRISE_TOKEN": "isolated-no-token",
         "GIT_CONFIG_GLOBAL": "/dev/null",
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_TERMINAL_PROMPT": "0",
     }
+    roots = [real]
+    if WINDOWS:
+        # A kept variable goes out under the name(s) the owner set it with, not uppercased.
+        kept = {k.upper() for k in keep}
+        present = {k.upper() for k in env}
+        exports = {
+            **{k: v for k, v in env.items() if k.upper() in kept},
+            **{k: v for k, v in exports.items() if not (k in keep and k.upper() in present)},
+        }
+        # git, npm and ssh find their config through USERPROFILE, gh and npm through APPDATA,
+        # caches and tool installs through LOCALAPPDATA. TEMP and TMP live under LOCALAPPDATA
+        # and many tools fail without them, so they move rather than go.
+        local = home / "AppData" / "Local"
+        drive, rest = ntpath.splitdrive(str(home))
+        exports.update({
+            "USERPROFILE": str(home), "APPDATA": str(home / "AppData" / "Roaming"),
+            "LOCALAPPDATA": str(local), "HOMEDRIVE": drive, "HOMEPATH": rest,
+            # Git Bash tools and Python's tempfile read TMPDIR first; /tmp is the real Temp.
+            "TEMP": str(local / "Temp"), "TMP": str(local / "Temp"),
+            "TMPDIR": str(local / "Temp"),
+        })
+        # Roaming profiles and redirected folders put these outside USERPROFILE.
+        roots += [Path(view[k]) for k in ("USERPROFILE", "APPDATA", "LOCALAPPDATA") if view.get(k)]
+    # Bash names are case-sensitive but Windows ones aren't, so there OneDrive must be unset as
+    # OneDrive, and another spelling of an exported name would reach native tools beside it.
+    fold = str.upper if WINDOWS else str
+    exported = {fold(k) for k in exports}
+    always = {fold(k) for k in ALWAYS_UNSET}
     # Shell profiles export tool paths (PNPM_HOME, UV_CACHE_DIR, NPM_CONFIG_USERCONFIG, …)
     # already expanded against the real home; moving HOME doesn't move them.
     into_home = {
         k for k, v in env.items()
-        if k not in exports and k != "PATH" and str(real).strip("/") and _points_into(v, real)
+        if fold(k) not in exported and fold(k) != "PATH" and str(real).strip("/")
+        and any(_points_into(v, root) for root in roots)
     }
     secrets = {k for k in env if SECRET_NAME.search(k)}
+    respelled = {k for k in env if fold(k) in exported and k not in exports}
+    named = {k for k in env if fold(k) in always}
     unset = {
-        k for k in (*ALWAYS_UNSET, *into_home, *secrets)
-        if k not in exports and re.fullmatch(r"[A-Za-z_]\w*", k)
+        k for k in (*ALWAYS_UNSET, *named, *into_home, *secrets, *respelled)
+        if (k in respelled or fold(k) not in exported) and re.fullmatch(r"[A-Za-z_]\w*", k)
     }
     return sorted(unset), exports
 
@@ -156,8 +231,44 @@ def _open_folder(scratch: Path, folder: Path) -> int:
     return fd
 
 
+def _is_link(path: Path) -> bool:
+    """A symlink, a junction or any other reparse point: each can lead out of scratch."""
+    st = os.lstat(path)
+    return (stat.S_ISLNK(st.st_mode) or path.is_junction()
+            or bool(getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT))
+
+
+def _check_folder(scratch: Path, folder: Path) -> None:
+    """The path fallback of _open_folder: create each level, then refuse a link at it."""
+    # A link swapped in after the check would be followed; that needs code already running
+    # in scratch, which environment isolation can't stop anyway.
+    path = scratch
+    for part in folder.relative_to(scratch).parts:
+        path = path / part
+        try:
+            path.mkdir()
+        except FileExistsError:
+            pass
+        if _is_link(path) or not path.is_dir():
+            raise OSError(f"{folder}: {part} is a symlink, junction or not a folder; "
+                          "refusing to write through it")
+
+
+def _make_folder(scratch: Path, folder: Path) -> None:
+    if DIR_FD:
+        os.close(_open_folder(scratch, folder))
+    else:
+        _check_folder(scratch, folder)
+
+
 def _refuse_links(scratch: Path, folder: Path) -> None:
     """Refuse a symlink at any entry of folder: tools there would follow it out of scratch."""
+    if not DIR_FD:
+        _check_folder(scratch, folder)
+        for entry in os.scandir(folder):
+            if _is_link(Path(entry.path)):
+                raise OSError(f"{entry.path} is a symlink or junction; refusing to use this home")
+        return
     fd = _open_folder(scratch, folder)
     try:
         for name in os.listdir(fd):
@@ -169,6 +280,9 @@ def _refuse_links(scratch: Path, folder: Path) -> None:
 
 def _write(scratch: Path, path: Path, text: str) -> None:
     """Write a file under scratch atomically, never following a planted symlink."""
+    if not DIR_FD:
+        _write_by_path(scratch, path, text)
+        return
     fd = _open_folder(scratch, path.parent)
     tmp = f".isolate-{os.getpid()}-{os.urandom(4).hex()}"
     try:
@@ -188,6 +302,26 @@ def _write(scratch: Path, path: Path, text: str) -> None:
             raise
     finally:
         os.close(fd)
+
+
+def _write_by_path(scratch: Path, path: Path, text: str) -> None:
+    """The path fallback of _write."""
+    _check_folder(scratch, path.parent)
+    tmp = path.parent / f".isolate-{os.getpid()}-{os.urandom(4).hex()}"
+    # O_EXCL refuses a link planted at the temp name; O_BINARY keeps the bytes as they came.
+    out_fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+                     0o644)
+    try:
+        with os.fdopen(out_fd, "w", encoding="utf-8", newline="") as out:
+            out.write(text)
+        # Replacing the name swaps out a link planted at the target rather than following it.
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def _read(path: Path) -> str | None:
@@ -255,7 +389,18 @@ def _carry_versions(env: dict[str, str], real: Path, scratch: Path) -> None:
         ))
 
 
+def _environ() -> dict[str, str]:
+    if WINDOWS:
+        # os.environ uppercases every name on Windows; bash, which evals the output, doesn't.
+        import nt
+        return dict(nt.environ)
+    return dict(os.environ)
+
+
 def _main(argv: list[str] | None = None) -> int:
+    # Windows Python before 3.15 writes in the ANSI code page; Git Bash reads UTF-8.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors=stream.errors)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("scratch")
     args = parser.parse_args(argv)
@@ -264,20 +409,27 @@ def _main(argv: list[str] | None = None) -> int:
         print("error: the scratch path has whitespace, which JAVA_TOOL_OPTIONS can't carry; "
               "use a mktemp -d path", file=sys.stderr)
         return 1
+    folders = ["home", "home/.config", "no-gh"]
+    scanned = ["home", "home/.config"]
+    if WINDOWS:
+        folders += ["home/AppData/Roaming", "home/AppData/Local/Temp"]
+        scanned += ["home/AppData", "home/AppData/Roaming", "home/AppData/Local",
+                    "home/AppData/Local/Temp"]
     try:
         scratch.mkdir(parents=True, exist_ok=True)
-        for folder in ("home", "home/.config", "no-gh"):
-            os.close(_open_folder(scratch, scratch / folder))
-        _refuse_links(scratch, scratch / "home")
-        _refuse_links(scratch, scratch / "home/.config")
+        for folder in folders:
+            _make_folder(scratch, scratch / folder)
+        for folder in scanned:
+            _refuse_links(scratch, scratch / folder)
     except OSError as exc:
         print(f"error: can't use {scratch}: {exc}", file=sys.stderr)
         return 1
 
-    env = dict(os.environ)
-    real = Path(env.get("HOME") or Path.home())
+    env = _environ()
+    view = _lookup(env)
+    real = Path(view.get("HOME") or Path.home())
     try:
-        _carry_versions(env, real, scratch)
+        _carry_versions(view, real, scratch)
         # The Android Gradle plugin would otherwise download a pinned SDK into the kept
         # ANDROID_HOME, which is the owner's real SDK.
         _write(scratch, scratch / "home/.gradle/gradle.properties",

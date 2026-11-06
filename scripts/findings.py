@@ -418,6 +418,9 @@ def _check_meta(meta: object) -> dict:
 
 
 def _main(argv: list[str] | None = None) -> int:
+    # Windows Python before 3.15 writes in the ANSI code page; the commands read UTF-8.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors=stream.errors)
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("check").add_argument("file")

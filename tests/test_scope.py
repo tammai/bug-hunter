@@ -93,6 +93,13 @@ def test_dot_and_absolute_paths_name_the_repo(make_repo):
     assert result.returncode == 1 and "Traceback" not in result.stderr
 
 
+def test_names_outside_the_windows_code_page_print_as_utf8(make_repo):
+    repo = make_repo({"src/tệp.py": ""})
+    result, out = scope(repo)
+    assert result.returncode == 0, result.stderr
+    assert [f for p in out["parts"] for f in p["files"]] == ["src/tệp.py"]
+
+
 def test_skips_names_that_are_not_utf8(make_repo):
     repo = make_repo({"ok.py": ""})
     blob = subprocess.run(
