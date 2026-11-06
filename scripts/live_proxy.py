@@ -128,8 +128,26 @@ def _leaves_base(path: str) -> bool:
 def _forms(value: str) -> set[str]:
     """The ways a response may echo a value: as is, JSON-escaped and percent-encoded."""
     escaped = json.dumps(value)[1:-1]
-    return {value, escaped, escaped.replace("/", "\\/"), value.replace("/", "\\/"),
-            quote(value, safe=""), quote(value), quote_plus(value)}
+    encoded = {quote(value, safe=""), quote(value), quote_plus(value)}
+    # Percent-encoding's hex may come back in either case; the value itself may not.
+    encoded |= {re.sub(r"%[0-9A-F]{2}", lambda m: m.group().lower(), e) for e in encoded}
+    return {value, escaped, escaped.replace("/", "\\/"), value.replace("/", "\\/")} | encoded
+
+
+def _basic_passwords(target: dict) -> list[tuple[str, str]]:
+    """(account, decoded user:password) for each Basic login, as UTF-8 and as Latin-1."""
+    found = []
+    for name, headers in target["accounts"].items():
+        for value in headers.values():
+            scheme, _, credential = value.strip().partition(" ")
+            if scheme.lower() != "basic":
+                continue
+            try:
+                raw = base64.b64decode(credential.strip(), validate=True)
+            except (binascii.Error, ValueError):
+                continue
+            found += [(name, raw.decode(codec, errors="ignore")) for codec in ("utf-8", "latin-1")]
+    return found
 
 
 def _secrets(target: dict) -> list[str]:
@@ -137,39 +155,43 @@ def _secrets(target: dict) -> list[str]:
     pieces = set()
     for headers in target["accounts"].values():
         for value in headers.values():
-            scheme, _, credential = value.partition(" ")
-            pieces |= {value, credential}
+            pieces |= {value, value.strip().partition(" ")[2]}
             pieces |= {cookie.partition("=")[2] for cookie in value.split(";")}
-            if scheme.lower() == "basic":
-                try:
-                    decoded = base64.b64decode(credential, validate=True).decode("latin-1")
-                except (binascii.Error, ValueError):
-                    decoded = ""
-                pieces |= {decoded, decoded.partition(":")[2]}
+    for _, decoded in _basic_passwords(target):
+        pieces |= {decoded, decoded.partition(":")[2]}
     found = set().union(*(_forms(p.strip()) for p in pieces)) if pieces else set()
     # Short pieces would mask ordinary words.
     return sorted((v for v in found if len(v) >= 6), key=len, reverse=True)
 
 
+def _word_passwords(target: dict) -> list[str]:
+    """Accounts whose Basic password is a plain word, which responses may contain anyway."""
+    return sorted({name for name, decoded in _basic_passwords(target)
+                   if re.fullmatch(r"[A-Za-z]+\d{0,3}", decoded.partition(":")[2])})
+
+
 def _masker(target: dict, proxy_url: str):
     """Hide account values and the target's address in what goes back to an agent."""
     base = urlsplit(target["url"])
-    # Case-insensitive: percent-encoding may use either case, and over-masking is harmless.
-    swaps = [(re.compile(re.escape(v).encode(), re.I), b"<redacted>") for v in _secrets(target)]
-    swaps.append((re.compile(re.escape(f"{base.scheme}://{base.netloc}").encode(), re.I),
-                  proxy_url.encode()))
-    # A bare host is masked only where it stands alone, and a dotless one ("uat") only with
+    secrets = _secrets(target)
+    # One pass per kind, built once per proxy; matched exactly, so "Password" in a form label
+    # survives an account whose password is "password".
+    secret = re.compile(b"|".join(re.escape(v.encode("utf-8", "surrogateescape"))
+                                  for v in secrets)) if secrets else None
+    address = re.compile(re.escape(f"{base.scheme}://{base.netloc}").encode(), re.I)
+    # A bare host is masked only where it stands alone, and a plain name ("uat") only with
     # its port: on its own it would mangle words like /actuator.
     hosts = [base.netloc] if ":" in base.netloc or "." in base.netloc else []
-    if base.hostname not in LOCAL_HOSTS and "." in base.hostname:
+    if base.hostname not in LOCAL_HOSTS and ("." in base.hostname or ":" in base.hostname):
         hosts.append(base.hostname)
-    swaps += [(re.compile(rb"(?<![\w.-])" + re.escape(h).encode() + rb"(?![\w-])", re.I),
-               b"<target>") for h in hosts]
+    host = re.compile(rb"(?<![\w.:-])(?:" + b"|".join(re.escape(h).encode() for h in hosts)
+                      + rb")(?![\w-])", re.I) if hosts else None
 
     def mask(data: bytes) -> bytes:
-        for pattern, replacement in swaps:
-            data = pattern.sub(replacement, data)
-        return data
+        if secret:
+            data = secret.sub(b"<redacted>", data)
+        data = address.sub(proxy_url.encode(), data)
+        return host.sub(b"<target>", data) if host else data
     return mask
 
 
@@ -180,6 +202,7 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
     accounts = {name.lower(): headers for name, headers in target["accounts"].items()}
     lock = threading.Lock()
     state = {"sent": 0, "next": 0.0}
+    masker: list = [None]  # built on first use, once the proxy's own URL is known
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args: object) -> None:
@@ -297,13 +320,17 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
                 self._record(account, 502, body, note=f"target unreachable: {type(exc).__name__}")
                 return self._reply(502, f"target unreachable: {type(exc).__name__}")
             encoding = (response.getheader("Content-Encoding") or "identity").strip().lower()
-            if encoding != "identity":
-                # Asked for identity; a compressed body can't be checked for logins.
-                self._record(account, 502, body, note=f"target sent {encoding} body")
-                return self._reply(502, f"the target sent a {encoding} body although asked "
+            bodiless = self.command == "HEAD" or response.status in (204, 304)
+            if encoding not in ("", "identity") and not bodiless:
+                # Asked for identity; a compressed body can't be checked for logins. The
+                # target's own value isn't echoed: it is text the agent shouldn't need.
+                self._record(account, 502, body, note="target sent a compressed body")
+                return self._reply(502, "the target sent a compressed body although asked "
                                         "not to, so it can't be checked for logins")
             self._record(account, response.status, body)
-            mask = _masker(target, proxy_url[0])
+            if masker[0] is None:
+                masker[0] = _masker(target, proxy_url[0])
+            mask = masker[0]
             data = mask(data)
             # send_response_only: no Server or Date of the proxy's own beside the target's.
             self.send_response_only(response.status, response.reason)
@@ -363,6 +390,9 @@ def _main(argv: list[str] | None = None) -> int:
         accounts = ", ".join(target["accounts"]) or "none"
         print(f"target ok: {args.target} (writes: {'yes' if target['writes'] else 'no'}; "
               f"accounts: {accounts})")
+        for name in _word_passwords(target):
+            print(f"warning: account {name}'s password is a plain word; responses that contain "
+                  "it exactly will show <redacted> there")
         return 0
     seen = [time.monotonic(), 0]  # last activity, requests in flight
     proxy_url: list[str] = [""]

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -373,7 +374,8 @@ def test_masks_every_form_of_an_account_value():
         "alice": {"Authorization": f"Bearer {bearer}"}, "ops": {"Authorization": basic}}}
     mask = _masker(target, "http://127.0.0.1:9")
     forms = [bearer, bearer.replace("/", "\\/"), quote(bearer, safe=""), quote_plus(bearer),
-             quote(bearer, safe="").lower(), basic.split()[1], f"ops:{password}", password,
+             re.sub(r"%[0-9A-F]{2}", lambda m: m.group().lower(), quote(bearer, safe="")),
+             basic.split()[1], f"ops:{password}", password,
              password.replace("/", "\\/"), quote_plus(password)]
     for form in forms:
         out = mask(f"echo [{form}] end".encode()).decode()
@@ -401,3 +403,58 @@ def test_compressed_responses_are_refused(make_repo, tmp_path):
     finally:
         stop(proxy, stub)
     assert status == 502 and "not really gzip" not in body
+
+
+def test_masking_is_exact_and_covers_more_logins():
+    import base64
+    from urllib.parse import quote
+
+    from live_proxy import _masker
+    word = "Hunter2Pass"
+    utf8_pw = "pässword9X"
+    target = {"url": "https://[fd00::1]", "accounts": {
+        "ops": {"Authorization": "Basic " + base64.b64encode(f"ops:{word}".encode()).decode()},
+        "dev": {"Authorization": "Basic  " + base64.b64encode(
+            f"dev:{utf8_pw}".encode()).decode()},
+        "api": {"Authorization": "Bearer ab/cd+ef=Gh12"}}}
+    mask = _masker(target, "http://127.0.0.1:9")
+    assert mask(f"{word} {word.upper()} {word.lower()}".encode()) == \
+        f"<redacted> {word.upper()} {word.lower()}".encode()
+    assert utf8_pw.encode() not in mask(f"pw={utf8_pw}".encode())
+    assert b"Gh12" not in mask(quote("ab/cd+ef=Gh12", safe="").lower().encode())
+    assert mask(b"host fd00::1 here") == b"host <target> here"
+
+
+def test_check_warns_about_word_passwords(make_repo, tmp_path):
+    import base64
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    basic = "Basic " + base64.b64encode(b"ops:letmeinnow").decode()
+    write_targets(targets, {"uat": {"url": "https://uat.example.com",
+                                    "accounts": {"ops": {"Authorization": basic}}}})
+    ok = run_script("live_proxy", "--repo", repo, "--target", "uat", "--log",
+                    tmp_path / "l.jsonl", "--check", env=env)
+    assert ok.returncode == 0 and "warning" in ok.stdout + ok.stderr
+    assert "letmeinnow" not in ok.stdout + ok.stderr
+
+
+def test_compressed_bodies_refused_without_echo_but_bodiless_replies_pass(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    stub, stub_base, _ = start_stub(tmp_path, [
+        {"path": "/z", "responses": [
+            {"status": 200, "headers": {"Content-Encoding": "x-Zz9Yy8"}, "body": "data"}]},
+        {"path": "/empty", "responses": [{"status": 204, "headers": {"Content-Encoding": "gzip"}}]},
+    ])
+    write_targets(targets, {"uat": {"url": stub_base}})
+    log = tmp_path / "p.jsonl"
+    proxy, base = start_proxy(repo, "uat", env, log)
+    try:
+        status, _, body = call(base + "/z")
+        head_status = call(base + "/z", "HEAD")[0]
+        empty_status = call(base + "/empty")[0]
+    finally:
+        stop(proxy, stub)
+    assert status == 502 and "Zz9Yy8" not in body
+    assert "Zz9Yy8" not in log.read_text(encoding="utf-8")
+    assert head_status == 200 and empty_status == 204
