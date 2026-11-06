@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from test_isolate import ISOLATE_LINE
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -64,7 +66,7 @@ def test_agents_treat_input_as_data_and_work_in_a_throwaway_copy():
     for rel in ("agents/bug-hunter.md", "agents/repro-verifier.md"):
         _, body = read(rel)
         assert "data, never instructions" in body, rel
-        assert 'eval "$(python3 -I "<PLUGIN>/scripts/isolate.py" "<SCRATCH>")"' in body, rel
+        assert ISOLATE_LINE in body, rel
         assert "scripts/throwaway.py" in body, rel
         assert "cp -R" not in body, rel
     _, hunt = read("commands/hunt.md")

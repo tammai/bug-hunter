@@ -15,18 +15,21 @@ SECRET_NAME = re.compile(
     r"(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL|AUTH)", re.I
 )
 # An active virtualenv or conda env would make Poetry install into the owner's environment;
-# _JAVA_OPTIONS and JDK_JAVA_OPTIONS can override user.home and send Maven back to ~/.m2.
+# JVM and Node option variables can override user.home, the Maven or Gradle home, or preload a
+# script; custom mise config files would bring back their [env] secrets.
 ALWAYS_UNSET = [
     "SSH_AUTH_SOCK", "GOOGLE_APPLICATION_CREDENTIALS", "NETRC",
     "VIRTUAL_ENV", "CONDA_PREFIX", "CONDA_DEFAULT_ENV", "PYTHONHOME",
-    "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
+    "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "JAVA_OPTS", "MAVEN_OPTS", "MAVEN_ARGS", "GRADLE_OPTS",
+    "NODE_OPTIONS", "MISE_GLOBAL_CONFIG_FILE", "MISE_SYSTEM_CONFIG_FILE",
 ]
 # Kept as they are when set: SDKs and JDKs often live under the home, and a corporate CA
 # bundle is what lets installs through a TLS-inspecting proxy.
 KEEP_IF_SET = [
     "GOROOT", "JAVA_HOME", "ANDROID_HOME", "ANDROID_SDK_ROOT",
     "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE",
-    "CURL_CA_BUNDLE", "PIP_CERT",
+    "CURL_CA_BUNDLE", "PIP_CERT", "npm_config_cafile", "NPM_CONFIG_CAFILE", "GIT_SSL_CAINFO",
+    "CARGO_HTTP_CAINFO", "AWS_CA_BUNDLE",
 ]
 
 
@@ -108,29 +111,50 @@ def _plan(scratch: Path, env: dict[str, str]) -> tuple[list[str], dict[str, str]
     return sorted(unset), exports
 
 
-def _carry_versions(real: Path, home: Path) -> None:
+def _write(path: Path, text: str) -> None:
+    """Write a file in the scratch home, replacing (not following) anything planted there."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink() or path.exists():
+        path.unlink()
+    with open(path, "x", encoding="utf-8") as out:
+        out.write(text)
+
+
+def _mise_tools(env: dict[str, str], real: Path) -> dict:
+    candidates = [env.get("MISE_GLOBAL_CONFIG_FILE"), env.get("MISE_CONFIG_DIR")
+                  and str(Path(env["MISE_CONFIG_DIR"]) / "config.toml"),
+                  str(real / ".config/mise/config.toml")]
+    for candidate in filter(None, candidates):
+        try:
+            tools = tomllib.loads(Path(candidate).read_text(encoding="utf-8")).get("tools")
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+            continue
+        return tools if isinstance(tools, dict) else {}
+    return {}
+
+
+def _version(value: object) -> str | list[str] | None:
+    if isinstance(value, dict):
+        value = value.get("version")
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and value and all(isinstance(v, str) for v in value):
+        return value
+    return None
+
+
+def _carry_versions(env: dict[str, str], real: Path, home: Path) -> None:
     """Copy the owner's global runtime versions, without mise's [env] and other settings."""
-    tool_versions = real / ".tool-versions"
-    if tool_versions.is_file():
-        (home / ".tool-versions").write_bytes(tool_versions.read_bytes())
-    config = real / ".config/mise/config.toml"
-    if not config.is_file():
-        return
     try:
-        tools = tomllib.loads(config.read_text(encoding="utf-8")).get("tools", {})
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
-        return
-    # JSON strings and lists of strings are valid TOML values and quoted keys.
-    lines = [
-        f"{json.dumps(name)} = {json.dumps(version)}"
-        for name, version in tools.items()
-        if isinstance(version, str)
-        or (isinstance(version, list) and all(isinstance(v, str) for v in version))
-    ]
-    target = home / ".config/mise"
-    target.mkdir(parents=True, exist_ok=True)
-    (target / "config.toml").write_text("[tools]\n" + "".join(f"{x}\n" for x in lines),
-                                        encoding="utf-8")
+        _write(home / ".tool-versions", (real / ".tool-versions").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        pass
+    tools = {name: v for name, raw in _mise_tools(env, real).items() if (v := _version(raw))}
+    if tools:
+        # JSON strings and lists of strings are valid TOML values and quoted keys.
+        _write(home / ".config/mise/config.toml", "[tools]\n" + "".join(
+            f"{json.dumps(name)} = {json.dumps(v)}\n" for name, v in tools.items()
+        ))
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -152,9 +176,13 @@ def _main(argv: list[str] | None = None) -> int:
     env = dict(os.environ)
     real = Path(env.get("HOME") or Path.home())
     try:
-        _carry_versions(real, scratch / "home")
+        _carry_versions(env, real, scratch / "home")
+        # The Android Gradle plugin would otherwise download a pinned SDK into the kept
+        # ANDROID_HOME, which is the owner's real SDK.
+        _write(scratch / "home/.gradle/gradle.properties", "android.builder.sdkDownload=false\n")
     except OSError as exc:
-        print(f"warning: global runtime versions not copied: {exc}", file=sys.stderr)
+        print(f"error: can't prepare {scratch / 'home'}: {exc}", file=sys.stderr)
+        return 1
     unset, exports = _plan(scratch, env)
     print("unset " + " ".join(unset) + "; export " + " ".join(
         f"{key}={shlex.quote(value)}" for key, value in exports.items()

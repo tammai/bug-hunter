@@ -10,7 +10,7 @@ Started: 2026-11-06
 Base: 682ac61
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: 0cc2a8a tree 81647c07e8c644a9d33be98fc474358a0e817718
+Verified: 6a565e8 tree c066dd50ef1ea067443c8b8f26b75009889f3794
 Current: Stage 3 – Review
 
 ## Stages
@@ -52,6 +52,8 @@ inline, one part
 - 2026-11-06 Stage 3: fail — review r3: security R3-1, R3-2; code CR3-1, CR3-2; user chose round 4 (also R3-3, CR3-3, CR3-4)
 - 2026-11-06 user rule for round 4 and after: a new security finding (writes outside scratch, reads owner credentials) is fixed before ship; a new functional gap that only makes a hunt return couldn't-reproduce is a ticket
 - 2026-11-06 Stage 2: pass
+- 2026-11-06 Stage 3: fail — review r4: security R4-1, R4-2 (+L-1..L-4); code passed with CR4-1..CR4-5 tickets; user: fix until no findings
+- 2026-11-06 Stage 2: pass
 
 ## Deviations
 - 2026-11-06 scripts/isolate.py, tests/test_isolate.py, agents/*.md What: new script the agents eval at the start of every Bash call: HOME, XDG and tool caches (npm, Cargo, Go, Gradle, Java user.home, Composer) move into scratch; token/password/key variables and SSH_AUTH_SOCK are unset; gh/git isolation moves here from the prompt text. Why: review S2, installs read ~/.m2/settings.xml, ~/.npmrc and ~/.netrc and wrote outside the copy. Effect: the two earlier prompt-text asserts on GH_CONFIG_DIR / GIT_CONFIG_GLOBAL now assert the eval line; tests/test_isolate.py checks the variables themselves.
@@ -59,6 +61,7 @@ inline, one part
 - 2026-11-06 docs/sdlc/changes/2026-11-06-m-more-stacks.md (Failure modes) What: the residual-risk line was wrong; Cargo and Go fetch without running package code, while Yarn 2+, uv, Poetry and Bundler can build or run repo-chosen code and Gradle/Maven fetch from repo-set URLs. Why: review S3/CR-4. Effect: corrected in README and /hunt's cost message; the change file's Define text is left as written and corrected in its Review.
 - 2026-11-06 scripts/isolate.py, scripts/stacks.json, agents/*.md, README.md, commands/hunt.md What: round 3 at the user's request. isolate.py drops inherited variables pointing into the real home (except PATH and runtime managers), VIRTUAL_ENV/CONDA_PREFIX/CONDA_DEFAULT_ENV/PYTHONHOME; keeps rustup, pyenv, asdf, mise, Volta, nvm, SDKMAN, GOROOT; exports POETRY_VIRTUALENVS_IN_PROJECT, BUNDLE_PATH=vendor/bundle (prefix dropped from the Bundler command), RUSTUP_AUTO_INSTALL=0, a null keyring backend; agents run it as python3 -I. Wording: Cargo via rust-toolchain.toml named, scripts-off tools named, isolation not called a sandbox. Why: review r2 security R2-1, R2-2 (+R2-3, R2-4, R2-5, keyring note), code CR2-1, CR2-2. Effect: AC-004's Bundler command is back to BUNDLE_FROZEN=true bundle install.
 - 2026-11-06 scripts/isolate.py, tests/test_isolate.py What: round 4. Export POETRY_VIRTUALENVS_CREATE=true and four MISE_*_AUTO_INSTALL=0; VOLTA_HOME no longer kept (its shims would fetch into the real home); MISE_CONFIG_DIR moves to scratch with a copy of the owner's [tools] only; the owner's ~/.tool-versions is copied; JAVA_HOME, ANDROID_HOME/SDK_ROOT and CA-bundle variables kept when set; _JAVA_OPTIONS and JDK_JAVA_OPTIONS unset; a HOME of / or // drops nothing. Why: review r3 security R3-1, R3-2, R3-3; code CR3-1, CR3-2, CR3-3, CR3-4. Effect: two round-3 asserts on VOLTA_HOME and MISE_CONFIG_DIR changed to the new behaviour; Volta users' Node comes from scratch (a functional gap, a ticket).
+- 2026-11-06 scripts/isolate.py, agents/*.md, README.md What: round 5. Unset JAVA_OPTS, MAVEN_OPTS, MAVEN_ARGS, GRADLE_OPTS, NODE_OPTIONS, MISE_GLOBAL_CONFIG_FILE, MISE_SYSTEM_CONFIG_FILE; android.builder.sdkDownload=false in the scratch gradle.properties; agents' isolation line fails closed (ISO=$(...) && eval || exit 1); scratch-home files replace planted symlinks instead of writing through; mise tools read from custom locations and table form, never crashing on odd configs; more CA variables kept. Why: review r4 security R4-1, R4-2, L-1..L-4; code CR4-1, CR4-2, CR4-4, CR4-5; user: fix until no findings. Effect: the agents' isolation line changed (test pins it); CR4-3 (Volta default Node) stays documented.
 
 ## Open questions
 -

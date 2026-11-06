@@ -7,6 +7,10 @@ from pathlib import Path
 
 from conftest import SCRIPTS, run_script
 
+ISOLATE_LINE = (
+    'ISO="$(python3 -I "<PLUGIN>/scripts/isolate.py" "<SCRATCH>")" && eval "$ISO" || exit 1;'
+)
+
 
 def isolated_env(scratch: Path, env: dict) -> dict:
     """Run isolate.py's output in bash, the way the agents do, and return the environment."""
@@ -170,3 +174,90 @@ def test_a_root_like_home_drops_nothing(tmp_path):
         got = isolated_env(scratch, {"PATH": os.environ["PATH"], "HOME": home,
                                      "OTHER": "/usr/local/share"})
         assert got["OTHER"] == "/usr/local/share", home
+
+
+def test_jvm_and_node_option_variables_are_dropped_and_android_downloads_off(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "h"),
+           "MAVEN_OPTS": "-Dmaven.repo.local=/r", "MAVEN_ARGS": "-s /r/settings.xml",
+           "GRADLE_OPTS": "-Dgradle.user.home=/r", "JAVA_OPTS": "-Duser.home=/r",
+           "NODE_OPTIONS": "--require /r/hook.js",
+           "MISE_GLOBAL_CONFIG_FILE": "/etc/mise.toml", "MISE_SYSTEM_CONFIG_FILE": "/etc/m.toml"}
+    got = isolated_env(scratch, env)
+    for gone in ("MAVEN_OPTS", "MAVEN_ARGS", "GRADLE_OPTS", "JAVA_OPTS", "NODE_OPTIONS",
+                 "MISE_GLOBAL_CONFIG_FILE", "MISE_SYSTEM_CONFIG_FILE"):
+        assert gone not in got, gone
+    props = (scratch / "home/.gradle/gradle.properties").read_text(encoding="utf-8")
+    assert "android.builder.sdkDownload=false" in props
+
+
+def test_more_ca_variables_are_kept(tmp_path):
+    real = tmp_path / "real"
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    kept = {k: f"{real}/ca.pem" for k in (
+        "npm_config_cafile", "NPM_CONFIG_CAFILE", "GIT_SSL_CAINFO", "CARGO_HTTP_CAINFO",
+        "AWS_CA_BUNDLE")}
+    got = isolated_env(scratch, {"PATH": os.environ["PATH"], "HOME": str(real), **kept})
+    for key, value in kept.items():
+        assert got[key] == value, key
+
+
+def test_odd_or_unreadable_version_files_never_stop_isolation(tmp_path):
+    real = tmp_path / "real"
+    (real / ".config/mise").mkdir(parents=True)
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    env = {"PATH": os.environ["PATH"], "HOME": str(real), "GH_TOKEN": "x"}
+    for config in ('tools = "x"\n', "[tools\n", b"\xff\xfe", '[tools]\nnode = 20\n'):
+        path = real / ".config/mise/config.toml"
+        path.write_bytes(config if isinstance(config, bytes) else config.encode())
+        got = isolated_env(scratch, env)
+        assert got["HOME"] == str(scratch / "home") and "GH_TOKEN" not in got, config
+
+    tool_versions = real / ".tool-versions"
+    tool_versions.write_text("nodejs 20\n", encoding="utf-8")
+    tool_versions.chmod(0)
+    try:
+        got = isolated_env(scratch, env)
+    finally:
+        tool_versions.chmod(0o644)
+    assert got["HOME"] == str(scratch / "home")
+
+
+def test_table_form_and_custom_location_mise_tools_are_carried(tmp_path):
+    real = tmp_path / "real"
+    custom = tmp_path / "elsewhere" / "mise.toml"
+    custom.parent.mkdir(parents=True)
+    custom.write_text('[tools]\nnode = { version = "20" }\nruby = "3.3"\n', encoding="utf-8")
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    isolated_env(scratch, {"PATH": os.environ["PATH"], "HOME": str(real),
+                           "MISE_GLOBAL_CONFIG_FILE": str(custom)})
+    mise = (scratch / "home/.config/mise/config.toml").read_text(encoding="utf-8")
+    assert tomllib.loads(mise) == {"tools": {"node": "20", "ruby": "3.3"}}
+
+
+def test_planted_symlinks_in_the_scratch_home_are_not_written_through(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / ".tool-versions").write_text("nodejs 20\n", encoding="utf-8")
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep", encoding="utf-8")
+    scratch = tmp_path / "s"
+    (scratch / "home").mkdir(parents=True)
+    os.symlink(victim, scratch / "home/.tool-versions")
+    isolated_env(scratch, {"PATH": os.environ["PATH"], "HOME": str(real)})
+    assert victim.read_text(encoding="utf-8") == "keep"
+    assert (scratch / "home/.tool-versions").read_text(encoding="utf-8") == "nodejs 20\n"
+
+
+def test_the_agents_isolation_line_fails_closed(tmp_path):
+    spaced = tmp_path / "has space"
+    spaced.mkdir()
+    marker = tmp_path / "ran"
+    line = ISOLATE_LINE.replace("<PLUGIN>", str(SCRIPTS.parent)).replace("<SCRATCH>", str(spaced))
+    result = subprocess.run(["bash", "-c", f"{line} touch {shlex.quote(str(marker))}"],
+                            capture_output=True)
+    assert result.returncode != 0 and not marker.exists()
