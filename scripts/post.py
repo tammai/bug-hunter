@@ -63,6 +63,14 @@ def _main(argv: list[str] | None = None) -> int:
         names = "; ".join(" and ".join(p.name for p in paths) for paths in clashes)
         return _fail(f"more than one draft has the same number: {names}; rename one")
     chosen = {n: by_number[n][0] for n in wanted}
+    audit = [
+        f"{n:02d}" for n in wanted
+        if re.search(r"^\*\*Proof:\*\*", chosen[n].read_text(encoding="utf-8",
+                                                             errors="replace"), re.M)
+    ]
+    if audit:
+        # Security findings filed as public issues would publish the vulnerability.
+        return _fail(f"{', '.join(audit)}: audit finding, never filed; nothing filed")
     broken = [
         f"draft {n:02d}: {p}"
         for n in wanted
