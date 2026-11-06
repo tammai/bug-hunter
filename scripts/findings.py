@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 from drafts import drafts_dir, numbered, title
-from secrets_scan import PATTERNS, REFERENCE, SEVERITY_RANK, is_placeholder
+from secrets_scan import PATTERNS, SEVERITY_RANK, counts, is_placeholder, known_secret_in
 
 SEVERITIES = ["critical", "high", "medium", "low"]
 CATEGORIES = ["authz", "injection", "secrets", "session", "pii-logged", "pii-exposed",
@@ -27,18 +27,11 @@ class _Malformed(Exception):
     pass
 
 
-# Findings and reports quote code, so `NAME = value` counts anywhere on a line, with or
-# without spaces or quotes, unless the value is code (a call, index, dotted name, bare word).
-ASSIGNMENT = re.compile(
-    r"(?<![\w-])[a-z0-9_]*(?:secret|token|key|password|passwd)[a-z0-9_]*\s*[:=]\s*"
-    r"(?:(?P<q>['\"])(?P<quoted>[^'\"\n]+)(?P=q)|(?P<bare>[^\s'\"#|,;)`]+))", re.I)
-# A long base64 line is a key body even without its BEGIN header.
-KEY_BODY = re.compile(r"^\s*[A-Za-z0-9+/]{60,}={0,2}\s*$", re.M)
+# Findings quote code, so shape-guessing (`NAME = value`) can't tell a secret from code. The
+# check uses the vendor-shaped patterns, which code doesn't match, and the fingerprints of the
+# secrets the scan actually found.
 CHECK_PATTERNS = [p for p in PATTERNS if not p.get("env_only")]
-
-
-def _looks_like_code(value: str) -> bool:
-    return any(c in value for c in "([{.") or bool(re.fullmatch(r"[A-Za-z_]+", value))
+PRINTS: dict = {}
 
 
 def _secret_hits(text: str) -> list[str]:
@@ -46,19 +39,11 @@ def _secret_hits(text: str) -> list[str]:
     for pattern in CHECK_PATTERNS:
         for match in pattern["compiled"].finditer(text):
             value = match.groupdict().get("value") or match.group(0)
-            if not (REFERENCE.fullmatch(value) or is_placeholder(value)):
+            if counts(pattern, value) and not is_placeholder(value):
                 hits.append(pattern["name"])
                 break
-    for match in ASSIGNMENT.finditer(text):
-        value = match["quoted"] or match["bare"]
-        if is_placeholder(value) or REFERENCE.fullmatch(value):
-            continue
-        if match["bare"] and _looks_like_code(value):
-            continue
-        hits.append("assignment")
-        break
-    if KEY_BODY.search(text):
-        hits.append("key-body")
+    if PRINTS and known_secret_in(text, PRINTS):
+        hits.append("a secret found in this repo")
     return hits
 
 
@@ -314,15 +299,17 @@ def _key(text: str) -> tuple[str, str, str]:
 
 def _merge_where(path: Path, extra: list[str]) -> None:
     """Add Where lines from a dropped duplicate to the finding that's kept."""
-    text = path.read_text(encoding="utf-8")
-    have = set(_where(text))
+    lines = path.read_text(encoding="utf-8").splitlines()
+    have = set(_where("\n".join(lines)))
     new = [line for line in extra if line not in have]
-    if not new:
+    start = next((i for i, line in enumerate(lines) if line.rstrip() == "## Where"), None)
+    if not new or start is None:
         return
-    head, sep, rest = text.partition("## Where\n")
-    body, sep2, tail = rest.partition("\n## ")
-    merged = body.rstrip("\n") + "\n" + "".join(f"{line}\n" for line in new)
-    _write_private(path, head + sep + merged + sep2 + tail if sep2 else head + sep + merged)
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")),
+               len(lines))
+    while end > start + 1 and not lines[end - 1].strip():
+        end -= 1
+    _write_private(path, "\n".join(lines[:end] + new + lines[end:]) + "\n")
 
 
 def _dedupe(new: Path, audit: Path) -> list[str]:
@@ -413,6 +400,7 @@ def _main(argv: list[str] | None = None) -> int:
     sub.add_parser("check").add_argument("file")
     sub.add_parser("dir").add_argument("repo")
     sub.add_parser("next").add_argument("dir")
+    sub.choices["check"].add_argument("--fingerprints")
     for name in ("from-secrets-scan", "from-npm-audit", "from-composer-audit"):
         p = sub.add_parser(name)
         p.add_argument("json")
@@ -421,15 +409,22 @@ def _main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("inventory")
     p.add_argument("blocks")
     p.add_argument("dir")
+    p.add_argument("--fingerprints")
     p = sub.add_parser("dedupe")
     p.add_argument("new")
     p.add_argument("audit")
     p = sub.add_parser("report")
     p.add_argument("dir")
     p.add_argument("--meta")
+    p.add_argument("--fingerprints")
     args = parser.parse_args(argv)
 
     try:
+        if getattr(args, "fingerprints", None):
+            prints = _load(args.fingerprints)
+            if not isinstance(prints, dict):
+                raise _Malformed("--fingerprints must be the JSON secrets_scan.py wrote")
+            PRINTS.update(prints)
         if args.command == "check":
             text = Path(args.file).read_text(encoding="utf-8")
             found = _problems(text)

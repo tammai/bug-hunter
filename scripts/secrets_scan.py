@@ -1,13 +1,18 @@
 """Find secrets committed to a repo (and local .env files), reporting where, never what."""
 
 import argparse
+import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path, PurePosixPath
 
-RULES = json.loads((Path(__file__).resolve().parent / "secret_patterns.json").read_text("utf-8"))
+RULES = json.loads(
+    (Path(__file__).resolve().parent / "secret_patterns.json").read_text(encoding="utf-8")
+)
 PATTERNS = [
     {**p, "compiled": re.compile(p["regex"], re.M | (re.I if p.get("ignore_case", True) else 0))}
     for p in RULES["patterns"]
@@ -15,6 +20,9 @@ PATTERNS = [
 # A reference to another variable or a template slot, not a value.
 REFERENCE = re.compile(r"\$\{[^}]*\}|\$\([^)]*\)|\$[A-Za-z_]\w*")
 SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+
+PLACEHOLDER_WORDS = "|".join(map(re.escape, RULES["placeholders"]))
 
 
 def is_placeholder(value: str) -> bool:
@@ -25,10 +33,54 @@ def is_placeholder(value: str) -> bool:
         return True  # `<your api key>` cut at its first space
     if "<" in value or ">" in value:
         return False
-    if re.fullmatch(r"(?i)[a-z]{0,8}[-_]?(?:[a-z]+[-_])?x{3,}", value):
-        return True  # x's alone, or after a key prefix: sk-xxxx, AKIAXXXX
+    if re.fullmatch(rf"{RULES['key_prefix']}?[xX*#•]{{3,}}", value):
+        return True  # masking alone, or after a known key prefix: sk-xxxx, AKIAXXXX
     lowered = value.lower()
-    return lowered in RULES["placeholders"] or bool(re.fullmatch(r"your[_-][\w-]*", lowered))
+    return bool(
+        re.fullmatch(rf"(?:{PLACEHOLDER_WORDS})(?:[-_][a-z]+)*", lowered)
+        or re.fullmatch(rf"[a-z]+(?:[-_][a-z]+)*[-_](?:{PLACEHOLDER_WORDS})", lowered)
+        or re.fullmatch(r"your[-_][a-z_-]*", lowered)
+    )
+
+
+def counts(pattern: dict, value: str) -> bool:
+    """Whether a pattern's match is a value worth reporting, not a reference or stand-in."""
+    if REFERENCE.fullmatch(value):
+        return False
+    if pattern.get("needs_mix") and not (re.search(r"[A-Za-z]", value)
+                                         and re.search(r"\d", value)):
+        return False
+    return True
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def windows(text: str) -> list[str]:
+    """The 8-character slices fingerprinted and checked; single-case words are left out
+    because ordinary prose is full of them."""
+    return [
+        text[i : i + 8] for i in range(len(text) - 7)
+        if not (text[i : i + 8].isalpha()
+                and (text[i : i + 8].islower() or text[i : i + 8].isupper()))
+    ]
+
+
+def fingerprints(values: list[str]) -> dict:
+    """Hashes of each secret and of its slices, so findings can be checked without the values."""
+    return {
+        "tokens": sorted({_digest(v) for v in values}),
+        "windows": sorted({_digest(w) for v in values for w in windows(v)}),
+    }
+
+
+def known_secret_in(text: str, prints: dict) -> bool:
+    tokens = set(prints.get("tokens", []))
+    slices = set(prints.get("windows", []))
+    if any(_digest(t) in tokens for t in re.split(r"[\s'\"=:,;|`()\[\]{}<>]+", text) if t):
+        return True
+    return any(_digest(w) in slices for w in windows(text))
 
 
 def _git_names(repo: str, *args: str) -> list[str] | None:
@@ -69,7 +121,8 @@ def _severity(pattern: dict, rel: PurePosixPath, value: str, committed: bool) ->
     return "low" if is_placeholder(value) or in_tests or not committed else pattern["severity"]
 
 
-def _scan_file(repo: Path, name: str, committed: bool) -> list[dict]:
+def _scan_file(repo: Path, name: str, committed: bool,
+               values: list[str] | None = None) -> list[dict]:
     rel = PurePosixPath(name)
     if any(part in RULES["skip_dirs"] for part in rel.parts[:-1]):
         return []
@@ -84,8 +137,10 @@ def _scan_file(repo: Path, name: str, committed: bool) -> list[dict]:
                 continue
             for match in pattern["compiled"].finditer(line):
                 value = match.groupdict().get("value") or match.group(0)
-                if REFERENCE.fullmatch(value):
+                if not counts(pattern, value):
                     continue
+                if values is not None and not is_placeholder(value):
+                    values.append(value)
                 severity = _severity(pattern, rel, value, committed)
                 hits.append((SEVERITY_RANK[severity], order, pattern["name"], len(value),
                              severity))
@@ -102,6 +157,7 @@ def _scan_file(repo: Path, name: str, committed: bool) -> list[dict]:
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo")
+    parser.add_argument("--fingerprints", help="also write hashes of the found values here")
     args = parser.parse_args(argv)
     try:
         tracked = _git_names(args.repo)
@@ -109,8 +165,10 @@ def _main(argv: list[str] | None = None) -> int:
                              "--directory")
         untracked = _git_names(args.repo, "--others", "--exclude-standard")
         # --directory collapses an ignored folder to one entry; this finds .env files in it.
-        ignored_env = _git_names(args.repo, "--others", "--ignored", "--exclude-standard",
-                                 "--", ":(glob)**/.env*")
+        ignored_env = _git_names(
+            args.repo, "--others", "--ignored", "--exclude-standard", "--", ":(glob)**/.env*",
+            *(f":(exclude,glob)**/{d}/**" for d in RULES["skip_dirs"]),
+        )
     except FileNotFoundError:
         print("error: git is not installed", file=sys.stderr)
         return 1
@@ -122,8 +180,15 @@ def _main(argv: list[str] | None = None) -> int:
     local_env = sorted({
         n for n in ignored + untracked + ignored_env if _is_env(PurePosixPath(n).name)
     })
-    found = [f for n in tracked for f in _scan_file(repo, n, committed=True)]
-    found += [f for n in local_env for f in _scan_file(repo, n, committed=False)]
+    values: list[str] = []
+    found = [f for n in tracked for f in _scan_file(repo, n, True, values)]
+    found += [f for n in local_env for f in _scan_file(repo, n, False, values)]
+    if args.fingerprints:
+        out = Path(args.fingerprints)
+        fd, tmp = tempfile.mkstemp(dir=out.parent, prefix=".fingerprints-")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(fingerprints(values), handle)
+        os.replace(tmp, out)
     found.sort(key=lambda f: (f["path"], f["line"]))
     print(json.dumps(found, indent=2))
     return 0

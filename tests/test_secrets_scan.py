@@ -103,10 +103,13 @@ def test_only_whole_placeholders_count_as_placeholders():
 
     for value in ("<redacted>", "<your", "<your api key>", "${OTHER}", "$(cmd)", "changeme",
                   "xxxx", "XXXXXXXX", "sk-" + "x" * 20, "AKIA" + "X" * 16, "your_api_key",
-                  "example", "sk_" + "live_" + "x" * 20):
+                  "example", "sk_" + "live_" + "x" * 20, "changeme_in_prod", "dummy-key",
+                  "example_password", "placeholder_value", "********"):
         assert is_placeholder(value), value
     for value in ("Pr0dPass<redacted>", "<redacted>tail9f2", "AKIAQ3J5ZP" + "xxxx",
-                  "realexample9Key", "dummy" + "12345Zq", "Zq9TxW2vLp8"):
+                  "realexample9Key", "dummy" + "12345Zq", "Zq9TxW2vLp8", "letmein" + "xxx",
+                  "AKIA" + "ABCD" + "X" * 12, "AIza" + "ABCD" + "x" * 31,
+                  "word-" + "longrealletters" + "_xxx"):
         assert not is_placeholder(value), value
 
 
@@ -122,3 +125,19 @@ def test_env_files_inside_ignored_folders_are_scanned(make_repo):
     got = {(f["path"], f["committed"]) for f in found}
     assert ("secrets/.env", False) in got and ("deploy/local/.env.prod", False) in got
     assert all(f["severity"] == "low" for f in found if f["path"] == ".env.template")
+
+
+def test_masked_jwt_and_hardcoded_credentials_are_found(make_repo):
+    jwt = "eyJ" + "hbGciOiJIUzI1" + ".eyJ" + "zdWIiOiIxMjM0" + ".Sf1KxwRJ" + "SMeKKF2QT4"
+    hard = "Zq9" + "TxW2vLp8Rk"
+    repo = make_repo({
+        "src/a.js": f'const t = "{jwt}";\nconst dbPassword = "{hard}";\n'
+                    'const taskName = "task-' + "abcd" + 'xxx";\n',
+        "src/b.py": "key = 'sk-" + "proj-" + "Ab12" + "XXXX'\n" + "url = 'ghp_" + "Ab12" + "…'\n",
+    })
+    _, found = scan(repo)
+    got = {(f["path"], f["line"], f["pattern"]) for f in found}
+    assert ("src/a.js", 1, "jwt") in got
+    assert ("src/a.js", 2, "hardcoded-credential") in got
+    assert not any(f["path"] == "src/a.js" and f["line"] == 3 for f in found)
+    assert ("src/b.py", 1, "masked-key") in got and ("src/b.py", 2, "masked-key") in got

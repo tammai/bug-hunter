@@ -68,8 +68,7 @@ def test_check_enforces_the_finding_format(tmp_path):
                         "token = jwt.sign(payload)\n```\n")
     assert run_script("findings", "check", write(tmp_path, code, "code.md")).returncode == 0
 
-    for partial in ("DB_PASSWORD=Pr0dPass<redacted>", "JWT_SECRET=<redacted>tail9f2",
-                    "postgres://app:Pr0dPa55<redacted>@db", "PASSWORD=$ecret!Value"):
+    for partial in ("postgres://app:Pr0dPa55<redacted>@db", "sk-" + "proj-" + "Ab12" + "XXXX"):
         text = GOOD.replace("## Fix\n", f"## Fix\n```\n{partial}\n```\n")
         result = run_script("findings", "check", write(tmp_path, text, "partial.md"))
         assert result.returncode == 1 and "secret" in result.stdout, partial
@@ -251,28 +250,62 @@ def test_npm_fix_names_the_right_package_and_reruns_dedupe(tmp_path):
     assert left == ["agent-2.md"]
 
 
-def test_check_and_report_catch_secrets_anywhere_on_a_line(tmp_path):
-    real = "Zq9" + "TxW2vLp8"
-    masked_aws = "AKIAQ3J5ZP" + "xxxx"
-    for leak in (f'SECRET_KEY = "{real}"', f"api_token: {real}", f"- DB_PASSWORD={real}9",
-                 f"| db | password={real} |", masked_aws, "MII" + "Bv" * 40):
+def test_known_secrets_are_withheld_and_code_is_not(make_repo, tmp_path):
+    letters = "letmein" + "nowplease"
+    jwt = "eyJ" + "hbGciOiJIUzI1" + ".eyJ" + "zdWIiOiIxMjM0" + ".Sf1KxwRJ" + "SMeKKF2QT4"
+    dotted = "abc" + ".def" + ".Gh1jk2Lm"
+    json_key = "Zq9" + "TxW2vLp8Rk"
+    short = "Hu" + "n7er"
+    repo = make_repo({
+        ".env": f"DB_PASSWORD={letters}\nAUTH_TOKEN={jwt}\nJWT_SECRET={dotted}\n"
+                f"PIN_PASSWORD={short}\n",
+        "config/app.json": f'{{"api_key": "{json_key}"}}\n',
+    })
+    prints = tmp_path / "fingerprints.json"
+    scan = run_script("secrets_scan", repo, "--fingerprints", prints)
+    assert scan.returncode == 0, scan.stderr
+    raw = prints.read_text(encoding="utf-8")
+    for value in (letters, jwt, dotted, json_key, short):
+        assert value not in raw and value[:8] not in raw
+    assert stat.S_IMODE(prints.stat().st_mode) == 0o600
+
+    leaks = (f"DB_PASSWORD={letters}", f"- reason: config has {letters}",
+             f'"api_key": "{json_key}"',
+             f"X-API-Key: {json_key}", f"Authorization: Bearer {jwt}", f"AUTH={jwt[:12]}",
+             f"| cell | {dotted} |", f"masked {json_key[:8]}xxxx", f"pin={short}",
+             "AKIA" + "ABCD" + "X" * 12)
+    for leak in leaks:
         text = GOOD.replace("## Fix\n", f"## Fix\n```\n{leak}\n```\n")
-        result = run_script("findings", "check", write(tmp_path, text, "leak.md"))
+        result = run_script("findings", "check", write(tmp_path, text, "leak.md"),
+                            "--fingerprints", prints)
         assert result.returncode == 1 and "secret" in result.stdout, leak
 
-    fine = GOOD.replace("## Impact\n",
-                        "## Impact\nThe API key: rotate it. token = req.body.token\n")
-    assert run_script("findings", "check", write(tmp_path, fine, "fine.md")).returncode == 0
+    code = ['password := r.FormValue("password")', "if (password === input) {",
+            "tokens.map(token => token.trim())", "(token := get())", "key_size=1024",
+            "max_tokens=4096", "{ key: 1 }", "the CSRF token: per-session",
+            'password = request.form["password"]', "set `API_KEY=` in the env",
+            "sha256: " + "ab12" * 16, "Password must be rotated"]
+    text = GOOD.replace("## Fix\n", "## Fix\n```\n" + "\n".join(code) + "\n```\n")
+    result = run_script("findings", "check", write(tmp_path, text, "code.md"),
+                        "--fingerprints", prints)
+    assert result.returncode == 0, result.stdout
 
     audit = tmp_path / "audit"
     audit.mkdir()
     meta = tmp_path / "meta.json"
     meta.write_text(json.dumps({"dropped": [
-        {"title": "x", "reason": f"NOT CONFIRMED — config has DB_PASSWORD={real}9"},
-        {"title": f"key {masked_aws}", "reason": "failed check"}]}), encoding="utf-8")
-    assert run_script("findings", "report", audit, "--meta", meta).returncode == 0
+        {"title": "x", "reason": f"NOT CONFIRMED — .env has DB_PASSWORD={letters}"},
+        {"title": f"token {jwt}", "reason": "failed check"}]}), encoding="utf-8")
+    blocks = tmp_path / "blocks.txt"
+    blocks.write_text(f"=== PII INVENTORY ===\nemail | a.js:1 | {json_key} | - | - | - | -\n"
+                      "=== END ===\n", encoding="utf-8")
+    assert run_script("findings", "inventory", blocks, audit,
+                      "--fingerprints", prints).returncode == 0
+    assert run_script("findings", "report", audit, "--meta", meta,
+                      "--fingerprints", prints).returncode == 0
     report = (audit / "REPORT.md").read_text(encoding="utf-8")
-    assert real not in report and masked_aws[:10] not in report
+    for value in (letters, jwt, json_key):
+        assert value not in report and value[:8] not in report
 
 
 def test_dedupe_keys_on_path_line_and_merges_where(tmp_path):
