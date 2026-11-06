@@ -55,6 +55,7 @@ inline, this session
 - 2026-11-06 Stage 2: pass — round 3 fixes R2-2 R2-3 R2-7 test-first; same 16 baseline failures only; POSIX evidence from WSL python 3.12: DIR_FD True, undecodable JAVA_HOME passes through
 - 2026-11-06 Stage 3: pass — security r2 PASS, code r3 PASS; Learn: gotcha Windows section, 4 recurring defects, todo
 - 2026-11-06 Stage 4: baseline failures waived: only the test step failed; 16 listed in .sdlc/baseline.md
+- 2026-11-06 deployed v0.3.1 to GitHub release: smoke test pass
 
 ## Deviations
 - 2026-11-06 tests/conftest.py tests/test_post.py What: the gh guard was written before the change file. Why: the owner ordered it first, before any further test run, after the suite filed real issues. Effect: no AC for it; it is a must-never-break line backed by its test.
