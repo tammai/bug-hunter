@@ -147,3 +147,25 @@ def test_harmless_config_values_are_not_secrets(make_repo):
     repo = make_repo({".env": "TOKEN_TTL=3600\nKEY_ID=1\nSESSION_SECRET_ROTATE=true\n"
                               "PASSWORD_MIN_LENGTH=8\n"})
     assert scan(repo)[1] == []
+
+
+BEGIN = "-----BEGIN " + "PRIVATE KEY-----"
+END = "-----END " + "PRIVATE KEY-----"
+BODY = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcw" + "Zq9TxW2vLp8Rk" * 3
+
+
+def test_one_line_keys_and_header_mentions_dont_swallow_the_file(make_repo):
+    stripe = "sk_" + "live_" + "a1" * 12
+    slashed = "Zq9/TxW2vLp8" + "/Rk4Ab"
+    repo = make_repo({
+        ".env": f'GCP_KEY="{BEGIN}\\n{BODY}\\n{END}\\n"\nSTRIPE_SECRET={stripe}\n',
+        "src/pem.js": f'const HEADER = "{BEGIN}";\nconst k = "{AWS}";\n',
+        "src/cfg.js": f'const awsSecret = "{slashed}";\nconst keyUrl = "https://auth.test/k";\n'
+                      'const cacheKey = "users:v2";\n',
+    })
+    _, found = scan(repo)
+    got = {(f["path"], f["line"], f["pattern"]) for f in found}
+    assert (".env", 1, "private-key") in got and (".env", 2, "stripe-live-key") in got
+    assert ("src/pem.js", 2, "aws-access-key-id") in got
+    assert ("src/cfg.js", 1, "hardcoded-credential") in got
+    assert not any(f["path"] == "src/cfg.js" and f["line"] in (2, 3) for f in found)

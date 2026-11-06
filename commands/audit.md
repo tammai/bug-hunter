@@ -37,14 +37,12 @@ Then ask: "Start the audit?" Wait for the owner's yes. Anything else → stop, h
 
 ## 3. Scripted checks
 
-1. `SCRATCH=$(mktemp -d)`, outside the repo. Make the command's own copy with `python3 "$PLUGIN/scripts/throwaway.py" "$REPO" "$SCRATCH/copy"`. Run every command in this section behind `ISO="$(python3 -I "$PLUGIN/scripts/isolate.py" "$SCRATCH/cmd")" && eval "$ISO" || exit 1;`.
+1. `SCRATCH=$(mktemp -d)`, outside the repo. From here on, if you stop for any reason (an error, the owner cancelling), run `rm -rf "$SCRATCH"` first: it will hold the fingerprints and copies of the repo. Make the command's own copy with `python3 "$PLUGIN/scripts/throwaway.py" "$REPO" "$SCRATCH/copy"`. Run every command in this section behind `ISO="$(python3 -I "$PLUGIN/scripts/isolate.py" "$SCRATCH/cmd")" && eval "$ISO" || exit 1;`.
 2. **Secrets:** run `python3 "$PLUGIN/scripts/secrets_scan.py" "$REPO" --fingerprints "$SCRATCH/fingerprints.json" > "$SCRATCH/secrets.json"`. The fingerprints are hashes of every secret it found and of slices of them. They are still sensitive (short slices can be guessed from their hashes), so they stay in `$SCRATCH` (private, 0700) with mode 0600 and are deleted with it; every `findings.py check`, `inventory` and `report` call below gets `--fingerprints "$SCRATCH/fingerprints.json"`, so no finding or report line can carry a secret the scan saw, even partly. It reads the repo itself, not the copy, because the copy lacks local `.env` files; it only reads, never runs anything. Then run `python3 "$PLUGIN/scripts/findings.py" from-secrets-scan "$SCRATCH/secrets.json" "$SCRATCH/found"`. Never print the scan's input files.
 3. **Dependencies:** for each `audits` entry, run its `step` from `$SCRATCH/copy` with its output redirected to `$SCRATCH/audit-<n>.json`.
    - The exit code isn't the signal: npm and composer exit non-zero when they find advisories.
    - Convert the output with `python3 "$PLUGIN/scripts/findings.py" from-npm-audit` (or `from-composer-audit`) `"$SCRATCH/audit-<n>.json" "$SCRATCH/found" --lockfile "<dir>/<lockfile>"`.
    - If that conversion fails, the audit itself failed (offline, a private registry, a missing lockfile). Record "dependency audit failed: <first line of its stderr>" for the report, and carry on.
-
-If you stop for any reason from here on (an error, the owner cancelling), run `rm -rf "$SCRATCH"` first: it holds the fingerprints and copies of the repo.
 
 ## 4. Audit
 

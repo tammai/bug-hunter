@@ -392,3 +392,35 @@ def test_where_merge_handles_crlf_and_spaced_headings(tmp_path):
     where = text.split("Where")[1].split("## Evidence")[0]
     assert "src/routes/admin.js:40" in where
     assert run_script("findings", "check", kept).returncode == 0
+
+
+def test_one_line_key_bodies_are_fingerprinted_and_urls_are_not(make_repo, tmp_path):
+    from test_secrets_scan import BEGIN, BODY, END
+
+    repo = make_repo({
+        ".env": f'GCP_KEY="{BEGIN}\\n{BODY}\\n{END}\\n"\nTOKEN_TYPE=Bearer\n'
+                "OAUTH_TOKEN_URL=https://auth.corp.test/oauth/token\n",
+        "src/pem.js": f'const HEADER = "{BEGIN}";\nexport function parsePem(text) {{\n'
+                      "  return text.split(String.fromCharCode(10)).filter(Boolean);\n}\n",
+    })
+    prints = tmp_path / "fingerprints.json"
+    assert run_script("secrets_scan", repo, "--fingerprints", prints).returncode == 0
+
+    leak = GOOD.replace("## Fix\n", f"## Fix\n```\n{BODY[10:50]}\n```\n")
+    result = run_script("findings", "check", write(tmp_path, leak, "leak.md"),
+                        "--fingerprints", prints)
+    assert result.returncode == 1 and "secret" in result.stdout
+
+    fine = GOOD.replace("## Fix\n", "## Fix\nSend `Authorization: Bearer <redacted>` to "
+                        "https://auth.corp.test/oauth/token; `parsePem(text)` splits with "
+                        "`text.split(String.fromCharCode(10)).filter(Boolean)`; keys look like "
+                        "`sk-ant-api03-...`.\n")
+    result = run_script("findings", "check", write(tmp_path, fine, "fine.md"),
+                        "--fingerprints", prints)
+    assert result.returncode == 0, result.stdout
+
+    for bad in ('{"values": []}', '{"lengths": 5, "values": [], "windows": []}'):
+        prints.write_text(bad, encoding="utf-8")
+        result = run_script("findings", "check", write(tmp_path, GOOD, "g.md"),
+                            "--fingerprints", prints)
+        assert result.returncode == 1 and "Traceback" not in result.stderr, bad

@@ -33,8 +33,13 @@ def is_placeholder(value: str) -> bool:
         return True  # `<your api key>` cut at its first space
     if "<" in value or ">" in value:
         return False
-    if re.fullmatch(rf"{RULES['key_prefix']}?(?:[xX*#•]{{3,}}|\.{{3,}}|…+)", value):
-        return True  # masking alone, or after a known key prefix: sk-xxxx, AKIAXXXX
+    prefix = RULES["key_prefix"]
+    mask = r"(?:[xX*#•]{3,}|\.{3,}|…+)"
+    # Masking alone, or after a key prefix and its version word: sk-xxxx, sk-ant-api03-...
+    if re.fullmatch(rf"{prefix}?(?:[a-z]+\d*[-_])?{mask}", value):
+        return True
+    if re.fullmatch(rf"{prefix}(?:[a-z]+\d*[-_])+", value):
+        return True  # the prefix alone, as docs write it: sk-ant-api03-
     lowered = value.lower()
     return bool(
         re.fullmatch(rf"(?:{PLACEHOLDER_WORDS})(?:[-_][a-z]+)*", lowered)
@@ -55,6 +60,9 @@ def counts(pattern: dict, value: str) -> bool:
     if pattern.get("needs_mix") and not (re.search(r"[A-Za-z]", value)
                                          and re.search(r"\d", value)):
         return False
+    if pattern.get("not_url") and ("://" in value or value.startswith("/")
+                                   or re.search(r":[a-z]", value)):
+        return False  # a URL, a path or a namespaced key like users:v2
     return True
 
 
@@ -76,9 +84,10 @@ def _fingerprintable(value: str) -> bool:
     """Worth fingerprinting: long enough, and not a word or setting that prose also uses."""
     if len(value) < 6 or value.isdigit() or value.lower() in TRIVIAL:
         return False
-    words = re.fullmatch(r"[a-z]+(?:[-_.][a-z]+)*", value.lower())
-    return not (words and (value.islower() or value.isupper())
-                and sum(c.isalpha() for c in value) < 12)
+    if "://" in value or value.startswith("/"):
+        return False
+    words = re.fullmatch(r"[A-Za-z]+(?:[-_.][A-Za-z]+)*", value)
+    return not (words and sum(c.isalpha() for c in value) < 12)
 
 
 def fingerprints(values: list[str]) -> dict:
@@ -98,11 +107,14 @@ def load_prints(data: object) -> dict:
     """Fingerprints as sets, checked for shape once."""
     if not isinstance(data, dict):
         raise ValueError("fingerprints must be a JSON object")
-    loaded: dict = {"lengths": [n for n in data.get("lengths", []) if isinstance(n, int)]}
+    lengths = data.get("lengths")
+    if not isinstance(lengths, list) or not all(isinstance(n, int) for n in lengths):
+        raise ValueError("fingerprints need a lengths list of numbers")
+    loaded: dict = {"lengths": lengths}
     for key in ("values", "windows", "long_windows"):
-        items = data.get(key, [])
+        items = data.get(key)
         if not isinstance(items, list):
-            raise ValueError(f"fingerprints {key} must be a list")
+            raise ValueError(f"fingerprints need a {key} list")
         loaded[key] = {str(i) for i in items}
     return loaded
 
@@ -169,12 +181,16 @@ def _scan_file(repo: Path, name: str, committed: bool,
     in_key = False
     for number, line in enumerate(text.splitlines(), 1):
         if in_key:
-            # A key's body lines are the secret, not just its BEGIN header.
+            # A key's body lines are the secret, not just its BEGIN header. Anything that
+            # isn't base64 ends the body and is scanned like any other line.
+            body = line.strip()
+            if re.fullmatch(r"[A-Za-z0-9+/]{16,}={0,2}", body):
+                if values is not None:
+                    values.append(body)
+                continue
+            in_key = False
             if "-----END" in line:
-                in_key = False
-            elif values is not None and len(line.strip()) >= 16:
-                values.append(line.strip())
-            continue
+                continue
         hits = []
         for order, pattern in enumerate(PATTERNS):
             if pattern.get("env_only") and not _is_env(rel.name):
@@ -186,7 +202,13 @@ def _scan_file(repo: Path, name: str, committed: bool,
                 if values is not None and not is_placeholder(value):
                     values.append(value)
                 if pattern["name"] == "private-key":
-                    in_key = True
+                    rest = line[match.end():]
+                    if values is not None:
+                        # A one-line key (GCP JSON, .env) holds its body after the header,
+                        # with literal \n escapes between the base64 lines.
+                        values += re.findall(r"[A-Za-z0-9+/]{16,}={0,2}",
+                                             rest.replace("\\n", "\n"))
+                    in_key = "-----END" not in rest
                 severity = _severity(pattern, rel, value, committed)
                 hits.append((SEVERITY_RANK[severity], order, pattern["name"], len(value),
                              severity))
