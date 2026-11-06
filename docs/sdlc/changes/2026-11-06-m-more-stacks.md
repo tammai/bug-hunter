@@ -76,3 +76,59 @@ This change makes the PRD's "edge-input list per kind of code" ([prd.md](../prd.
 - Running UIs in a browser, and services (database, Redis); those findings still come back as "couldn't reproduce".
 - The version bump and v0.2.0 release (the runbook's job).
 - Container isolation.
+
+## Review
+
+- **Recommended and chosen:** security + code (high), because `Risk: high` (the agents' network rule is loosened for installs, and folder paths from the target reach agent shell commands) and `## Public Surface` isn't empty; chosen by the user ("go ahead"). Rounds 3 to 7 were the user's choices: "fix", then "fix" under the rule that only new security findings block (logged), then "fix until no findings".
+- **Verdicts:** in `.sdlc/.work/findings/2026-11-06-m-more-stacks/`.
+
+  | Round | Security | Code (high) |
+  |---|---|---|
+  | r1 | FAIL S1–S3 | FAIL CR-1, CR-2 |
+  | r2 | FAIL R2-1, R2-2 | FAIL CR2-1, CR2-2 |
+  | r3 | FAIL R3-1, R3-2 | FAIL CR3-1, CR3-2 |
+  | r4 | FAIL R4-1, R4-2 | PASS |
+  | r5 | PASS | PASS |
+  | r6 | PASS | PASS |
+  | r7 | PASS | PASS |
+
+  Both r7 reviewers say nothing left is worth another round. Dependency audit (`dependency-audit-r1.md`): not run. There are no runtime dependencies and `pip-audit` isn't installed.
+- **Fixed** (each test-first, in `tests/test_stacks.py`, `tests/test_isolate.py` or `tests/test_plugin_files.py`):
+  - **S1 / CR-2, injection through a folder name:** a folder with a quote, `$`, a backtick, a backslash, a control character or a leading `-` gets no install. Each install has an exact `step`, `(cd '<dir>' && cmd)`, which the verifier compares as text (CR-1, S4).
+  - **S2 / R2-2 / R4-1, installs reading or writing the owner's home and credentials:** the new `scripts/isolate.py`, run fail-closed at the start of every agent Bash call, moves `HOME`, XDG, the tool caches and Java's `user.home` into scratch.
+    - It drops inherited variables that point into the real home, the JVM and Node option variables, and secret-looking variables.
+    - It keeps `PATH`, the runtime managers, `JAVA_HOME`, the Android SDK, CA bundles and proxy host/port flags.
+  - **R2-1 / R3-1, Poetry installing into the owner's virtualenv or conda env, including via a committed `poetry.toml`:** active envs are unset, and `POETRY_VIRTUALENVS_CREATE` and `POETRY_VIRTUALENVS_IN_PROJECT` are forced.
+  - **R3-2 / R4-2 / R2-3, repo files installing runtimes or SDKs into the real home:**
+    - mise's four auto-install variables are 0.
+    - Volta isn't kept.
+    - `RUSTUP_AUTO_INSTALL=0`.
+    - Android SDK downloads are off.
+  - **CR2-1, Ruby gems not found by `bundle exec`:** `BUNDLE_PATH=vendor/bundle` is exported.
+  - **CR2-2 / CR3-1 / CR3-2, runtimes lost when `HOME` moves:** asdf, mise (with `[tools]` only, from every config location and `conf.d`), nvm, SDKMAN, `JAVA_HOME` and `ANDROID_HOME` are kept.
+  - **L-1 / T-1 / R6-1 / R6-2, writing through planted symlinks:** folders are opened with `O_NOFOLLOW` one level at a time and files are written atomically. A symlink at the top of the scratch home or in `.config` stops isolation.
+  - **Fail-open isolation (CR4-1):** the agents' line is `ISO="$(…)" && eval "$ISO" || exit 1;`, and a test runs it.
+  - **Also fixed:**
+    - CR-3: no installs for test or fixture lockfiles.
+    - CR-5: entries dedupe.
+    - CR-7: non-ASCII folder test.
+    - CR-8: `./mvnw` support and tool names.
+    - S3 / CR-4 / R2-4: honest wording on what installs can still run.
+    - `MAVEN_CONFIG`, mise system config, FIFOs, quoted proxy values, XDG mise config, and a second run in the same scratch (T7-1).
+- **Tickets:**
+  - CR-6: Gradle/Maven installs fetch metadata and miss some test-time plugins.
+  - T7-3 / R7-1: a symlink planted at the scratch path itself is followed.
+  - R7-2: links deeper in the scratch home, or planted after isolate.py exits, aren't caught.
+  - N-2: whether mise reads `MISE_SYSTEM_DIR` is unverified (mise isn't installed here). The probe is in `security-r7.md`.
+  - mise `conf.d` precedence is unverified against mise's source.
+  - Volta users get no default Node.
+  - Proxy settings in `gradle.properties` / `settings.xml` aren't carried (now in the README).
+  - A live Node/Vue run.
+- **Drift and manual checks:**
+  - Every `## Deviations` line in the state file, rounds 1–7: the shared `isolate.py`, the changed Bundler command, two test asserts tightened to the new behaviour.
+  - This file's Failure modes line "Gradle, Maven, Cargo and Go can still run build logic" was wrong: Cargo and Go fetch without running package code, unless a `rust-toolchain.toml` names a path. Yarn 2+, uv, Poetry and Bundler can run repo-chosen code. That's corrected in the README and `/hunt`.
+  - No `manual` ACs.
+- **Security:**
+  - No high or critical findings open, and no secrets in the diff.
+  - Isolation keeps tools off the owner's home; it isn't a sandbox. Code that runs with the owner's rights can still read files by absolute path. Container isolation stays out of scope.
+- **Lessons filed:** [knowledge/gotchas/isolating-agents-without-a-sandbox.md](../../../knowledge/gotchas/isolating-agents-without-a-sandbox.md), [recurring-defects.md](../recurring-defects.md)

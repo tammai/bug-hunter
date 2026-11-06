@@ -373,3 +373,19 @@ def test_mise_conf_d_tools_are_carried_and_system_dir_hidden(tmp_path):
     assert tomllib.loads(mise) == {"tools": {"go": "1.23", "node": "20"}}
     assert Path(got["MISE_SYSTEM_DIR"]).is_relative_to(scratch)
     assert not Path(got["MISE_SYSTEM_DIR"]).exists()
+
+
+def test_a_second_run_in_the_same_scratch_works(tmp_path):
+    real = tmp_path / "real"
+    (real / ".config/mise").mkdir(parents=True)
+    (real / ".tool-versions").write_text("nodejs 20\n", encoding="utf-8")
+    (real / ".config/mise/config.toml").write_text('[tools]\nnode = "20"\n', encoding="utf-8")
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    env = {"PATH": os.environ["PATH"], "HOME": str(real)}
+    first = run_script("isolate", scratch, env=env)
+    (scratch / "home/.npm/_cacache").mkdir(parents=True)
+    (scratch / "home/.cargo/registry").mkdir(parents=True)
+    second = run_script("isolate", scratch, env=env)
+    assert first.returncode == 0 and second.returncode == 0, second.stderr
+    assert first.stdout == second.stdout

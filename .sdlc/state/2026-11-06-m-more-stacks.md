@@ -1,5 +1,5 @@
 # 2026-11-06-m-more-stacks
-Status: active
+Status: done
 Process: 3
 Change: docs/sdlc/changes/2026-11-06-m-more-stacks.md   (this feature's record for people)
 Track: M   (sized up because: footprint ~16 files across scripts, prompts and edge-input lists; footprint: 16 files)
@@ -10,8 +10,8 @@ Started: 2026-11-06
 Base: 682ac61
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: 55bb63b tree c0e3efacf596e16f80dcb4c6e1708c3a94ba3d0b
-Current: Stage 3 – Review
+Verified: 82c5e54 tree a10b50d010b47ec2a142fc0b9b0bd015a148e89e
+Current: Stage 4 – Ship
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
@@ -58,6 +58,7 @@ inline, one part
 - 2026-11-06 Stage 2: pass
 - 2026-11-06 Stage 3: pass — review r6 passed both; round 7 fixes the remaining tickets (user: fix until no findings)
 - 2026-11-06 Stage 2: pass
+- 2026-11-06 Stage 3: pass
 
 ## Deviations
 - 2026-11-06 scripts/isolate.py, tests/test_isolate.py, agents/*.md What: new script the agents eval at the start of every Bash call: HOME, XDG and tool caches (npm, Cargo, Go, Gradle, Java user.home, Composer) move into scratch; token/password/key variables and SSH_AUTH_SOCK are unset; gh/git isolation moves here from the prompt text. Why: review S2, installs read ~/.m2/settings.xml, ~/.npmrc and ~/.netrc and wrote outside the copy. Effect: the two earlier prompt-text asserts on GH_CONFIG_DIR / GIT_CONFIG_GLOBAL now assert the eval line; tests/test_isolate.py checks the variables themselves.
