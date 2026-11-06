@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 SECTIONS = ["What happens", "Steps to reproduce", "Expected", "Root cause"]
 DRAFT_NAME = re.compile(r"^(\d+)\.md$")
@@ -90,6 +91,34 @@ def problems(text: str) -> list[str]:
     return found
 
 
+def _live_problems(text: str, target: dict) -> list[str]:
+    """Ways a live draft would leak the target's host or a login into a public issue."""
+    found = []
+    lowered = text.lower()
+    url = urlsplit(target["url"])
+    hosts = {url.netloc.lower()}
+    if url.hostname not in ("localhost", "127.0.0.1", "::1"):
+        hosts.add(url.hostname.lower())  # a bare "localhost" in prose gives nothing away
+    if any(host in lowered for host in hosts):
+        found.append("names the target's host: write \"$BASE\" instead")
+    if "x-bug-hunter-account" in lowered:
+        found.append('writes the proxy\'s account header: write -H "$<ACCOUNT>_AUTH" instead')
+    for name, headers in target["accounts"].items():
+        for value in headers.values():
+            pieces = {value, value.partition(" ")[2]}
+            pieces |= {cookie.partition("=")[2] for cookie in value.split(";")}
+            # Short pieces ("1", "en") would match ordinary words.
+            if any(len(p.strip()) >= 6 and p.strip() in text for p in pieces):
+                found.append(f"holds a login value of account {name}: "
+                             f'write -H "${name.upper()}_AUTH" instead')
+                break
+    setup = next((line for line in text.splitlines()
+                  if line.strip().lower().startswith("set before running:")), None)
+    if setup is None or not re.search(r"\bBASE\b", setup):
+        found.append("missing a 'Set before running:' line naming BASE")
+    return found
+
+
 def _main(argv: list[str] | None = None) -> int:
     # Windows Python before 3.15 writes in the ANSI code page; the commands read UTF-8.
     for stream in (sys.stdout, sys.stderr):
@@ -98,7 +127,10 @@ def _main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("dir", help="print the repo's drafts folder").add_argument("repo")
     sub.add_parser("next", help="print the next free draft number").add_argument("dir")
-    sub.add_parser("check", help="check a draft's format").add_argument("file")
+    check = sub.add_parser("check", help="check a draft's format")
+    check.add_argument("file")
+    check.add_argument("--repo", help="with --target: the repo whose targets.json to read")
+    check.add_argument("--target", help="a live draft: hide this target's host and logins")
     args = parser.parse_args(argv)
 
     if args.command == "dir":
@@ -121,6 +153,14 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"error: cannot read {args.file}: {exc}", file=sys.stderr)
         return 1
     found = problems(text)
+    if args.target:
+        from live_proxy import BadTarget, load_target  # live_proxy imports this module
+
+        try:
+            found += _live_problems(text, load_target(args.repo or ".", args.target))
+        except BadTarget as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
     for problem in found:
         print(problem)
     return 1 if found else 0

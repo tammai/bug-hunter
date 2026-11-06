@@ -1,3 +1,5 @@
+import json
+import os
 import shutil
 from pathlib import Path
 
@@ -132,3 +134,61 @@ def test_check_rejects_empty_title_and_ignores_headings_in_output(tmp_path):
     path.write_text(fenced, encoding="utf-8")
     result = run_script("drafts", "check", path)
     assert result.returncode == 0, result.stdout
+
+
+LIVE = """# Order total accepts a negative quantity
+
+Set before running: `BASE` (the dev or UAT URL), `ALICE_AUTH` (a normal user's login header).
+
+## What happens
+A negative quantity makes a negative total.
+
+## Steps to reproduce
+```
+$ curl -sS -X POST "$BASE/api/orders" -H "$ALICE_AUTH" -d '{"qty": -1}'
+{"total": -10}
+$ curl -sS "$BASE/api/me" -H "Authorization: Bearer invented-bad-token"
+{"error": "unauthorized"}
+```
+
+## Expected
+400 for a quantity below 1.
+
+## Root cause
+`src/orders.js`, `createOrder`, lines 10–14: no lower bound on `qty`.
+"""
+
+
+def test_live_drafts_hide_host_and_credentials(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin="https://github.com/acme/shop.git")
+    home = tmp_path / "home dir"
+    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home))
+    targets = home / ".bug-hunter" / "github.com" / "acme" / "shop" / "targets.json"
+    targets.parent.mkdir(parents=True)
+    targets.write_text(json.dumps({"uat": {"url": "https://uat.acme.test:8443/api", "accounts": {
+        "alice": {"Authorization": "Bearer Zq8Wx7CeTk41", "Cookie": "sid=Mm3Nn4Pp5"}}}}),
+        encoding="utf-8")
+
+    def check(text: str, target: str = "uat"):
+        path = tmp_path / "draft.md"
+        path.write_text(text, encoding="utf-8")
+        return run_script("drafts", "check", path, "--repo", repo, "--target", target, env=env)
+
+    assert check(LIVE).returncode == 0, check(LIVE).stdout
+    assert check(LIVE, "http://localhost:3000").returncode == 0
+    bad = [
+        LIVE.replace('"$BASE/api/orders"', '"https://uat.acme.test:8443/api/orders"'),
+        LIVE.replace('-H "$ALICE_AUTH"', '-H "X-Bug-Hunter-Account: alice"'),
+        LIVE.replace("invented-bad-token", "Zq8Wx7CeTk41"),
+        LIVE.replace('-H "$ALICE_AUTH"', '-H "Cookie: sid=Mm3Nn4Pp5"'),
+        LIVE.replace("Set before running: `BASE` (the dev or UAT URL), ", "Set before running: "),
+        LIVE.replace("Set before running:", "Set:"),
+    ]
+    for n, text in enumerate(bad):
+        assert check(text).returncode != 0, n
+    local = LIVE.replace('"$BASE/api/orders"', '"http://localhost:3000/api/orders"')
+    assert check(local, "http://localhost:3000").returncode != 0
+
+    plain = tmp_path / "plain.md"
+    plain.write_text(LIVE.replace('"$BASE', '"https://uat.acme.test:8443'), encoding="utf-8")
+    assert run_script("drafts", "check", plain, env=env).returncode == 0

@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 from test_isolate import ISOLATE_LINE
@@ -97,7 +98,7 @@ def test_every_stack_has_an_edge_input_list_covering_its_traps():
     named = {s["edge_inputs"] for s in stacks}
     files = {p.stem for p in (ROOT / "edge-inputs").glob("*.md")}
     assert named <= files
-    assert files - named == {"generic", "integrations"}
+    assert files - named == {"generic", "integrations", "live-http"}
     for name in named:
         assert (ROOT / f"edge-inputs/{name}.md").read_text(encoding="utf-8").strip(), name
     for name, traps in TRAPS.items():
@@ -173,7 +174,7 @@ def test_audit_command_asks_first_and_never_posts():
 
 def test_constitution_prd_and_readme_cover_audit():
     constitution = (ROOT / "docs/sdlc/constitution.md").read_text(encoding="utf-8")
-    assert "**Version**: 1.1.0" in constitution
+    assert "**Version**: 1.2.0" in constitution
     assert "traced" in constitution and "audit finding" in constitution.lower()
     prd = (ROOT / "docs/sdlc/prd.md").read_text(encoding="utf-8")
     goals, non_goals = prd.split("**Non-goals**")
@@ -259,3 +260,42 @@ def test_command_and_agent_frontmatter_values_parse_as_written():
                                or " #" in value):
                 bad.append(f"{path.name}: {key}")
     assert bad == []
+
+
+def test_live_http_list_covers_edge_inputs():
+    text = (ROOT / "edge-inputs" / "live-http.md").read_text(encoding="utf-8").lower()
+    for topic in ("missing", "expired", "another account", "idor", "extra field", "wrong type",
+                  "null", "malformed json", "content-type", "negative", "unicode", "long string",
+                  "pagination", "double submit", "method", "trailing slash", "case",
+                  "stack trace"):
+        assert topic in text, topic
+
+
+def test_hunt_target_flow_and_agent_rules():
+    meta, hunt = read("commands/hunt.md")
+    assert "--target" in meta.get("argument-hint", "")
+    for needed in ("live_proxy.py", "scope.py", "--live", "targets.json", "writes",
+                   "--max-requests", "--rate", "X-Bug-Hunter-Account", "$BASE",
+                   "never the target URL", "--target", "drafts.py\" check"):
+        assert needed in hunt, needed
+    assert hunt.index("live_proxy.py") < hunt.index("Start N hunters?")
+    _, hunter = read("agents/bug-hunter.md")
+    _, verifier = read("agents/repro-verifier.md")
+    for text in (hunter, verifier):
+        for needed in ("<PROXY>", '"$BASE"', "_AUTH", "only the proxy"):
+            assert needed in text, needed
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "--target" in readme and "targets.json" in readme
+
+
+def test_live_steps_export_placeholders_and_keep_the_proxy_up():
+    _, hunter = read("agents/bug-hunter.md")
+    _, verifier = read("agents/repro-verifier.md")
+    for text in (hunter, verifier):
+        assert 'export BASE="<PROXY>"' in text
+        assert not re.search(r'(?<!export )BASE="<PROXY>" BOB_AUTH=', text)
+    _, hunt = read("commands/hunt.md")
+    assert "--check" in hunt and "kill -0" in hunt
+    assert hunt.index("--check") < hunt.index("Start N hunters?")
+    intro = hunt.split("## Live target")[0]
+    assert "--target" in intro
