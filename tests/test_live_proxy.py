@@ -359,3 +359,45 @@ def test_odd_paths_overrides_and_query_dots(make_repo, tmp_path):
     assert [e["query"] for e in entries(stub_log)] == ["file=../../etc/hosts"]
     notes = [e.get("note", "") for e in entries(proxy_log)]
     assert len(notes) == 4 and all(notes[:3])
+
+
+def test_masks_every_form_of_an_account_value():
+    import base64
+    from urllib.parse import quote, quote_plus
+
+    from live_proxy import _masker
+    bearer = "ab/cd+ef=Gh12"
+    password = "Pw7/Qq+Zz="
+    basic = "Basic " + base64.b64encode(f"ops:{password}".encode()).decode()
+    target = {"url": "https://uat.acme.test:8443", "accounts": {
+        "alice": {"Authorization": f"Bearer {bearer}"}, "ops": {"Authorization": basic}}}
+    mask = _masker(target, "http://127.0.0.1:9")
+    forms = [bearer, bearer.replace("/", "\\/"), quote(bearer, safe=""), quote_plus(bearer),
+             quote(bearer, safe="").lower(), basic.split()[1], f"ops:{password}", password,
+             password.replace("/", "\\/"), quote_plus(password)]
+    for form in forms:
+        out = mask(f"echo [{form}] end".encode()).decode()
+        assert form not in out and "<redacted>" in out, form
+
+
+def test_masks_hosts_only_where_they_stand_alone():
+    from live_proxy import _masker
+    short = _masker({"url": "https://uat:8443/base", "accounts": {}}, "http://127.0.0.1:9")
+    text = b"/actuator /api/orders https://uat:8443/x uat:8443/y"
+    assert short(text) == b"/actuator /api/orders http://127.0.0.1:9/x <target>/y"
+    dotted = _masker({"url": "https://uat.acme.test", "accounts": {}}, "http://127.0.0.1:9")
+    assert dotted(b"host=uat.acme.test; xuat.acme.tests") == b"host=<target>; xuat.acme.tests"
+
+
+def test_compressed_responses_are_refused(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    stub, stub_base, _ = start_stub(tmp_path, [{"path": "/z", "responses": [
+        {"status": 200, "headers": {"Content-Encoding": "gzip"}, "body": "not really gzip"}]}])
+    write_targets(targets, {"uat": {"url": stub_base}})
+    proxy, base = start_proxy(repo, "uat", env, tmp_path / "p.jsonl")
+    try:
+        status, _, body = call(base + "/z")
+    finally:
+        stop(proxy, stub)
+    assert status == 502 and "not really gzip" not in body

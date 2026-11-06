@@ -1,6 +1,8 @@
 """Forward hunters' requests to one dev or UAT target the owner allowed: logged in, budgeted."""
 
 import argparse
+import base64
+import binascii
 import http.client
 import json
 import math
@@ -10,7 +12,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qsl, unquote, urlsplit
+from urllib.parse import parse_qsl, quote, quote_plus, unquote, urlsplit
 
 from drafts import drafts_dir
 from stub_server import _redact_body, _redact_query
@@ -123,25 +125,46 @@ def _leaves_base(path: str) -> bool:
     )
 
 
+def _forms(value: str) -> set[str]:
+    """The ways a response may echo a value: as is, JSON-escaped and percent-encoded."""
+    escaped = json.dumps(value)[1:-1]
+    return {value, escaped, escaped.replace("/", "\\/"), value.replace("/", "\\/"),
+            quote(value, safe=""), quote(value), quote_plus(value)}
+
+
 def _secrets(target: dict) -> list[str]:
-    """Every account value, and the parts a response might echo on their own."""
-    found = set()
+    """Every form of every account value, and of the parts a response might echo alone."""
+    pieces = set()
     for headers in target["accounts"].values():
         for value in headers.values():
-            found |= {value, value.partition(" ")[2]}
-            found |= {cookie.partition("=")[2] for cookie in value.split(";")}
+            scheme, _, credential = value.partition(" ")
+            pieces |= {value, credential}
+            pieces |= {cookie.partition("=")[2] for cookie in value.split(";")}
+            if scheme.lower() == "basic":
+                try:
+                    decoded = base64.b64decode(credential, validate=True).decode("latin-1")
+                except (binascii.Error, ValueError):
+                    decoded = ""
+                pieces |= {decoded, decoded.partition(":")[2]}
+    found = set().union(*(_forms(p.strip()) for p in pieces)) if pieces else set()
     # Short pieces would mask ordinary words.
-    return sorted((v.strip() for v in found if len(v.strip()) >= 6), key=len, reverse=True)
+    return sorted((v for v in found if len(v) >= 6), key=len, reverse=True)
 
 
 def _masker(target: dict, proxy_url: str):
     """Hide account values and the target's address in what goes back to an agent."""
     base = urlsplit(target["url"])
-    swaps = [(re.compile(re.escape(v).encode()), b"<redacted>") for v in _secrets(target)]
+    # Case-insensitive: percent-encoding may use either case, and over-masking is harmless.
+    swaps = [(re.compile(re.escape(v).encode(), re.I), b"<redacted>") for v in _secrets(target)]
     swaps.append((re.compile(re.escape(f"{base.scheme}://{base.netloc}").encode(), re.I),
                   proxy_url.encode()))
-    hosts = [base.netloc] + ([] if base.hostname in LOCAL_HOSTS else [base.hostname])
-    swaps += [(re.compile(re.escape(h).encode(), re.I), b"<target>") for h in hosts]
+    # A bare host is masked only where it stands alone, and a dotless one ("uat") only with
+    # its port: on its own it would mangle words like /actuator.
+    hosts = [base.netloc] if ":" in base.netloc or "." in base.netloc else []
+    if base.hostname not in LOCAL_HOSTS and "." in base.hostname:
+        hosts.append(base.hostname)
+    swaps += [(re.compile(rb"(?<![\w.-])" + re.escape(h).encode() + rb"(?![\w-])", re.I),
+               b"<target>") for h in hosts]
 
     def mask(data: bytes) -> bytes:
         for pattern, replacement in swaps:
@@ -273,6 +296,12 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
             except (OSError, http.client.HTTPException, ValueError) as exc:
                 self._record(account, 502, body, note=f"target unreachable: {type(exc).__name__}")
                 return self._reply(502, f"target unreachable: {type(exc).__name__}")
+            encoding = (response.getheader("Content-Encoding") or "identity").strip().lower()
+            if encoding != "identity":
+                # Asked for identity; a compressed body can't be checked for logins.
+                self._record(account, 502, body, note=f"target sent {encoding} body")
+                return self._reply(502, f"the target sent a {encoding} body although asked "
+                                        "not to, so it can't be checked for logins")
             self._record(account, response.status, body)
             mask = _masker(target, proxy_url[0])
             data = mask(data)

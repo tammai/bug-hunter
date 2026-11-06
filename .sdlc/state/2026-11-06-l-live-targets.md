@@ -10,7 +10,7 @@ Started: 2026-11-06
 Base: c4ffa8d
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: ac40d11 tree a128ddbed53a956b892c9fc2945dde0534ba086b
+Verified: dcfd96f tree a305a618dc0dff3d2434f2b89b2c9b48168a8742
 Current: Stage 3 – Review
 
 ## Stages
@@ -51,6 +51,9 @@ inline, one part
 - 2026-11-06 review: ran security and code high (Risk: high; Public Surface; L), self-chosen: L
 - 2026-11-06 Stage 3: fail — security r1: S1 high, S2-S5; code high r1: C1-C5 high, C6-C8; S3/C4 and S4 rated high (break must-never-break lines); C9-C13 and S4 beyond headers tickets
 - 2026-11-06 Stage 2: pass
+- 2026-11-06 Stage 3: fail — round 2: security S2-1 high (escaped/encoded/decoded tokens unmasked), code C2-1 medium (bare short hostname masked inside words); tickets S2-2..S2-5, C2-2..C2-4; asking the user
+- 2026-11-06 Stage 3: fail — round 2: S2-1 high, C2-1 medium; S2-2 (compressed bodies) folded in as the same leak; user chose round 3 and to continue until no findings
+- 2026-11-06 Stage 2: pass
 
 ## Deviations
 - 2026-11-06 tests/test_plugin_files.py What: the every-stack edge-list test now allows live-http.md, and the constitution test expects version 1.2.0. Why: live-http is chosen by routes, not stack, like integrations; principle III was amended to 1.2.0 (approved in Define). Effect: both still fail on any other unnamed list or version.
@@ -59,6 +62,7 @@ inline, one part
 - 2026-11-06 scripts/live_proxy.py What: AC-002 exception: relayed responses mask every account value (and the part after the scheme, and cookie values) as <redacted>, swap the target's scheme://host for the proxy URL and its host for <target>, and ask the target for uncompressed bodies; the proxy adds no Server or Date of its own and keeps the target's Content-Length on HEAD. Why: security r1 S3 and code r1 C4 (a target echoing headers or its own URL handed tokens and the address to agents, breaking a must-never-break line), C2 (the proxy's own headers looked like the target's). Effect: responses are unchanged except for those values.
 - 2026-11-06 scripts/live_proxy.py, commands/hunt.md What: --check validates the target and prints 'target ok: <name> (writes; accounts)' without listening; /hunt runs it before the cost question and starts the proxy only after the owner's yes, checks it with kill -0 before the verifiers and restarts it with the remaining budget. targets.json is now validated at start: header names, values without line breaks or non-Latin-1 characters (errors never echo a value), account names usable as shell names, URLs without user:password@. Method-override headers and _method on read-only targets get 403; non-ASCII paths get 400 before the budget; the .. check covers the path only. Why: security r1 S1, S2, S4, S5 and code r1 C5-C8, C14. Effect: one more proxy flag, --check.
 - 2026-11-06 agents/bug-hunter.md, agents/repro-verifier.md, scripts/stacks.json, tests/* What: live repros export BASE and <ACCOUNT>_AUTH after the isolation prefix; route markers add chi (Get/Post/Route/Mount on a / path) and drop 'api.' so axios instances aren't routes; AC-006's framework coverage is tested across 11 frameworks. Why: code r1 C1 (isolate.py unsets *AUTH*; a prefix assignment isn't seen by the same command's expansion), C3. Effect: none beyond the fixes.
+- 2026-11-06 scripts/live_proxy.py What: round 3. Masking covers every form derived from each account value: as is, JSON-escaped (with and without \/), percent-encoded (quote, quote with /, quote_plus, either hex case), and for Basic the decoded user:password and the password alone; a bare host is masked only at word boundaries and a dotless one only with its port; a compressed response (Content-Encoding not identity) gets 502 instead of being relayed unmasked. Why: security r2 S2-1, S2-2; code r2 C2-1. Effect: a target named by a short dotless host keeps that word visible in responses when it appears without its port.
 
 ## Open questions
 -
