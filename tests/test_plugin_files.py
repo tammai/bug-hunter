@@ -233,3 +233,10 @@ def test_draft_stub_step_is_reachable_and_verifier_note_is_gone():
     assert "until grep -q listening stub.out" in hunter
     _, verifier = read("agents/repro-verifier.md")
     assert "may still be running" not in verifier
+
+
+def test_draft_stub_uses_a_free_port_and_stops():
+    _, hunter = read("agents/bug-hunter.md")
+    assert "8765" not in hunter and "--port 0" in hunter
+    assert "echo $! > stub.pid" in hunter and 'kill "$(cat stub.pid)"' in hunter
+    assert "s/^listening on //p" in hunter

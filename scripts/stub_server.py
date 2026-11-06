@@ -3,6 +3,7 @@
 import argparse
 import email.parser
 import email.policy
+import html
 import json
 import math
 import re
@@ -83,16 +84,26 @@ class _Unparsed(Exception):
     """The body isn't in the shape it claimed; fine to log only if it plainly has no secret."""
 
 
-def _secret_name(name: str) -> bool:
-    return bool(SECRET_WORD.search(unquote_plus(name)))
+def _has_secret(text: str) -> bool:
+    """A secret word in the text, or in what its %xx, \\u, \\x or &# escapes spell."""
+    for _ in range(8):  # escapes can be nested (%2574 is %74 is t)
+        if SECRET_WORD.search(text):
+            return True
+        decoded = html.unescape(unquote_plus(re.sub(
+            r"\\(?:u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2}))",
+            lambda m: chr(int(m.group(1) or m.group(2), 16)), text)))
+        if decoded == text:
+            return False
+        text = decoded
+    return True  # still decoding after that many layers: treat as hiding something
 
 
 def _redact_json(value: object) -> object:
     if isinstance(value, dict):
-        return {k: REDACTED if _secret_name(str(k)) else _redact_json(v) for k, v in value.items()}
+        return {k: REDACTED if _has_secret(str(k)) else _redact_json(v) for k, v in value.items()}
     if isinstance(value, list):
         return [_redact_json(v) for v in value]
-    if isinstance(value, str) and SECRET_WORD.search(value):
+    if isinstance(value, str) and _has_secret(value):
         raise _Withhold  # e.g. JSON escaped inside a string, or prose naming a password
     return value
 
@@ -113,9 +124,9 @@ def _redact_pairs(text: str) -> str:
     parts = []
     for item in text.split("&"):
         name, eq, value = item.partition("=")
-        if eq and _secret_name(name):
+        if eq and _has_secret(name):
             parts.append(f"{name}={REDACTED}")
-        elif SECRET_WORD.search(unquote_plus(value)):
+        elif _has_secret(value):
             raise _Withhold
         else:
             parts.append(item)
@@ -133,9 +144,9 @@ def _redact_multipart(raw: bytes, content_type: str) -> str:
         name = part.get_param("name", header="content-disposition") or ""
         value = part.get_payload(decode=True) or b""
         text = value.decode("utf-8", errors="replace")
-        if _secret_name(name):
+        if _has_secret(name):
             text = REDACTED
-        elif SECRET_WORD.search(text):
+        elif _has_secret(text):
             raise _Withhold
         fields.append(f"{name}={text}")
     return "\n".join(fields)
@@ -162,8 +173,7 @@ def _redact_body(raw: bytes, content_type: str, complete: bool) -> str:
         # Redaction found a secret it couldn't isolate: never fall back to the raw text.
         return withheld
     except (_Unparsed, ValueError, TypeError, LookupError):
-        # Escapes (\u0073, %73) can spell a secret word the raw text doesn't show.
-        if SECRET_WORD.search(text) or re.search(r"\\u[0-9a-fA-F]{4}|%[0-9a-fA-F]{2}", text):
+        if _has_secret(text):
             return withheld
         return text
 
@@ -196,7 +206,7 @@ def _handler(rules: list[dict], log: Path, seen: list) -> type[BaseHTTPRequestHa
 
             if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
                 while True:
-                    size_text = self.rfile.readline().split(b";")[0].strip() or b"0"
+                    size_text = self.rfile.readline().split(b";")[0].strip()
                     if not re.fullmatch(rb"[0-9a-fA-F]+", size_text):
                         raise ValueError("chunk size isn't hex")
                     size = int(size_text, 16)
@@ -228,7 +238,7 @@ def _handler(rules: list[dict], log: Path, seen: list) -> type[BaseHTTPRequestHa
             entry = {
                 "time": round(time.time(), 3), "method": self.command, "path": url.path,
                 "query": _redact_query(url.query),
-                "headers": {k: "<redacted>" if SECRET_WORD.search(k) else v
+                "headers": {k: "<redacted>" if _has_secret(k) else v
                             for k, v in self.headers.items()},
                 "body": logged[:MAX_BODY],
                 "body_bytes": total,
@@ -255,7 +265,7 @@ def _handler(rules: list[dict], log: Path, seen: list) -> type[BaseHTTPRequestHa
                 # The client under test sent a broken body: that's evidence, so log what
                 # arrived and answer instead of dropping the connection.
                 partial = bytes(getattr(self, "_kept", b""))
-                if SECRET_WORD.search(partial.decode("utf-8", errors="replace")):
+                if _has_secret(partial.decode("utf-8", errors="replace")):
                     partial = b""
                 self._record(partial, getattr(self, "_total", 0),
                              note="malformed chunk size or Content-Length")
@@ -320,12 +330,22 @@ def _handler(rules: list[dict], log: Path, seen: list) -> type[BaseHTTPRequestHa
     return Handler
 
 
+def _idle_seconds(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        value = math.nan
+    if not (math.isfinite(value) and value > 0):
+        raise argparse.ArgumentTypeError("must be a number of seconds above 0")
+    return value
+
+
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scenario", required=True)
     parser.add_argument("--log", required=True)
     parser.add_argument("--port", type=int, default=0)
-    parser.add_argument("--idle-exit", type=float, default=600,
+    parser.add_argument("--idle-exit", type=_idle_seconds, default=600,
                         help="exit after this many seconds without a request")
     args = parser.parse_args(argv)
     seen = [time.monotonic(), 0]  # last activity, requests in flight

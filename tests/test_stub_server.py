@@ -307,3 +307,40 @@ def test_escaped_secrets_slow_answers_and_negative_chunks(tmp_path):
         proc.wait(timeout=5)
     text = log.read_text(encoding="utf-8")
     assert "Hu9nter2" not in text and "Zq8Wx7Ce" not in text
+
+
+def test_encoded_secret_words_and_broken_chunks(tmp_path):
+    import socket
+    proc, base, log = start(tmp_path, [{"method": "POST", "path": "/in",
+                                        "responses": [{"status": 200}]}])
+    host, port = base.removeprefix("http://").split(":")
+    try:
+        call(base + "/in", "POST", b'{"note": "%74oken=Zz1Yy2"}',
+             {"Content-Type": "application/json"})
+        call(base + "/in", "POST", b"a=%2574oken%3DQq7Ww8",
+             {"Content-Type": "application/x-www-form-urlencoded"})
+        call(base + "/in?q=%2574oken%3DRr5Tt6", "POST", b"")
+        for chunks in (b"14\r\npa\\u0073sword Kk4Jj3\r\nzz\r\n", b"4\r\nabcd\r\n\r\n"):
+            raw = socket.create_connection((host, int(port)), timeout=5)
+            raw.sendall(b"POST /in HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
+                        + chunks)
+            assert b" 400 " in raw.recv(200).split(b"\r\n")[0], chunks
+            raw.close()
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+    text = log.read_text(encoding="utf-8")
+    for secret in ("Zz1Yy2", "Qq7Ww8", "Rr5Tt6", "Kk4Jj3"):
+        assert secret not in text, secret
+
+
+def test_idle_exit_must_be_positive(tmp_path):
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps([{"path": "/a", "responses": [{}]}]), encoding="utf-8")
+    for value in ("0", "-1", "nan"):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "stub_server.py"), "--scenario", str(path),
+             "--log", str(tmp_path / "l.jsonl"), "--idle-exit", value],
+            capture_output=True, text=True, timeout=10)
+        assert result.returncode != 0 and "Traceback" not in result.stderr, value
+        assert "idle-exit" in result.stderr, value

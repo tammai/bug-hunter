@@ -224,3 +224,15 @@ def test_fetch_definitions_with_types_and_more_js_files(make_repo):
     assert "integrations" not in by_dir["tsrepo"] and "integrations" not in by_dir["tsmulti"]
     for d in ("renamed", "esm", "multicall"):
         assert by_dir[d][-1] == "integrations", d
+
+
+def test_fetch_in_a_ternary_is_a_call(make_repo):
+    repo = make_repo({
+        "tern/a.js": "const r = ok ? await fetch(u) : {}\n",
+        "ternlines/b.ts": "const r = ok\n  ? await fetch(u)\n  : {}\n",
+        "tsrepo/c.ts": "class Repo {\n  fetch(url: string): Promise<Response> {\n"
+                       "    return x\n  }\n}\n",
+    })
+    by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
+    assert by_dir["tern"][-1] == "integrations" and by_dir["ternlines"][-1] == "integrations"
+    assert "integrations" not in by_dir["tsrepo"]

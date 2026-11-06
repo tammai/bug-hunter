@@ -10,7 +10,7 @@ Started: 2026-11-06
 Base: 36650f9
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: 377bbb8 tree 02f70335a679d2842a704285ba068fcff47b302f
+Verified: 0cac1b1 tree 55236020e657860ab02d6d0318743bd37e1559d6
 Current: Stage 3 – Review
 
 ## Stages
@@ -50,6 +50,8 @@ inline, one part
 - 2026-11-06 Stage 2: pass
 - 2026-11-06 Stage 3: fail — code review r4: R4-4 high, R4-1/3/5-9 bugs; user chose round 5
 - 2026-11-06 Stage 2: pass
+- 2026-11-06 Stage 3: fail — code review r5: R5-1, R5-3 high, R5-2, R5-5..R5-7 bugs; user chose round 6
+- 2026-11-06 Stage 2: pass
 
 ## Deviations
 - 2026-11-06 tests/test_plugin_files.py What: the every-stack edge-list test now allows integrations.md next to generic.md. Why: integrations is chosen by what a part calls, not by its stack, so stacks.json names it in its own integrations block. Effect: the test still fails on any other unnamed list.
@@ -57,6 +59,7 @@ inline, one part
 - 2026-11-06 scripts/stub_server.py, scripts/stacks.json, agents/*.md, tests/* What: round 3. Secret-named fields redacted by pattern in any body (JSON, bare JSON values, form, multipart, ndjson, plain text, past 64 KB); the query keeps the client's raw encoding, only secret values replaced; booleans and non-finite numbers rejected at start; a malformed chunk size or Content-Length is logged with a note and answered 400; 1xx, 204 and 304 send no body; fetch markers skip def/function definitions and catch window/globalThis/self.fetch, bare verifySignature dropped; hunters keep stub files in a mktemp folder and wait for the listening line; the verifier saves and kills the stub's PID. Why: built-in code review r2 R2-1..R2-8. Effect: none beyond the fixes.
 - 2026-11-06 scripts/stub_server.py, scripts/stacks.json, scripts/scope.py, agents/*.md, tests/* What: round 4 redesign at the user's request. Redaction is structured and fails closed: JSON and ndjson parsed whole (any secret-named key replaced whatever its type), forms and queries split with decoded names, multipart parsed with the email package; a secret-ish word left in a value, a body cut at 10 MB, or one that can't be parsed is logged as <body withheld: N bytes>. Delays capped at 3600 s, status 200-599, chunks over 64 MB malformed (bytes already read kept), 204/304 send no Content-Type/Length; --idle-exit (default 600 s) stops a forgotten stub; fetch( counts only in JS/TS files and not for method definitions; hunters write the scenario first, print the temp folder and stop waiting if the stub dies; the verifier no longer edits steps to save PIDs. Why: built-in code review r3 R3-1..R3-10. Effect: the round-3 test that the verifier saves stub.pid now only forbids kill %1.
 - 2026-11-06 scripts/stub_server.py, scripts/stacks.json, agents/*.md, tests/* What: round 5. A redaction that decides to withhold always withholds; only a body that isn't in its claimed shape may be logged raw, and only with no secret word and no \\u or %xx escapes; --idle-exit waits for in-flight responses; chunk sizes must be plain hex (negative refused); the fetch( marker skips definitions with a return type or multi-line parameters; node-fetch restored; .mts, .cts and .html count as JS for markers, and .mts/.cts join the node stack's file types so those files are hunted at all; drafts start the stub on a fixed port and wait for it; the verifier's stale stub note removed; SECRET_HEADER alias removed. Why: built-in code review r4 R4-1, R4-3..R4-9. Effect: R4-2 (v0.2.0's stub lacks --idle-exit) needs no flag now, since drafts rely on the 600 s default from v0.3.0.
+- 2026-11-06 scripts/stub_server.py, scripts/stacks.json, agents/bug-hunter.md, tests/* What: round 6. One secret check (_has_secret) for every name, value, header and fallback body, decoding nested %xx, \u, \x and &# escapes before matching (an unparsed body with escapes but no secret is now logged); a malformed body's partial goes through it; an empty chunk-size line is malformed; --idle-exit must be a finite number above 0; the fetch( definition lookahead needs the return type's colon right after ) and stays on one line, so ternaries count; drafts start the stub on port 0, read the URL from stub.out, save stub.pid and end with a kill step. Why: built-in code review r5 R5-1..R5-3, R5-5..R5-7. Effect: R5-4 (.html only matters for --focus security) is a ticket, not a bug.
 
 ## Open questions
 -
