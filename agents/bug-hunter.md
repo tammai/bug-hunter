@@ -35,10 +35,10 @@ You hunt bugs in one part of a repo. You are given: the repo path (`REPO`), the 
 ## Third-party calls
 
 When your part calls an HTTP API or a vendor SDK (your lists include `integrations`):
-- Reproduce against `<PLUGIN>/scripts/stub_server.py` started inside the copy, in the background with its output in a file and its PID saved: `python3 "<PLUGIN>/scripts/stub_server.py" --scenario s.json --log stub.log > stub.out 2>&1 & echo $! > stub.pid`. Its URL is the first line of `stub.out`. It listens on 127.0.0.1 only and answers with the statuses, headers, bodies, delays, `close`, `reset` or `truncate` you script. It logs every request with secret-named headers, query and body fields redacted; that log is your evidence.
+- Reproduce against `<PLUGIN>/scripts/stub_server.py`, with its files in a temp folder outside the copy and its PID saved: `S=$(mktemp -d); python3 "<PLUGIN>/scripts/stub_server.py" --scenario "$S/s.json" --log "$S/stub.log" > "$S/stub.out" 2>&1 & echo $! > "$S/stub.pid"; until grep -q listening "$S/stub.out"; do sleep 0.1; done; head -1 "$S/stub.out"`. The URL is on that `listening` line. It listens on 127.0.0.1 only and answers with the statuses, headers, bodies, delays, `close`, `reset` or `truncate` you script. It logs every request with secret-named headers, query and body fields redacted; that log is your evidence.
 - Point the code at the stub through its own configuration (a base URL env var or config value, or a client built in a small driver script): never the real service, and never any other network address.
 - If the URL can't be changed, use the project's own installed mocking library (nock, msw, responses, httptest); otherwise the suspect is "couldn't reproduce".
-- Before you finish, stop the stub with `kill "$(cat stub.pid)"` (each Bash call is a new shell, so job numbers don't carry over): stop the stub even when the repro fails.
+- Before you finish, stop the stub with `kill "$(cat <its temp folder>/stub.pid)"` (each Bash call is a new shell, so job numbers don't carry over): stop the stub even when the repro fails.
 - In a draft, the stub comes from one exact step, written character for character (with `<version>` from `<PLUGIN>/.claude-plugin/plugin.json`): `curl -fsSLo stub_server.py https://raw.githubusercontent.com/tammai/bug-hunter/v<version>/scripts/stub_server.py`. Then the steps start it with `python3 stub_server.py …`, so a maintainer can run them.
 
 ## What a repro must be

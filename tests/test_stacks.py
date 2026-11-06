@@ -174,3 +174,18 @@ def test_integration_markers_match_real_clients_only(make_repo):
     result = run_script("scope", repo, "--max", "1")
     skipped = json.loads(result.stdout)["skipped"]
     assert all("integrations" not in p["edge_inputs"] for p in skipped)
+
+
+def test_fetch_markers_skip_definitions_and_catch_globals(make_repo):
+    repo = make_repo({
+        "cache/store.py": "class Store:\n    def fetch(self, key):\n        return 1\n",
+        "jsdef/a.js": "async function fetch(url) { return 1 }\n",
+        "browser/b.js": "window.fetch('/api')\n",
+        "glob/c.ts": "globalThis.fetch(u)\n",
+        "jwt/d.js": "export const ok = verifySignature(token, key)\n",
+    })
+    by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
+    for d in ("cache", "jsdef", "jwt"):
+        assert "integrations" not in by_dir[d], d
+    for d in ("browser", "glob"):
+        assert by_dir[d][-1] == "integrations", d

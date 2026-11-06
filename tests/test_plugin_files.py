@@ -210,3 +210,10 @@ def test_stub_is_stopped_by_pid_and_hunt_names_integrations():
     assert "kill %1" not in hunter and "stub.pid" in hunter and "> " in hunter
     _, hunt = read("commands/hunt.md")
     assert "gets only the generic list" not in hunt and "integrations" in hunt
+
+
+def test_stub_lifecycle_rules_in_both_agents():
+    _, hunter = read("agents/bug-hunter.md")
+    assert "mktemp -d" in hunter and "listening" in hunter
+    _, verifier = read("agents/repro-verifier.md")
+    assert "stub.pid" in verifier and "kill %1" not in verifier

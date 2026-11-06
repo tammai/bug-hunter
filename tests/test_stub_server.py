@@ -163,3 +163,48 @@ def test_badly_typed_scenarios_fail_at_start(tmp_path):
         path.write_text(json.dumps([rule]), encoding="utf-8")
         result = run_script("stub_server", "--scenario", path, "--log", tmp_path / "l.jsonl")
         assert result.returncode == 1 and "Traceback" not in result.stderr, rule
+
+
+def test_round_two_redaction_encoding_and_robustness(tmp_path):
+    import socket
+    proc, base, log = start(tmp_path, [
+        {"method": "POST", "path": "/in", "responses": [{"status": 200, "body": "ok"}]},
+        {"path": "/q", "responses": [{"status": 204, "body": {"ok": True}}]},
+    ])
+    host, port = base.removeprefix("http://").split(":")
+    big = json.dumps({"pad": "x" * 70_000, "access_token": "Tk9Lm8Np"}).encode()
+    try:
+        call(base + "/in", "POST", big, {"Content-Type": "application/json"})
+        call(base + "/in", "POST", b'{"client_secret": "Ab12Cd34"}', {"Content-Type": "text/plain"})
+        multipart = (b'--B\r\nContent-Disposition: form-data; name="client_secret"\r\n\r\n'
+                     b"Mp7Qr6St\r\n--B--\r\n")
+        call(base + "/in", "POST", multipart, {"Content-Type": "multipart/form-data; boundary=B"})
+        call(base + "/in", "POST", b'{"api_key":"Nd5Ws4Xe"}\n{"n":1}\n',
+             {"Content-Type": "application/x-ndjson"})
+        status, _, body = call(base + "/q?path=/a/b&q=a%20b&flag")
+        assert status == 204 and body == ""
+
+        raw = socket.create_connection((host, int(port)), timeout=5)
+        raw.sendall(b"POST /in HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n")
+        reply = raw.recv(200)
+        raw.close()
+        assert reply.startswith(b"HTTP/1.") and b" 400 " in reply.split(b"\r\n")[0]
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+    text = log.read_text(encoding="utf-8")
+    for secret in ("Tk9Lm8Np", "Ab12Cd34", "Mp7Qr6St", "Nd5Ws4Xe"):
+        assert secret not in text, secret
+    entries = [json.loads(line) for line in text.splitlines()]
+    assert any(e["query"] == "path=/a/b&q=a%20b&flag" for e in entries)
+    assert any("malformed" in e.get("note", "") for e in entries)
+
+
+def test_non_finite_and_boolean_values_fail_at_start(tmp_path):
+    for n, text in enumerate(('[{"path": "/a", "responses": [{"truncate": true}]}]',
+                              '[{"path": "/a", "responses": [{"delay": Infinity}]}]',
+                              '[{"path": "/a", "responses": [{"delay": NaN}]}]')):
+        path = tmp_path / f"s{n}.json"
+        path.write_text(text, encoding="utf-8")
+        result = run_script("stub_server", "--scenario", path, "--log", tmp_path / "l.jsonl")
+        assert result.returncode == 1 and "Traceback" not in result.stderr, text

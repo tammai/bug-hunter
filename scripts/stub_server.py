@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import re
 import socket
 import struct
@@ -10,7 +11,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.parse import urlsplit
 
 SECRET_HEADER = re.compile(r"authorization|cookie|token|secret|api[-_]?key|password", re.I)
 MAX_BODY = 65536
@@ -52,44 +53,44 @@ def _check_response(r: dict, where: str) -> None:
     ):
         raise _BadScenario(f"{where}: headers must be an object of text values")
     delay = r.get("delay", 0)
-    if not isinstance(delay, (int, float)) or isinstance(delay, bool) or delay < 0:
-        raise _BadScenario(f"{where}: delay must be a number of seconds")
+    if (not isinstance(delay, (int, float)) or isinstance(delay, bool)
+            or not math.isfinite(delay) or delay < 0):
+        raise _BadScenario(f"{where}: delay must be a finite number of seconds")
     truncate = r.get("truncate")
-    if truncate is not None and (not isinstance(truncate, int) or truncate < 0):
+    if truncate is not None and (not isinstance(truncate, int) or isinstance(truncate, bool)
+                                 or truncate < 0):
         raise _BadScenario(f"{where}: truncate must be a byte count")
     for flag in ("close", "reset"):
         if not isinstance(r.get(flag, False), bool):
             raise _BadScenario(f"{where}: {flag} must be true or false")
 
 
-def _redact_pairs(pairs: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    return [(k, "<redacted>" if SECRET_HEADER.search(k) else v) for k, v in pairs]
+SECRET_NAME = r"[\w.-]*(?:token|secret|api[-_]?key|password|passwd|authorization|cookie)[\w.-]*"
+# Secret-named fields in any body shape, matched as text so a body cut at 64 KB, sent with
+# the wrong content type, or split into multipart parts is still redacted.
+JSON_STRING = re.compile(rf'("{SECRET_NAME}"\s*:\s*)"(?:[^"\\]|\\.)*"?', re.I)
+JSON_BARE = re.compile(rf'("{SECRET_NAME}"\s*:\s*)(?!["{{\[\s])[^,}}\s]+', re.I)
+FORM_FIELD = re.compile(rf"((?:^|[&\s;]){SECRET_NAME}=)[^&\s;]*", re.I)
+MULTIPART = re.compile(
+    rf'(name="{SECRET_NAME}"[^\r\n]*\r?\n(?:[^\r\n]+\r?\n)*\r?\n)[^\r\n]*', re.I
+)
 
 
-def _redact_json(value: object) -> object:
-    if isinstance(value, dict):
-        return {k: "<redacted>" if SECRET_HEADER.search(str(k)) else _redact_json(v)
-                for k, v in value.items()}
-    if isinstance(value, list):
-        return [_redact_json(v) for v in value]
-    return value
+def _redact_text(text: str) -> str:
+    text = JSON_STRING.sub(lambda m: m.group(1) + '"<redacted>"', text)
+    text = JSON_BARE.sub(lambda m: m.group(1) + '"<redacted>"', text)
+    text = FORM_FIELD.sub(lambda m: m.group(1) + "<redacted>", text)
+    return MULTIPART.sub(lambda m: m.group(1) + "<redacted>", text)
 
 
-def _redact_body(body: str, content_type: str) -> str:
-    """Secret-named fields in a form or JSON body; the log is pasted into drafts."""
-    if "json" in content_type:
-        try:
-            parsed = json.loads(body)
-        except json.JSONDecodeError:
-            return body
-        redacted = _redact_json(parsed)
-        return body if redacted == parsed else json.dumps(redacted)
-    if "x-www-form-urlencoded" in content_type:
-        pairs = parse_qsl(body, keep_blank_values=True)
-        redacted_pairs = _redact_pairs(pairs)
-        # Rewrite only when something was redacted, so the logged body stays what was sent.
-        return body if redacted_pairs == pairs else urlencode(redacted_pairs, safe="<>")
-    return body
+def _redact_query(query: str) -> str:
+    """Secret-named query values redacted, everything else exactly as the client sent it."""
+    parts = []
+    for item in query.split("&") if query else []:
+        name, eq, _ = item.partition("=")
+        secret = re.fullmatch(SECRET_NAME, name, re.I)
+        parts.append(f"{name}=<redacted>" if eq and secret else item)
+    return "&".join(parts)
 
 
 def _handler(rules: list[dict], log: Path) -> type[BaseHTTPRequestHandler]:
@@ -125,23 +126,31 @@ def _handler(rules: list[dict], log: Path) -> type[BaseHTTPRequestHandler]:
                 kept += chunk[: max(0, MAX_BODY - len(kept))]
             return bytes(kept), total
 
-        def _record(self, body: bytes, total: int) -> None:
+        def _record(self, body: bytes, total: int, note: str = "") -> None:
             url = urlsplit(self.path)
             text = body.decode("utf-8", errors="replace")
             entry = {
                 "time": round(time.time(), 3), "method": self.command, "path": url.path,
-                "query": urlencode(_redact_pairs(parse_qsl(url.query, keep_blank_values=True)),
-                                   safe="<>"),
+                "query": _redact_query(url.query),
                 "headers": {k: "<redacted>" if SECRET_HEADER.search(k) else v
                             for k, v in self.headers.items()},
-                "body": _redact_body(text, self.headers.get("Content-Type", "")),
+                "body": _redact_text(text),
                 "body_bytes": total,
             }
+            if note:
+                entry["note"] = note
             with lock, log.open("a", encoding="utf-8") as out:
                 out.write(json.dumps(entry) + "\n")
 
         def _respond(self) -> None:
-            body, total = self._read_body()
+            try:
+                body, total = self._read_body()
+            except ValueError:
+                # The client under test sent a broken body: that's evidence, so log it and
+                # answer instead of dropping the connection.
+                self._record(b"", 0, note="malformed chunk size or Content-Length")
+                self.close_connection = True
+                return self._send({"status": 400, "body": {"error": "malformed request body"}})
             self._record(body, total)
             path = urlsplit(self.path).path
             match = next((n for n, r in enumerate(rules)
@@ -172,17 +181,21 @@ def _handler(rules: list[dict], log: Path) -> type[BaseHTTPRequestHandler]:
                 return
             body = response.get("body", "")
             data = (json.dumps(body) if not isinstance(body, str) else body).encode("utf-8")
+            status = int(response.get("status", 200))
+            bodiless = status < 200 or status in (204, 304)
+            if bodiless:
+                data = b""  # these statuses carry no body; one would corrupt the next response
             headers = {"content-type": ("Content-Type", "application/json"
                                         if not isinstance(body, str)
                                         else "text/plain; charset=utf-8"),
                        "content-length": ("Content-Length", str(len(data)))}
             for name, value in response.get("headers", {}).items():
                 headers[name.lower()] = (name, str(value))  # scripted values replace defaults
-            self.send_response(int(response.get("status", 200)))
+            self.send_response(status)
             for name, value in headers.values():
                 self.send_header(name, value)
             self.end_headers()
-            if self.command == "HEAD":
+            if self.command == "HEAD" or bodiless:
                 return
             truncate = response.get("truncate")
             self.wfile.write(data if truncate is None else data[:truncate])
