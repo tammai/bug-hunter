@@ -151,3 +151,26 @@ def test_parts_calling_third_parties_get_integrations(make_repo):
     assert by_dir["aws"] == ["generic", "node", "integrations"]
     assert by_dir["util"] == ["generic", "node"]
     assert by_dir["big"] == ["generic", "node"]
+
+
+def test_integration_markers_match_real_clients_only(make_repo):
+    repo = make_repo({
+        "rb/conf.rb": 'url = ENV.fetch("DB_URL")\ncache.fetch(:x) { 1 }\n',
+        "nodehttp/a.js": "const req = https.request(opts, cb)\n",
+        "swift/A.swift": "URLSession.shared.dataTask(with: url)\n",
+        "py/b.py": "import http.client\n",
+        "notes/c.js": "// TODO: maybe a webhook later\nexport const x = 1\n",
+    })
+    (repo / "php").mkdir()
+    (repo / "php/pay.php").write_bytes(b"<?php // caf\xe9\n$ch = curl_init($url);\n")
+    import subprocess
+    subprocess.run(["git", "add", "php/pay.php"], cwd=repo, check=True)
+    by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
+    assert "integrations" not in by_dir["rb"]
+    assert "integrations" not in by_dir["notes"]
+    for d in ("nodehttp", "swift", "py", "php"):
+        assert by_dir[d][-1] == "integrations", d
+
+    result = run_script("scope", repo, "--max", "1")
+    skipped = json.loads(result.stdout)["skipped"]
+    assert all("integrations" not in p["edge_inputs"] for p in skipped)

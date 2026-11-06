@@ -10,7 +10,7 @@ Use with the other lists, for code that calls an HTTP API or a vendor SDK (payme
 ## Slow and silent
 - **No timeout:** a slow response (`"delay": 30`) hangs the request, a worker or the whole event loop. Look for clients created without a timeout.
 - **A timeout longer than the caller's own:** the user's request times out first, while the call carries on and still has its effect.
-- **Connection refused** (nothing listening) and **connection reset** mid-response (`"close": true`): an unhandled exception crashes the process, or the error turns into success.
+- **Connection refused** (nothing listening), a **connection reset** (`"reset": true`), a connection closed before any response (`"close": true`), or a body cut off mid-way (`"truncate": <bytes>`): an unhandled exception crashes the process, or the error turns into success.
 
 ## Errors the service is allowed to send
 - **429** with `Retry-After`: no retry at all, a retry that ignores `Retry-After`, or retries with no limit or backoff that make the rate limit worse.

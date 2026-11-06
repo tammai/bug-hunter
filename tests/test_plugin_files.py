@@ -203,3 +203,10 @@ def test_agents_use_the_stub_offline():
         assert needed in hunter, needed
     _, verifier = read("agents/repro-verifier.md")
     assert STUB_FETCH in verifier and "<PLUGIN>/scripts/stub_server.py" in verifier
+
+
+def test_stub_is_stopped_by_pid_and_hunt_names_integrations():
+    _, hunter = read("agents/bug-hunter.md")
+    assert "kill %1" not in hunter and "stub.pid" in hunter and "> " in hunter
+    _, hunt = read("commands/hunt.md")
+    assert "gets only the generic list" not in hunt and "integrations" in hunt

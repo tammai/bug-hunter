@@ -201,8 +201,9 @@ def _calls_third_parties(root: Path, files: list[str]) -> bool:
         try:
             if path.is_symlink() or path.stat().st_size > INTEGRATIONS["max_bytes"]:
                 continue
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+            # A marker search, not a parse: a stray Latin-1 byte mustn't hide a client call.
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
             continue
         if CALLS_OUT.search(text):
             return True
@@ -258,7 +259,7 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"error: no tracked source files under: {where}", file=sys.stderr)
         return 1
     out = _build(files, paths, args.cap, focus)
-    for part in out["parts"] + out["skipped"]:
+    for part in out["parts"]:
         if _calls_third_parties(root, part["files"]):
             part["edge_inputs"].append(INTEGRATIONS["edge_inputs"])
     if focus:
