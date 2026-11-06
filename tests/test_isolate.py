@@ -249,9 +249,9 @@ def test_planted_symlinks_in_the_scratch_home_are_not_written_through(tmp_path):
     scratch = tmp_path / "s"
     (scratch / "home").mkdir(parents=True)
     os.symlink(victim, scratch / "home/.tool-versions")
-    isolated_env(scratch, {"PATH": os.environ["PATH"], "HOME": str(real)})
+    result = run_script("isolate", scratch, env={"PATH": os.environ["PATH"], "HOME": str(real)})
+    assert result.returncode == 1 and "symlink" in result.stderr
     assert victim.read_text(encoding="utf-8") == "keep"
-    assert (scratch / "home/.tool-versions").read_text(encoding="utf-8") == "nodejs 20\n"
 
 
 def test_the_agents_isolation_line_fails_closed(tmp_path):
@@ -336,3 +336,40 @@ def test_proxy_flags_survive_but_proxy_passwords_do_not(tmp_path):
         "-Dhttps.proxyHost=proxy.corp", "-Dhttps.proxyPort=8080",
         "-Dhttp.nonProxyHosts=localhost|*.corp",
     ])
+
+
+def test_planted_links_anywhere_at_the_top_of_the_scratch_home_stop_isolation(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    for planted in (".m2", ".npmrc", ".netrc", ".config/pip"):
+        scratch = tmp_path / f"s{planted.replace('/', '-')}"
+        (scratch / "home/.config").mkdir(parents=True)
+        os.symlink(real, scratch / "home" / planted)
+        result = run_script("isolate", scratch,
+                            env={"PATH": os.environ["PATH"], "HOME": str(real)})
+        assert result.returncode == 1 and "symlink" in result.stderr, planted
+
+
+def test_odd_proxy_values_are_skipped_and_system_proxies_carried(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "h"),
+           "JAVA_OPTS": '-Dhttps.proxyHost="a b" -Djava.net.useSystemProxies=true'}
+    got = isolated_env(scratch, env)
+    assert '"' not in got["JAVA_TOOL_OPTIONS"]
+    assert "-Djava.net.useSystemProxies=true" in got["JAVA_TOOL_OPTIONS"].split()
+
+
+def test_mise_conf_d_tools_are_carried_and_system_dir_hidden(tmp_path):
+    real = tmp_path / "real"
+    (real / ".config/mise/conf.d").mkdir(parents=True)
+    (real / ".config/mise/conf.d/10-go.toml").write_text('[tools]\ngo = "1.23"\n', "utf-8")
+    (real / ".config/mise/conf.d/20-env.toml").write_text('[env]\nTOKEN = "x"\n', "utf-8")
+    (real / ".config/mise/config.toml").write_text('[tools]\nnode = "20"\n', "utf-8")
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    got = isolated_env(scratch, {"PATH": os.environ["PATH"], "HOME": str(real)})
+    mise = (scratch / "home/.config/mise/config.toml").read_text(encoding="utf-8")
+    assert tomllib.loads(mise) == {"tools": {"go": "1.23", "node": "20"}}
+    assert Path(got["MISE_SYSTEM_DIR"]).is_relative_to(scratch)
+    assert not Path(got["MISE_SYSTEM_DIR"]).exists()

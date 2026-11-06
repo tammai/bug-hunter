@@ -6,7 +6,6 @@ import os
 import re
 import shlex
 import sys
-import tempfile
 import tomllib
 from pathlib import Path
 
@@ -29,7 +28,8 @@ JVM_OPTION_VARS = ["JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "JA
 # Proxy routing survives the JVM option variables being dropped, so Maven and Gradle still
 # work behind a corporate proxy; proxy users and passwords never do.
 PROXY_FLAG = re.compile(
-    r"-D(?:(?:https?|ftp)\.(?:proxyHost|proxyPort|nonProxyHosts)|socksProxy(?:Host|Port))=\S+"
+    r"-D(?:(?:https?|ftp)\.(?:proxyHost|proxyPort|nonProxyHosts)|socksProxy(?:Host|Port)"
+    r"|java\.net\.useSystemProxies)=\S+"
 )
 # Kept as they are when set: SDKs and JDKs often live under the home, and a corporate CA
 # bundle is what lets installs through a TLS-inspecting proxy.
@@ -89,6 +89,7 @@ def _plan(scratch: Path, env: dict[str, str]) -> tuple[list[str], dict[str, str]
         "MISE_CONFIG_DIR": str(home / ".config/mise"),
         # Never created: points mise away from /etc/mise and its [env].
         "MISE_SYSTEM_CONFIG_FILE": str(scratch / "no-mise-system.toml"),
+        "MISE_SYSTEM_DIR": str(scratch / "no-mise-system"),
         # A repo's mise.toml or .tool-versions must not install runtimes into the real home.
         "MISE_AUTO_INSTALL": "0",
         "MISE_NOT_FOUND_AUTO_INSTALL": "0",
@@ -125,33 +126,68 @@ def _proxy_flags(env: dict[str, str]) -> list[str]:
     flags: list[str] = []
     for key in JVM_OPTION_VARS:
         for flag in PROXY_FLAG.findall(env.get(key, "")):
-            if flag not in flags:
+            # A quoted value was split at a space; carrying half of it could stop Java starting.
+            if flag not in flags and not set(flag) & set("\"'\\"):
                 flags.append(flag)
     return flags
 
 
-def _folder(scratch: Path, folder: Path) -> None:
-    """Create folder under scratch one level at a time, refusing any symlink on the way."""
-    current = scratch
-    for part in folder.relative_to(scratch).parts:
-        current = current / part
-        if current.is_symlink():
-            raise OSError(f"{current} is a symlink; refusing to write through it")
-        current.mkdir(exist_ok=True)
+def _open_folder(scratch: Path, folder: Path) -> int:
+    """Open folder under scratch, creating it one level at a time; refuse any symlink."""
+    fd = os.open(scratch, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in folder.relative_to(scratch).parts:
+            try:
+                os.mkdir(part, dir_fd=fd)
+            except FileExistsError:
+                pass
+            try:
+                # Opening relative to the parent's descriptor with O_NOFOLLOW leaves no gap
+                # between the check and the use for a link to be swapped in.
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            except OSError as exc:
+                raise OSError(f"{folder}: {part} is a symlink or not a folder; "
+                              "refusing to write through it") from exc
+            os.close(fd)
+            fd = child
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _refuse_links(scratch: Path, folder: Path) -> None:
+    """Refuse a symlink at any entry of folder: tools there would follow it out of scratch."""
+    fd = _open_folder(scratch, folder)
+    try:
+        for name in os.listdir(fd):
+            if os.path.islink(folder / name):
+                raise OSError(f"{folder / name} is a symlink; refusing to use this home")
+    finally:
+        os.close(fd)
 
 
 def _write(scratch: Path, path: Path, text: str) -> None:
     """Write a file under scratch atomically, never following a planted symlink."""
-    _folder(scratch, path.parent)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".isolate-")
+    fd = _open_folder(scratch, path.parent)
+    tmp = f".isolate-{os.getpid()}-{os.urandom(4).hex()}"
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as out:
-            out.write(text)
-        # os.replace swaps the name itself, so a symlink planted at the target is replaced.
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+        out_fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644,
+                         dir_fd=fd)
+        try:
+            with os.fdopen(out_fd, "w", encoding="utf-8") as out:
+                out.write(text)
+            # The rename replaces the name itself, so a symlink planted at the target is
+            # replaced rather than followed.
+            os.replace(tmp, path.name, src_dir_fd=fd, dst_dir_fd=fd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=fd)
+            except OSError:
+                pass
+            raise
+    finally:
+        os.close(fd)
 
 
 def _read(path: Path) -> str | None:
@@ -162,7 +198,25 @@ def _read(path: Path) -> str | None:
         return None
 
 
+def _toml_tools(text: str | None) -> dict:
+    if text is None:
+        return {}
+    try:
+        tools = tomllib.loads(text).get("tools")
+    except tomllib.TOMLDecodeError:
+        return {}
+    return tools if isinstance(tools, dict) else {}
+
+
 def _mise_tools(env: dict[str, str], real: Path) -> dict:
+    """The owner's global [tools]: conf.d files first, then the main config on top."""
+    config_dir = Path(env.get("MISE_CONFIG_DIR") or Path(
+        env.get("XDG_CONFIG_HOME") or real / ".config") / "mise")
+    tools: dict = {}
+    conf_d = config_dir / "conf.d"
+    if conf_d.is_dir():
+        for path in sorted(conf_d.glob("*.toml")):
+            tools.update(_toml_tools(_read(path)))
     candidates = [
         env.get("MISE_GLOBAL_CONFIG_FILE"),
         env.get("MISE_CONFIG_DIR") and str(Path(env["MISE_CONFIG_DIR"]) / "config.toml"),
@@ -171,14 +225,10 @@ def _mise_tools(env: dict[str, str], real: Path) -> dict:
     ]
     for candidate in filter(None, candidates):
         text = _read(Path(candidate))
-        if text is None:
-            continue
-        try:
-            tools = tomllib.loads(text).get("tools")
-        except tomllib.TOMLDecodeError:
-            continue
-        return tools if isinstance(tools, dict) else {}
-    return {}
+        if text is not None:
+            tools.update(_toml_tools(text))
+            break
+    return tools
 
 
 def _version(value: object) -> str | list[str] | None:
@@ -216,8 +266,10 @@ def _main(argv: list[str] | None = None) -> int:
         return 1
     try:
         scratch.mkdir(parents=True, exist_ok=True)
-        _folder(scratch, scratch / "home")
-        _folder(scratch, scratch / "no-gh")
+        for folder in ("home", "home/.config", "no-gh"):
+            os.close(_open_folder(scratch, scratch / folder))
+        _refuse_links(scratch, scratch / "home")
+        _refuse_links(scratch, scratch / "home/.config")
     except OSError as exc:
         print(f"error: can't use {scratch}: {exc}", file=sys.stderr)
         return 1

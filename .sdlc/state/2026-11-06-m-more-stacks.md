@@ -10,7 +10,7 @@ Started: 2026-11-06
 Base: 682ac61
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: b57bceb tree 3761eac178f1513736b268ce60d28f175e0aff34
+Verified: 55bb63b tree c0e3efacf596e16f80dcb4c6e1708c3a94ba3d0b
 Current: Stage 3 – Review
 
 ## Stages
@@ -56,6 +56,8 @@ inline, one part
 - 2026-11-06 Stage 2: pass
 - 2026-11-06 Stage 3: pass — review r5 passed both; round 6 fixes the remaining tickets (user: fix until no findings)
 - 2026-11-06 Stage 2: pass
+- 2026-11-06 Stage 3: pass — review r6 passed both; round 7 fixes the remaining tickets (user: fix until no findings)
+- 2026-11-06 Stage 2: pass
 
 ## Deviations
 - 2026-11-06 scripts/isolate.py, tests/test_isolate.py, agents/*.md What: new script the agents eval at the start of every Bash call: HOME, XDG and tool caches (npm, Cargo, Go, Gradle, Java user.home, Composer) move into scratch; token/password/key variables and SSH_AUTH_SOCK are unset; gh/git isolation moves here from the prompt text. Why: review S2, installs read ~/.m2/settings.xml, ~/.npmrc and ~/.netrc and wrote outside the copy. Effect: the two earlier prompt-text asserts on GH_CONFIG_DIR / GIT_CONFIG_GLOBAL now assert the eval line; tests/test_isolate.py checks the variables themselves.
@@ -65,6 +67,7 @@ inline, one part
 - 2026-11-06 scripts/isolate.py, tests/test_isolate.py What: round 4. Export POETRY_VIRTUALENVS_CREATE=true and four MISE_*_AUTO_INSTALL=0; VOLTA_HOME no longer kept (its shims would fetch into the real home); MISE_CONFIG_DIR moves to scratch with a copy of the owner's [tools] only; the owner's ~/.tool-versions is copied; JAVA_HOME, ANDROID_HOME/SDK_ROOT and CA-bundle variables kept when set; _JAVA_OPTIONS and JDK_JAVA_OPTIONS unset; a HOME of / or // drops nothing. Why: review r3 security R3-1, R3-2, R3-3; code CR3-1, CR3-2, CR3-3, CR3-4. Effect: two round-3 asserts on VOLTA_HOME and MISE_CONFIG_DIR changed to the new behaviour; Volta users' Node comes from scratch (a functional gap, a ticket).
 - 2026-11-06 scripts/isolate.py, agents/*.md, README.md What: round 5. Unset JAVA_OPTS, MAVEN_OPTS, MAVEN_ARGS, GRADLE_OPTS, NODE_OPTIONS, MISE_GLOBAL_CONFIG_FILE, MISE_SYSTEM_CONFIG_FILE; android.builder.sdkDownload=false in the scratch gradle.properties; agents' isolation line fails closed (ISO=$(...) && eval || exit 1); scratch-home files replace planted symlinks instead of writing through; mise tools read from custom locations and table form, never crashing on odd configs; more CA variables kept. Why: review r4 security R4-1, R4-2, L-1..L-4; code CR4-1, CR4-2, CR4-4, CR4-5; user: fix until no findings. Effect: the agents' isolation line changed (test pins it); CR4-3 (Volta default Node) stays documented.
 - 2026-11-06 scripts/isolate.py, tests/test_isolate.py What: round 6 (remaining tickets). Refuse and stop when any folder under the scratch home is a symlink; atomic temp-file + os.replace writes; read only regular version files; MAVEN_CONFIG unset; MISE_SYSTEM_CONFIG_FILE points at a never-created scratch path; XDG_CONFIG_HOME mise config read; proxy host/port/nonProxyHosts flags carried from dropped JVM option variables into JAVA_TOOL_OPTIONS (never users or passwords). Why: review r5 tickets T-1..T-5 (security), T5-1..T5-4 (code); user: fix until no findings. Effect: the round-5 assert that MISE_SYSTEM_CONFIG_FILE is absent now checks it isn't the owner's file.
+- 2026-11-06 scripts/isolate.py, tests/test_isolate.py What: round 7 (remaining tickets). Folders opened one level at a time with O_NOFOLLOW and files written relative to the folder's descriptor (no check-then-use gap); any symlink at the top of the scratch home or its .config stops isolation; quoted proxy values skipped, java.net.useSystemProxies carried; mise conf.d [tools] carried; MISE_SYSTEM_DIR pointed at scratch. Why: review r6 tickets R6-1, R6-2, R6-4, N-1, T6-1..T6-4; user: fix until no findings. Effect: the round-5 test for a planted file symlink now expects isolation to stop (stricter); round-6 deviation wording 'any folder under the scratch home' is now accurate for the home's top level and .config.
 
 ## Open questions
 -
