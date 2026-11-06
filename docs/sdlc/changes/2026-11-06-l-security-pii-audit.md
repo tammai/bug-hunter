@@ -245,3 +245,60 @@ Report-only in v1: nothing is filed, and no audit step runs `post.py`, `gh issue
 - Dependency audits for pnpm, Yarn, Python, Go, Rust, JVM and Ruby; `REPORT.md` lists them as "not audited".
 - Stack-specific security checklists beyond Node and Vue.
 - Scanning running UAT or prod environments; container isolation; fixing findings.
+
+## Review
+
+- **Recommended and chosen:** security + code (high), because `Risk: high` (secrets, PII, agents running target code, a constitution change), L, and `## Public Surface` isn't empty. Chosen by the trigger list (L, self-chosen). Rounds 3 to 7 were the user's choices: "fix", then "fix until no findings", then "fix" for each later round, including the known-values redesign in round 4.
+- **Verdicts:** in `.sdlc/.work/findings/2026-11-06-l-security-pii-audit/`.
+
+  | Round | Security | Code (high) |
+  |---|---|---|
+  | r1 | FAIL S1, S2 | FAIL H1–H4, M1–M4 |
+  | r2 | FAIL N1, S2, N3 | FAIL N1–N3 |
+  | r3 | FAIL R3-1–R3-4 | FAIL N4 |
+  | r4 | FAIL R4-1–R4-3 | FAIL H5, M5 |
+  | r5 | FAIL R5-1–R5-3 | FAIL N1 |
+  | r6 | FAIL R6-1 | FAIL B1, B2 |
+  | r7 | PASS | PASS |
+
+  Both r7 reviewers say no remaining ticket is worth another round. Dependency audit (`dependency-audit-r1.md`): not run. There are no runtime dependencies and `pip-audit` isn't installed.
+- **Fixed** (each test-first, in `tests/test_findings.py`, `tests/test_secrets_scan.py`, `tests/test_audit_scope.py` or `tests/test_plugin_files.py`):
+  - **Secrets reaching output (S1, S2, N1/N3 of r2, R3-x, R4-1, R4-2, R5-1, R5-2, R6-1):**
+    - Shape-guessing secrets in free text kept trading leaks for rejected findings. Round 4 replaced it: `secrets_scan.py --fingerprints` hashes every found value, its 8-character slices and its 12-character single-case slices into the private scratch folder.
+    - `findings.py check`, `inventory` and `report` withhold or reject any text holding a known value at any position, a slice of one, a vendor-shaped key (with JWT, masked and cut-short forms), or a mixed-case base64 key-body line.
+    - Key bodies are fingerprinted in every layout: PEM, legacy encrypted, one-line with `\n` escapes, and quoted and joined in code.
+    - A value is a placeholder only if it wholly is one.
+  - **Agent findings screened before verifiers (S3), and audits that fail reported, not read as clean (H1).**
+  - **Composer:** `audit --no-plugins --no-scripts` (S6).
+  - **Lockfiles kept out of the audit file set (H2), and malformed meta and unreadable files handled without tracebacks (H3, H4).**
+  - **Ordinary code passes `check` (M1, N4, H5, M5):** `:=`, `===`, `=>`, `key_size=1024`, `TOKEN_TTL=3600`, `sk-proj-...`.
+  - **Inventory:** header and outer pipes handled, and earlier runs merged (M2, L1).
+  - **npm fix advice names the package to upgrade (M3).**
+  - **Re-runs deduped on the root-cause `path:line`, with Where lines merged (M4, N2).**
+  - **Scanner:** `.env` files inside ignored folders are scanned (N1), trivial config values aren't secrets, and `/audit` cleans its scratch folder on any stop.
+- **Tickets:**
+  - Key bodies written with a code prefix (`b"…"`, a leading `+`) aren't fingerprinted. A whole 60+ character line is still caught.
+  - A bare key line inside a key body is fingerprinted but not reported (T14).
+  - Pieces under 16 characters in `\/`-escaped one-line keys.
+  - A key's short last line.
+  - `key-fragment` needs a digit.
+  - `$word` values in `.env` are read as references.
+  - Placeholder words at the start or end of a real passphrase.
+  - `order-123`-style values flagged as credentials.
+  - Matching cost on very large inputs.
+- **Accepted residuals** (owner-approved, in the README):
+  - a secret the scan never saw with no known shape, and personal data: both guarded only by the agents' `<redacted>` rule;
+  - values deliberately not fingerprinted: under 6 characters, numbers, booleans, URLs and lowercase paths, letters-only words under 12 letters;
+  - fragments under 16 characters.
+- **Drift and manual checks:**
+  - Every `## Deviations` line in the state file. Of note:
+    - the secrets scan reads the repo, not the copy;
+    - `findings.py check` runs before the verifiers;
+    - `findings.py dedupe` was added;
+    - the known-values design;
+    - `.claude/rules/plugin-prompts.md` was updated to match constitution 1.1.0.
+  - No `manual` ACs. A live `/audit` on a real repo hasn't been run; it's the first run after merge.
+- **Security:**
+  - No open high or critical security findings, and no secrets in the diff. The repo's own secret guardrail blocked key-shaped test data, so tests build fake secrets at run time.
+  - The fingerprint file holds hashes of short slices, which can be guessed. It is kept 0600 in the private scratch folder and deleted at the end of every run.
+- **Lessons filed:** [knowledge/gotchas/detecting-secrets-in-free-text.md](../../../knowledge/gotchas/detecting-secrets-in-free-text.md), [recurring-defects.md](../recurring-defects.md)

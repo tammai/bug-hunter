@@ -1,5 +1,5 @@
 # 2026-11-06-l-security-pii-audit
-Status: active
+Status: done
 Process: 3
 Change: docs/sdlc/changes/2026-11-06-l-security-pii-audit.md   (this feature's record for people)
 Track: L   (sized up because: approach unclear at start; new agent type, finding format, report, constitution and PRD change; footprint: 22 files)
@@ -10,14 +10,14 @@ Started: 2026-11-06
 Base: e3cc6e3
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: dc50a77 tree 48fcd598c16c1f8101a20c546adb135ce4edafd2
+Verified: 0ab6304 tree dd34976acb9953981173b4be1a5db4dfe08a1498
 Slice: B4   Slice base: dc9f54e   Slice gates: none
-Current: Stage 3 – Review
+Current: Stage 4 – Ship
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
 - [x] 2 Build
-- [ ] 3 Review   — the change file's ## Review
+- [x] 3 Review   — the change file's ## Review
 - [ ] 4 Ship     — PR: (Learn: knowledge, recurring-defects.md)
 
 ## How the build runs
@@ -63,6 +63,7 @@ inline, in parts (backlog): four parts too large for one session's context
 - 2026-11-06 Stage 2: pass
 - 2026-11-06 Stage 3: fail — review r6: security R6-1; code B1, B2 (+T12); user chose round 7
 - 2026-11-06 Stage 2: pass
+- 2026-11-06 Stage 3: pass
 
 ## Deviations
 - 2026-11-06 scripts/scope.py What: the unsafe-folder warning now prints once per folder after both installs and audits, reading 'no install or audit for …'. Why: audits reuse the install rules, so the same folder warned twice. Effect: the existing count of 6 warnings in test_stacks still holds.
