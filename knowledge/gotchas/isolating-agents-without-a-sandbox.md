@@ -16,6 +16,23 @@ Agents run every Bash call behind `scripts/isolate.py` (fail closed: `ISO="$(pyt
 - **Planted symlinks:** code from an earlier call can link a scratch folder to the real home. Open folders one level at a time with `O_NOFOLLOW`, write via temp file + rename relative to the folder's descriptor, and refuse links at the top of the scratch home.
 - **Run the script with `python3 -I`:** an owner's `PYTHONHOME` or `PYTHONPATH` would break or hijack it.
 
+On Windows (Git Bash running native Windows Python):
+
+- **No descriptor-relative calls:** `os.supports_dir_fd` is empty and `O_DIRECTORY`/`O_NOFOLLOW` don't exist. The path fallback (`DIR_FD` false) creates each level, then `lstat`s it, and refuses symlinks, junctions (`Path.is_junction`) and any reparse point. A link swapped in between that check and the write is followed; the owner accepted that gap.
+- **Junctions need no privilege; symlinks do** (WinError 1314 without Developer Mode). Planted code would use a junction, and so do the tests (`_winapi.CreateJunction`).
+- **The profile is several variables:** USERPROFILE (git, npm, ssh), APPDATA (gh, npm), LOCALAPPDATA (caches, installs), HOMEDRIVE+HOMEPATH. TEMP and TMP live under LOCALAPPDATA and many tools fail without them, so they move into the scratch home rather than being unset.
+- **`os.environ` uppercases every name, but bash doesn't:** `unset ONEDRIVE` leaves `OneDrive`, and `MyApi_Token` survived a case-sensitive unset. Read `nt.environ`, compare names case-insensitively, and unset every spelling. Windows itself keeps only one of two spellings, so `npm_config_cafile` and `NPM_CONFIG_CAFILE` are one variable there.
+- **Path comparisons:** compare `ntpath.normcase(ntpath.normpath(…))`, split on `;`, and treat a drive root as matching nothing.
+- **Output encoding:** Python before 3.15 prints in the ANSI code page (cp1252), which garbles `naïve.py` and crashes on `tệp.py`. Every hunt and audit script switches stdout and stderr to UTF-8.
+- **`bash` from Python is WSL's:** `CreateProcess` searches System32 before PATH. Tests take Git's bash from `git --exec-path`. Git Bash rewrites POSIX-looking values (`/opt/x`, a HOME of `/`) into its install folder when it starts a native program.
+- **An empty `GH_CONFIG_DIR` doesn't log gh out:** gh still reads a login stored in Windows Credential Manager (or the macOS Keychain). Export `GH_TOKEN`/`GH_ENTERPRISE_TOKEN` as a placeholder, which gh prefers. The test suite filed real issues on Windows before its guard did the same.
+- **`os.supports_dir_fd` lists `os.rename`, never `os.replace`:** checking `os.replace` turns the descriptor path off everywhere, silently, because the fallback passes the same tests.
+- **TMPDIR too:** Git Bash's `/tmp` is the real `%LOCALAPPDATA%\Temp`, and MSYS tools and Python's `tempfile` read TMPDIR before TEMP.
+- **Git for Windows' system config** (`C:\Program Files\Git\etc\gitconfig`) sets `credential.helper=manager`; `GIT_CONFIG_NOSYSTEM=1` keeps it out.
+- **Out of reach of environment variables:** Windows OpenSSH's agent named pipe, Windows Credential Manager, DPAPI, and programs that find folders through the Known Folders API (.NET and NuGet, PowerShell).
+
 What it still can't stop: code running with the owner's rights reading files by absolute path. Only a container fixes that.
+
+The Windows section is from [2026-11-06-m-windows-isolation](../../docs/sdlc/changes/2026-11-06-m-windows-isolation.md).
 
 From [2026-11-06-m-more-stacks](../../docs/sdlc/changes/2026-11-06-m-more-stacks.md).

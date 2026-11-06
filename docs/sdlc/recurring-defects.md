@@ -18,4 +18,8 @@ One line per defect: what it looks like, then the severity.
 - A multi-line block parser (PEM body) that enters block mode on a header mention, or never leaves it, so the rest of the file is skipped: high
 - Log redaction that matches secret words in raw text without first decoding `%xx` (nested), `\u`, `\x` and `&#` escapes, so `%2574oken` or `password` is logged: high
 - A fallback path (malformed input, parse error, a body that was withheld) that logs raw input under a weaker check than the main path: high
+- A test's fake CLI (a `#!` script named `gh`) that the OS can't run, so the code under test finds the real, logged-in tool on PATH and acts for real (Windows filed real issues): high
+- "Logged out" by pointing a CLI at an empty config folder while the OS keyring (Windows Credential Manager, macOS Keychain) still holds its token; override the token variable instead: high
+- A capability check that names `os.replace` (or another alias) in `os.supports_dir_fd`, which only lists `os.rename`, so the safe descriptor path silently turns off and the fallback passes the same tests: high
+- On Windows, environment handling built on `os.environ` (names uppercased) feeding a case-sensitive shell, so `unset NAME` misses `Name` and mixed-case secrets survive: high
 - A log of request bodies that redacts by text pattern instead of parsing the body's own shape (JSON, ndjson, form, multipart), so secret-named keys with object values, multi-line parts or bracketed names (`user[password]`) leak: high

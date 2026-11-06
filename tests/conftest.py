@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -7,6 +8,32 @@ from pathlib import Path
 import pytest
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+
+
+@pytest.fixture(autouse=True, scope="session")
+def no_real_gh(tmp_path_factory):
+    """Keep the owner's real, logged-in gh out of every test's reach.
+
+    Where the fake gh can't run (Windows can't exec a shebang script), the scripts under test
+    would find the real gh on PATH and file real issues. Every test builds its environment
+    from os.environ, so cleaning it here covers them all.
+    """
+    with pytest.MonkeyPatch.context() as mp:
+        # Set, not unset: with no token in the environment gh falls back to a login stored in
+        # Windows Credential Manager or the macOS Keychain.
+        for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN",
+                     "GITHUB_ENTERPRISE_TOKEN"):
+            mp.setenv(name, "test-no-token")
+        mp.setenv("GH_CONFIG_DIR", str(tmp_path_factory.mktemp("no-gh-config")))
+        mp.setenv("GH_PROMPT_DISABLED", "1")
+        # A folder that also holds git (/usr/bin on CI) stays; there the placeholder tokens
+        # make any reached gh fail its login.
+        mp.setenv("PATH", os.pathsep.join(
+            folder for folder in os.environ.get("PATH", "").split(os.pathsep)
+            if not (folder and shutil.which("gh", path=folder))
+            or shutil.which("git", path=folder)
+        ))
+        yield
 
 
 def git(repo: Path, *args: str) -> None:
