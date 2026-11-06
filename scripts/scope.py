@@ -115,10 +115,14 @@ def _installs(files: list[str], rules: list[dict] | None = None) -> list[dict]:
 SECURITY = STACKS["security"]
 
 
+LOCKFILES = {rule["lockfile"] for rule in STACKS["installs"] + STACKS["audits"]}
+
+
 def _security_file(path: PurePosixPath) -> bool:
     """A config, schema or deployment file a security audit reads alongside the source."""
     name = path.name
-    if name in SECURITY["name_excludes"]:
+    # Lockfiles are dependency lists, covered by the dependency audit, not code to read.
+    if name in SECURITY["name_excludes"] or name in LOCKFILES or name.endswith(".lock"):
         return False
     return (
         path.suffix in SECURITY["extensions"]

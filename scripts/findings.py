@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 from drafts import drafts_dir, numbered, title
-from secrets_scan import PATTERNS, RULES
+from secrets_scan import PATTERNS, REFERENCE, SEVERITY_RANK, is_placeholder
 
 SEVERITIES = ["critical", "high", "medium", "low"]
 CATEGORIES = ["authz", "injection", "secrets", "session", "pii-logged", "pii-exposed",
@@ -27,16 +27,35 @@ class _Malformed(Exception):
     pass
 
 
+# In findings, a .env-style secret is only `NAME=value` with no space around "=": quoted
+# source such as `password = request.form["password"]` is code, not a secret.
+CHECK_PATTERNS = [
+    {**p, "compiled": re.compile(
+        r"^\s*(?:export\s+)?[a-z0-9_]*(?:secret|token|key|password|passwd)[a-z0-9_]*="
+        r"['\"]?(?P<value>[^\s'\"#]+)", re.I | re.M)}
+    if p.get("env_only") else p
+    for p in PATTERNS
+]
+
+
 def _secret_hits(text: str) -> list[str]:
     hits = []
-    for pattern in PATTERNS:
+    for pattern in CHECK_PATTERNS:
         for match in pattern["compiled"].finditer(text):
             value = match.groupdict().get("value") or match.group(0)
-            if value.startswith("$") or any(p in value.lower() for p in RULES["placeholders"]):
+            if REFERENCE.fullmatch(value) or is_placeholder(value):
                 continue
             hits.append(pattern["name"])
             break
     return hits
+
+
+def _scrub(text: str) -> str:
+    """Withhold any line that looks like it holds a secret; output must never carry one."""
+    return "\n".join(
+        "(withheld: this line looked like it held a secret)" if _secret_hits(line) else line
+        for line in text.split("\n")
+    )
 
 
 def _parse(text: str) -> tuple[dict[str, str], dict[str, list[str]]]:
@@ -92,6 +111,8 @@ def _write_private(path: Path, text: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as out:
             out.write(text)
+            out.flush()
+            os.fsync(out.fileno())
         os.replace(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
@@ -159,13 +180,27 @@ def _npm_finding(name: str, severity: str, title_text: str, cwe: str, advisory: 
         f"advisory: {advisory}\npackage: {name}\naffected: {affected}\nfix: {fix}",
         f"The deployed app includes {name} {affected}, which has a published advisory "
         f"({title_text}).",
-        f"Upgrade {name} ({fix}), then re-run the audit.",
+        f"{fix[:1].upper()}{fix[1:]}, then re-run the audit.",
     )
+
+
+def _fix_text(package: str, fix: object) -> str:
+    if isinstance(fix, dict) and "version" in fix:
+        target = fix.get("name", package)
+        return f"upgrade {target} to {fix['version']}" + (
+            f" (it brings in a fixed {package})" if target != package else "")
+    return "run npm audit fix" if fix else "no fix released yet"
 
 
 def _from_npm_audit(data: object, lockfile: str = "package-lock.json") -> list[str]:
     if not isinstance(data, dict):
         raise _Malformed("npm audit output must be a JSON object")
+    if isinstance(data.get("error"), dict):
+        err = data["error"]
+        summary = (str(err.get("summary") or "").splitlines() or [""])[0]
+        raise _Malformed(f"npm audit failed: {err.get('code', '?')}: {summary}")
+    if "vulnerabilities" not in data and "advisories" not in data:
+        raise _Malformed("npm output has no audit result (no vulnerabilities or advisories)")
     found = []
     for name, vuln in (data.get("vulnerabilities") or {}).items():
         if not isinstance(vuln, dict):
@@ -179,9 +214,7 @@ def _from_npm_audit(data: object, lockfile: str = "package-lock.json") -> list[s
             str(first.get("title") or f"through {', '.join(map(str, vuln.get('via', [])))}"),
             cwes[0] if isinstance(cwes, list) and cwes else "CWE-1395",
             str(first.get("url") or first.get("source") or "see npm audit"),
-            str(vuln.get("range", "?")),
-            f"fixed in {fix['version']}" if isinstance(fix, dict) and "version" in fix
-            else "npm audit fix" if fix else "no fix released", lockfile))
+            str(vuln.get("range", "?")), _fix_text(str(vuln.get("name", name)), fix), lockfile))
     for key, adv in (data.get("advisories") or {}).items():
         if not isinstance(adv, dict):
             raise _Malformed(f"npm audit advisory {key} isn't an object")
@@ -192,15 +225,17 @@ def _from_npm_audit(data: object, lockfile: str = "package-lock.json") -> list[s
             str(adv.get("title", "advisory")),
             cwe if isinstance(cwe, str) and re.fullmatch(r"CWE-\d+", cwe) else "CWE-1395",
             str(adv.get("url") or adv.get("id") or key), str(adv.get("vulnerable_versions", "?")),
-            f"fixed in {adv['patched_versions']}" if adv.get("patched_versions")
-            else "no fix released", lockfile))
+            f"upgrade to {adv['patched_versions']}" if adv.get("patched_versions")
+            else "no fix released yet", lockfile))
     return found
 
 
 def _from_composer_audit(data: object, lockfile: str = "composer.lock") -> list[str]:
     if not isinstance(data, dict):
         raise _Malformed("composer audit output must be a JSON object")
-    advisories = data.get("advisories") or {}
+    if "advisories" not in data:
+        raise _Malformed("composer output has no audit result (no advisories key)")
+    advisories = data["advisories"] or {}
     if not isinstance(advisories, dict):
         raise _Malformed("composer audit advisories must be an object")
     found = []
@@ -216,30 +251,66 @@ def _from_composer_audit(data: object, lockfile: str = "composer.lock") -> list[
     return found
 
 
-def _inventory(text: str) -> str:
-    """Merge the auditors' PII inventory blocks into one table, one row per field."""
-    rows: dict[str, list[list[str]]] = {}
-    inside = False
-    for line in text.splitlines():
+def _rows(lines: list[str], inside_only: bool) -> list[list[str]]:
+    rows, inside = [], not inside_only
+    for line in lines:
         if line.strip() == "=== PII INVENTORY ===":
             inside = True
             continue
-        if line.strip().startswith("==="):
+        if line.strip().startswith("===") and inside_only:
             inside = False
             continue
-        cells = [c.strip() for c in line.split("|")]
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
         if not inside or len(cells) != len(INVENTORY_COLUMNS) or not cells[0]:
             continue
-        merged = rows.setdefault(cells[0], [[] for _ in INVENTORY_COLUMNS[1:]])
-        for column, cell in zip(merged, cells[1:], strict=True):
-            if cell not in ("", "-") and cell not in column:
-                column.append(cell)
+        if cells[0].lower() == "field" or set(cells[0]) <= set("-: "):
+            continue
+        rows.append(cells)
+    return rows
+
+
+def _inventory(text: str, earlier: str = "") -> str:
+    """Merge the auditors' PII inventory blocks, and an earlier inventory, one row per field."""
+    merged: dict[str, list[list[str]]] = {}
+    rows = _rows(earlier.splitlines(), inside_only=False) + _rows(text.splitlines(), True)
+    for cells in rows:
+        columns = merged.setdefault(cells[0], [[] for _ in INVENTORY_COLUMNS[1:]])
+        for column, cell in zip(columns, cells[1:], strict=True):
+            for part in cell.split("; "):
+                if part not in ("", "-") and part not in column:
+                    column.append(part)
     lines = ["| " + " | ".join(INVENTORY_COLUMNS) + " |",
              "|" + "---|" * len(INVENTORY_COLUMNS)]
-    for field in sorted(rows):
-        lines.append(f"| {field} | " + " | ".join("; ".join(c) or "-" for c in rows[field])
+    for field in sorted(merged):
+        lines.append(f"| {field} | " + " | ".join("; ".join(c) or "-" for c in merged[field])
                      + " |")
-    return "\n".join(lines) + "\n"
+    return _scrub("\n".join(lines)) + "\n"
+
+
+def _key(text: str) -> tuple[str, str, str]:
+    """What makes two findings the same: category, CWE and the root-cause Where line."""
+    fields, sections = _parse(text)
+    where = [line.strip() for line in sections.get("Where", []) if line.strip()]
+    root = next((w for w in where if "fix here" in w.lower()), where[-1] if where else "")
+    return fields.get("Category", ""), fields.get("CWE", ""), root.removesuffix("(fix here)")
+
+
+def _dedupe(new: Path, audit: Path) -> list[str]:
+    """Drop new findings already in the audit folder, or repeated, keeping the most severe."""
+    seen = {_key(p.read_text(encoding="utf-8", errors="replace")) for _, p in numbered(audit)}
+    candidates = []
+    for path in sorted(new.glob("*.md")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        severity = _parse(text)[0].get("Severity", "low")
+        candidates.append((SEVERITY_RANK.get(severity, 3), path.name, path, _key(text)))
+    removed = []
+    for _, _, path, key in sorted(candidates):
+        if key in seen:
+            path.unlink()
+            removed.append(path.name)
+        else:
+            seen.add(key)
+    return removed
 
 
 def _report(folder: Path, meta: dict) -> str:
@@ -282,7 +353,20 @@ def _report(folder: Path, meta: dict) -> str:
     out += [f"- Part not audited (--max): {p}" for p in meta.get("skipped_parts", [])]
     out += [f"- Dependencies not audited: {s}" for s in meta.get("not_audited", [])]
     out += [f"- Skipped, failed the format check: {name}" for name in skipped]
-    return "\n".join(out) + "\n"
+    return _scrub("\n".join(out)) + "\n"
+
+
+def _check_meta(meta: object) -> dict:
+    if not isinstance(meta, dict):
+        raise _Malformed("--meta must be a JSON object")
+    dropped = meta.get("dropped", [])
+    if not isinstance(dropped, list) or not all(isinstance(d, dict) for d in dropped):
+        raise _Malformed("--meta dropped must be a list of {title, reason} objects")
+    for key in ("skipped_parts", "not_audited"):
+        value = meta.get(key, [])
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            raise _Malformed(f"--meta {key} must be a list of strings")
+    return meta
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -299,6 +383,9 @@ def _main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("inventory")
     p.add_argument("blocks")
     p.add_argument("dir")
+    p = sub.add_parser("dedupe")
+    p.add_argument("new")
+    p.add_argument("audit")
     p = sub.add_parser("report")
     p.add_argument("dir")
     p.add_argument("--meta")
@@ -334,11 +421,15 @@ def _main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "inventory":
             text = Path(args.blocks).read_text(encoding="utf-8")
-            _write_private(Path(args.dir) / "inventory.md", _inventory(text))
+            earlier_file = Path(args.dir) / "inventory.md"
+            earlier = earlier_file.read_text(encoding="utf-8") if earlier_file.is_file() else ""
+            _write_private(earlier_file, _inventory(text, earlier))
             return 0
-        meta = _load(args.meta) if args.meta else {}
-        if not isinstance(meta, dict):
-            raise _Malformed("--meta must be a JSON object")
+        if args.command == "dedupe":
+            for name in _dedupe(Path(args.new), Path(args.audit)):
+                print(f"dropped {name}: already reported")
+            return 0
+        meta = _check_meta(_load(args.meta) if args.meta else {})
         _write_private(Path(args.dir) / "REPORT.md", _report(Path(args.dir), meta))
         return 0
     except _Malformed as exc:

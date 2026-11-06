@@ -163,8 +163,8 @@ def test_audit_command_asks_first_and_never_posts():
     assert meta.get("description") and "--max" in meta.get("argument-hint", "")
     order = ["--focus security", "owner's yes", "scripts/throwaway.py", "scripts/secrets_scan.py",
              "from-secrets-scan", "from-npm-audit", "bug-hunter:security-auditor",
-             "bug-hunter:finding-verifier", "findings.py\" check", "findings.py\" next",
-             "findings.py\" inventory", "findings.py\" report"]
+             "findings.py\" check", "bug-hunter:finding-verifier", "findings.py\" dedupe",
+             "findings.py\" next", "findings.py\" inventory", "findings.py\" report"]
     positions = [body.index(marker) for marker in order]
     assert positions == sorted(positions)
     for banned in ("post.py", "gh issue", "gh api"):

@@ -72,3 +72,25 @@ def test_guardrail_patterns_stay_in_sync():
     patterns = json.loads((SCRIPTS / "secret_patterns.json").read_text(encoding="utf-8"))
     ours = "|".join(p["regex"] for p in patterns["patterns"] if p.get("guardrail"))
     assert ours == guardrail
+
+
+def test_values_decide_severity_and_every_hit_on_a_line_counts(make_repo):
+    real = "Zq9" + "TxW2vLp8"
+    repo = make_repo({
+        ".env": f"EXAMPLE_STRIPE_SECRET={real}\nPASSWORD=$ecret!{real}\nREF=${{OTHER}}\n",
+        "dist/app.min.js": 'var a="sk-' + "x" * 40 + f'",b="{AWS}";\n',
+        "assets/blob.txt": "data:" + "akia" + "q" * 16 + "\n",
+        "locked.js": f'"{AWS}"\n',
+    })
+    (repo / "locked.js").chmod(0)
+    try:
+        result, found = scan(repo)
+    finally:
+        (repo / "locked.js").chmod(0o644)
+    got = {(f["path"], f["line"], f["pattern"], f["severity"]) for f in found}
+    assert (".env", 1, "env-assignment", "high") in got
+    assert (".env", 2, "env-assignment", "high") in got
+    assert not any(f["path"] == ".env" and f["line"] == 3 for f in found)
+    assert ("dist/app.min.js", 1, "aws-access-key-id", "critical") in got
+    assert not any(f["path"] == "assets/blob.txt" for f in found)
+    assert "Traceback" not in result.stderr

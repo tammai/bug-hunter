@@ -9,8 +9,22 @@ from pathlib import Path, PurePosixPath
 
 RULES = json.loads((Path(__file__).resolve().parent / "secret_patterns.json").read_text("utf-8"))
 PATTERNS = [
-    {**p, "compiled": re.compile(p["regex"], re.I | re.M)} for p in RULES["patterns"]
+    {**p, "compiled": re.compile(p["regex"], re.M | (re.I if p.get("ignore_case", True) else 0))}
+    for p in RULES["patterns"]
 ]
+# A reference to another variable or a template slot, not a value.
+REFERENCE = re.compile(r"\$\{[^}]*\}|\$\([^)]*\)|\$[A-Za-z_]\w*")
+SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def is_placeholder(value: str) -> bool:
+    """A value that is a stand-in as a whole; a partly redacted value still counts as real."""
+    lowered = value.lower()
+    if re.fullmatch(r"<[^<>]*>", lowered) or REFERENCE.fullmatch(value):
+        return True
+    if "<" in lowered or ">" in lowered:
+        return False
+    return any(word in lowered for word in RULES["placeholders"])
 
 
 def _git_names(repo: str, *args: str) -> list[str] | None:
@@ -32,9 +46,12 @@ def _is_env(name: str) -> bool:
 
 def _text(path: Path) -> str | None:
     """A regular, small, UTF-8 text file's contents; None for anything to skip."""
-    if path.is_symlink() or not path.is_file() or path.stat().st_size > RULES["max_bytes"]:
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > RULES["max_bytes"]:
+            return None
+        data = path.read_bytes()
+    except OSError:
         return None
-    data = path.read_bytes()
     if b"\0" in data[:8192]:
         return None
     try:
@@ -43,10 +60,9 @@ def _text(path: Path) -> str | None:
         return None
 
 
-def _severity(pattern: dict, rel: PurePosixPath, matched: str, committed: bool) -> str:
-    placeholder = any(p in matched.lower() for p in RULES["placeholders"])
+def _severity(pattern: dict, rel: PurePosixPath, value: str, committed: bool) -> str:
     in_tests = any(part in RULES["low_dirs"] for part in rel.parts[:-1])
-    return "low" if placeholder or in_tests or not committed else pattern["severity"]
+    return "low" if is_placeholder(value) or in_tests or not committed else pattern["severity"]
 
 
 def _scan_file(repo: Path, name: str, committed: bool) -> list[dict]:
@@ -58,22 +74,24 @@ def _scan_file(repo: Path, name: str, committed: bool) -> list[dict]:
         return []
     found = []
     for number, line in enumerate(text.splitlines(), 1):
-        for pattern in PATTERNS:
+        hits = []
+        for order, pattern in enumerate(PATTERNS):
             if pattern.get("env_only") and not _is_env(rel.name):
                 continue
-            match = pattern["compiled"].search(line)
-            if not match:
-                continue
-            value = match.groupdict().get("value") or match.group(0)
-            if value.startswith("$"):
-                continue
+            for match in pattern["compiled"].finditer(line):
+                value = match.groupdict().get("value") or match.group(0)
+                if REFERENCE.fullmatch(value):
+                    continue
+                severity = _severity(pattern, rel, value, committed)
+                hits.append((SEVERITY_RANK[severity], order, pattern["name"], len(value),
+                             severity))
+        if hits:
+            # One finding per line, the most severe: a placeholder first on a minified line
+            # mustn't hide a real key after it.
+            _, _, pattern_name, length, severity = min(hits)
             # Only where and how long: the value, or any slice of it, is never output.
-            found.append({
-                "path": name, "line": number, "pattern": pattern["name"], "length": len(value),
-                "committed": committed,
-                "severity": _severity(pattern, rel, match.group(0), committed),
-            })
-            break
+            found.append({"path": str(rel), "line": number, "pattern": pattern_name,
+                          "length": length, "committed": committed, "severity": severity})
     return found
 
 
@@ -83,7 +101,8 @@ def _main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         tracked = _git_names(args.repo)
-        ignored = _git_names(args.repo, "--others", "--ignored", "--exclude-standard")
+        ignored = _git_names(args.repo, "--others", "--ignored", "--exclude-standard",
+                             "--directory")
         untracked = _git_names(args.repo, "--others", "--exclude-standard")
     except FileNotFoundError:
         print("error: git is not installed", file=sys.stderr)

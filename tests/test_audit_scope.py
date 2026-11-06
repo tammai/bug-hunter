@@ -27,6 +27,7 @@ FILES = {
     "api/package.json": json.dumps({"dependencies": {"express": "^4"}}),
     "api/server.js": "",
     "package-lock.json": "",
+    "web/pnpm-lock.yaml": "",
     "tests/fixtures/app.yaml": "",
     "src/routes/users.test.js": "",
 }
@@ -46,7 +47,7 @@ def test_focus_security_orders_widens_and_picks_checklists(make_repo):
     for wanted in ("src/db/schema.prisma", "src/db/migrations/001_init.sql", "config/app.yaml",
                    ".env", "Dockerfile"):
         assert wanted in files, wanted
-    for unwanted in (".env.example", "docs/security.md", "package-lock.json",
+    for unwanted in (".env.example", "docs/security.md", "package-lock.json", "web/pnpm-lock.yaml",
                      "tests/fixtures/app.yaml", "src/routes/users.test.js",
                      "web/package.json"):
         assert unwanted not in files, unwanted
@@ -85,7 +86,7 @@ def test_lockfiles_give_dependency_audit_steps(make_repo):
     assert json.loads(result.stdout)["audits"] == [
         {"dir": ".", "command": "npm audit --omit=dev --json",
          "step": "npm audit --omit=dev --json"},
-        {"dir": "php app", "command": "composer audit --format=json",
-         "step": "(cd 'php app' && composer audit --format=json)"},
+        {"dir": "php app", "command": "composer audit --no-plugins --no-scripts --format=json",
+         "step": "(cd 'php app' && composer audit --no-plugins --no-scripts --format=json)"},
     ]
     assert "unsafe folder name" in result.stderr

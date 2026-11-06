@@ -64,6 +64,16 @@ def test_check_enforces_the_finding_format(tmp_path):
     redacted = GOOD.replace("## Fix\n", "## Fix\n```\nAPI_KEY=<redacted>\n```\n")
     assert run_script("findings", "check", write(tmp_path, redacted, "r.md")).returncode == 0
 
+    code = GOOD.replace("## Fix\n", '## Fix\n```py\npassword = request.form["password"]\n'
+                        "token = jwt.sign(payload)\n```\n")
+    assert run_script("findings", "check", write(tmp_path, code, "code.md")).returncode == 0
+
+    for partial in ("DB_PASSWORD=Pr0dPass<redacted>", "JWT_SECRET=<redacted>tail9f2",
+                    "postgres://app:Pr0dPa55<redacted>@db", "PASSWORD=$ecret!Value"):
+        text = GOOD.replace("## Fix\n", f"## Fix\n```\n{partial}\n```\n")
+        result = run_script("findings", "check", write(tmp_path, text, "partial.md"))
+        assert result.returncode == 1 and "secret" in result.stdout, partial
+
 
 def test_audit_folder_and_numbering(make_repo, fake_gh, tmp_path):
     env, _ = fake_gh
@@ -125,11 +135,15 @@ def test_script_outputs_become_findings(tmp_path):
     assert "CWE-1395" in joined and "4.17.21" in joined and "PKSA-1" in joined
     assert "**Severity:** medium" in joined and "**Proof:** advisory" in joined
 
-    empty = tmp_path / "empty.json"
-    empty.write_text("{}", encoding="utf-8")
-    assert run_script("findings", "from-npm-audit", empty, out).returncode == 0
+    clean = tmp_path / "clean.json"
+    clean.write_text('{"auditReportVersion": 2, "vulnerabilities": {}, "metadata": {}}', "utf-8")
+    assert run_script("findings", "from-npm-audit", clean, out).returncode == 0
+    clean.write_text('{"advisories": [], "abandoned": []}', "utf-8")
+    assert run_script("findings", "from-composer-audit", clean, out).returncode == 0
     assert len(list(out.glob("*.md"))) == 6
-    for bad in ("{not json", "[]", '{"vulnerabilities": {"x": 5}}'):
+    empty = tmp_path / "empty.json"
+    for bad in ("{not json", "[]", '{"vulnerabilities": {"x": 5}}', "{}",
+                '{"error": {"code": "ENOTFOUND", "summary": "request to registry failed"}}'):
         empty.write_text(bad, encoding="utf-8")
         result = run_script("findings", "from-npm-audit", empty, out)
         assert result.returncode == 1 and "Traceback" not in result.stderr, bad
@@ -148,16 +162,19 @@ def test_report_and_inventory(tmp_path):
     blocks = tmp_path / "blocks.txt"
     blocks.write_text(
         "noise\n=== PII INVENTORY ===\n"
+        "field | defined (path:line) | logged | returned | sent to | stored | deletion\n"
         "email | src/models/user.js:5 | src/log.js:9 | GET /me | mailchimp | yes (plain) | none\n"
         "phone | src/models/user.js:6 | - | GET /orders/:id | - | yes (plain) | none\n"
         "=== END ===\n=== PII INVENTORY ===\n"
-        "email | src/models/user.js:5 | - | - | sentry (src/sentry.js:3) | - | -\n"
+        "| email | src/models/user.js:5 | - | - | sentry (src/sentry.js:3) | - | - |\n"
+        f"token | src/x.js:1 | {AWS} | - | - | - | -\n"
         "=== END ===\n", encoding="utf-8")
     assert run_script("findings", "inventory", blocks, audit).returncode == 0
     meta = tmp_path / "meta.json"
     meta.write_text(json.dumps({
         "policy": False, "skipped_parts": ["lib (2 files)"], "not_audited": ["python"],
-        "dropped": [{"title": "Open redirect", "reason": "NOT CONFIRMED — allowlist at x.js:4"}],
+        "dropped": [{"title": "Open redirect", "reason": "NOT CONFIRMED — allowlist at x.js:4"},
+                    {"title": f"Key {AWS} in config", "reason": "failed check"}],
     }), encoding="utf-8")
     result = run_script("findings", "report", audit, "--meta", meta)
     assert result.returncode == 0, result.stderr
@@ -171,6 +188,20 @@ def test_report_and_inventory(tmp_path):
     assert "Open redirect" in report and "allowlist at x.js:4" in report
     assert "lib (2 files)" in report and "python" in report
     assert "no policy file" in report.lower()
+    assert AWS not in report and "withheld" in report
+    assert "| field |" in report and report.count("| field |") == 1
+    assert "| defined (path:line) |" not in report
+
+    bad_meta = tmp_path / "bad.json"
+    bad_meta.write_text(json.dumps({"dropped": ["just a string", 5]}), encoding="utf-8")
+    result = run_script("findings", "report", audit, "--meta", bad_meta)
+    assert result.returncode == 1 and "Traceback" not in result.stderr
+
+    blocks.write_text("=== PII INVENTORY ===\nphone2 | a.js:1 | - | - | - | - | -\n"
+                      "=== END ===\n", encoding="utf-8")
+    assert run_script("findings", "inventory", blocks, audit).returncode == 0
+    merged = (audit / "inventory.md").read_text(encoding="utf-8")
+    assert "| email |" in merged and "| phone2 |" in merged
 
 
 def test_audit_findings_never_post_or_query_issues(tmp_path, fake_gh, make_repo):
@@ -190,3 +221,31 @@ def test_audit_findings_never_post_or_query_issues(tmp_path, fake_gh, make_repo)
     assert result.returncode == 0, result.stderr
     assert "Any user can read any order by id" in result.stdout
     assert calls() == []
+
+
+def test_npm_fix_names_the_right_package_and_reruns_dedupe(tmp_path):
+    out = tmp_path / "new"
+    data = {"auditReportVersion": 2, "vulnerabilities": {
+        "minimist": {"name": "minimist", "severity": "moderate", "range": "<1.2.6",
+                     "via": [{"title": "Prototype Pollution", "cwe": ["CWE-1321"],
+                              "url": "https://x"}],
+                     "fixAvailable": {"name": "mkdirp", "version": "0.5.6",
+                                      "isSemVerMajor": False}}}}
+    path = tmp_path / "npm.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert run_script("findings", "from-npm-audit", path, out).returncode == 0
+    [finding] = out.glob("*.md")
+    text = finding.read_text(encoding="utf-8")
+    assert "upgrade mkdirp to 0.5.6" in text.lower() and "minimist" in text
+
+    audit = tmp_path / "audit"
+    audit.mkdir()
+    (audit / "01.md").write_text(text, encoding="utf-8")
+    assert run_script("findings", "from-npm-audit", path, out).returncode == 0
+    (out / "agent-1.md").write_text(GOOD, encoding="utf-8")
+    (out / "agent-2.md").write_text(GOOD.replace("**Severity:** high", "**Severity:** critical"),
+                                    encoding="utf-8")
+    result = run_script("findings", "dedupe", out, audit)
+    assert result.returncode == 0, result.stderr
+    left = sorted(p.name for p in out.glob("*.md"))
+    assert left == ["agent-2.md"]
