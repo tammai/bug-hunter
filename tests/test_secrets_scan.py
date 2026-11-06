@@ -94,3 +94,31 @@ def test_values_decide_severity_and_every_hit_on_a_line_counts(make_repo):
     assert ("dist/app.min.js", 1, "aws-access-key-id", "critical") in got
     assert not any(f["path"] == "assets/blob.txt" for f in found)
     assert "Traceback" not in result.stderr
+
+
+def test_only_whole_placeholders_count_as_placeholders():
+    import sys
+    sys.path.insert(0, str(SCRIPTS))
+    from secrets_scan import is_placeholder
+
+    for value in ("<redacted>", "<your", "<your api key>", "${OTHER}", "$(cmd)", "changeme",
+                  "xxxx", "XXXXXXXX", "sk-" + "x" * 20, "AKIA" + "X" * 16, "your_api_key",
+                  "example", "sk_" + "live_" + "x" * 20):
+        assert is_placeholder(value), value
+    for value in ("Pr0dPass<redacted>", "<redacted>tail9f2", "AKIAQ3J5ZP" + "xxxx",
+                  "realexample9Key", "dummy" + "12345Zq", "Zq9TxW2vLp8"):
+        assert not is_placeholder(value), value
+
+
+def test_env_files_inside_ignored_folders_are_scanned(make_repo):
+    real = "Zq9" + "TxW2vLp8"
+    repo = make_repo({"src/a.js": "", ".gitignore": "secrets/\ndeploy/local/\n"})
+    (repo / "secrets").mkdir()
+    (repo / "secrets/.env").write_text(f"API_TOKEN={real}\n", encoding="utf-8")
+    (repo / "deploy/local").mkdir(parents=True)
+    (repo / "deploy/local/.env.prod").write_text(f"DB_PASSWORD={real}\n", encoding="utf-8")
+    (repo / ".env.template").write_text("API_KEY=<your api key>\n", encoding="utf-8")
+    _, found = scan(repo)
+    got = {(f["path"], f["committed"]) for f in found}
+    assert ("secrets/.env", False) in got and ("deploy/local/.env.prod", False) in got
+    assert all(f["severity"] == "low" for f in found if f["path"] == ".env.template")

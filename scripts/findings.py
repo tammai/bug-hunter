@@ -27,15 +27,18 @@ class _Malformed(Exception):
     pass
 
 
-# In findings, a .env-style secret is only `NAME=value` with no space around "=": quoted
-# source such as `password = request.form["password"]` is code, not a secret.
-CHECK_PATTERNS = [
-    {**p, "compiled": re.compile(
-        r"^\s*(?:export\s+)?[a-z0-9_]*(?:secret|token|key|password|passwd)[a-z0-9_]*="
-        r"['\"]?(?P<value>[^\s'\"#]+)", re.I | re.M)}
-    if p.get("env_only") else p
-    for p in PATTERNS
-]
+# Findings and reports quote code, so `NAME = value` counts anywhere on a line, with or
+# without spaces or quotes, unless the value is code (a call, index, dotted name, bare word).
+ASSIGNMENT = re.compile(
+    r"(?<![\w-])[a-z0-9_]*(?:secret|token|key|password|passwd)[a-z0-9_]*\s*[:=]\s*"
+    r"(?:(?P<q>['\"])(?P<quoted>[^'\"\n]+)(?P=q)|(?P<bare>[^\s'\"#|,;)`]+))", re.I)
+# A long base64 line is a key body even without its BEGIN header.
+KEY_BODY = re.compile(r"^\s*[A-Za-z0-9+/]{60,}={0,2}\s*$", re.M)
+CHECK_PATTERNS = [p for p in PATTERNS if not p.get("env_only")]
+
+
+def _looks_like_code(value: str) -> bool:
+    return any(c in value for c in "([{.") or bool(re.fullmatch(r"[A-Za-z_]+", value))
 
 
 def _secret_hits(text: str) -> list[str]:
@@ -43,10 +46,19 @@ def _secret_hits(text: str) -> list[str]:
     for pattern in CHECK_PATTERNS:
         for match in pattern["compiled"].finditer(text):
             value = match.groupdict().get("value") or match.group(0)
-            if REFERENCE.fullmatch(value) or is_placeholder(value):
-                continue
-            hits.append(pattern["name"])
-            break
+            if not (REFERENCE.fullmatch(value) or is_placeholder(value)):
+                hits.append(pattern["name"])
+                break
+    for match in ASSIGNMENT.finditer(text):
+        value = match["quoted"] or match["bare"]
+        if is_placeholder(value) or REFERENCE.fullmatch(value):
+            continue
+        if match["bare"] and _looks_like_code(value):
+            continue
+        hits.append("assignment")
+        break
+    if KEY_BODY.search(text):
+        hits.append("key-body")
     return hits
 
 
@@ -287,29 +299,55 @@ def _inventory(text: str, earlier: str = "") -> str:
     return _scrub("\n".join(lines)) + "\n"
 
 
+def _where(text: str) -> list[str]:
+    return [line.strip() for line in _parse(text)[1].get("Where", []) if line.strip()]
+
+
 def _key(text: str) -> tuple[str, str, str]:
-    """What makes two findings the same: category, CWE and the root-cause Where line."""
-    fields, sections = _parse(text)
-    where = [line.strip() for line in sections.get("Where", []) if line.strip()]
+    """What makes two findings the same: category, CWE and the root cause's path:line."""
+    fields = _parse(text)[0]
+    where = _where(text)
     root = next((w for w in where if "fix here" in w.lower()), where[-1] if where else "")
-    return fields.get("Category", ""), fields.get("CWE", ""), root.removesuffix("(fix here)")
+    spot = PATH_LINE.search(root)
+    return fields.get("Category", ""), fields.get("CWE", ""), spot[0] if spot else root
+
+
+def _merge_where(path: Path, extra: list[str]) -> None:
+    """Add Where lines from a dropped duplicate to the finding that's kept."""
+    text = path.read_text(encoding="utf-8")
+    have = set(_where(text))
+    new = [line for line in extra if line not in have]
+    if not new:
+        return
+    head, sep, rest = text.partition("## Where\n")
+    body, sep2, tail = rest.partition("\n## ")
+    merged = body.rstrip("\n") + "\n" + "".join(f"{line}\n" for line in new)
+    _write_private(path, head + sep + merged + sep2 + tail if sep2 else head + sep + merged)
 
 
 def _dedupe(new: Path, audit: Path) -> list[str]:
     """Drop new findings already in the audit folder, or repeated, keeping the most severe."""
-    seen = {_key(p.read_text(encoding="utf-8", errors="replace")) for _, p in numbered(audit)}
+    if new.resolve() == audit.resolve():
+        raise _Malformed("dedupe needs two folders; given the same folder twice")
+    seen_before = {_key(p.read_text(encoding="utf-8", errors="replace"))
+                   for _, p in numbered(audit)}
     candidates = []
     for path in sorted(new.glob("*.md")):
         text = path.read_text(encoding="utf-8", errors="replace")
         severity = _parse(text)[0].get("Severity", "low")
         candidates.append((SEVERITY_RANK.get(severity, 3), path.name, path, _key(text)))
+    kept: dict[tuple[str, str, str], Path] = {}
     removed = []
     for _, _, path, key in sorted(candidates):
-        if key in seen:
+        if key in seen_before:
+            path.unlink()
+            removed.append(path.name)
+        elif key in kept:
+            _merge_where(kept[key], _where(path.read_text(encoding="utf-8", errors="replace")))
             path.unlink()
             removed.append(path.name)
         else:
-            seen.add(key)
+            kept[key] = path
     return removed
 
 

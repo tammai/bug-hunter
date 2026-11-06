@@ -18,13 +18,17 @@ SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
 
 def is_placeholder(value: str) -> bool:
-    """A value that is a stand-in as a whole; a partly redacted value still counts as real."""
-    lowered = value.lower()
-    if re.fullmatch(r"<[^<>]*>", lowered) or REFERENCE.fullmatch(value):
+    """A value that is a stand-in as a whole; anything partly real counts as real."""
+    if REFERENCE.fullmatch(value) or re.fullmatch(r"<[^<>]*>", value):
         return True
-    if "<" in lowered or ">" in lowered:
+    if value.startswith("<") and ">" not in value:
+        return True  # `<your api key>` cut at its first space
+    if "<" in value or ">" in value:
         return False
-    return any(word in lowered for word in RULES["placeholders"])
+    if re.fullmatch(r"(?i)[a-z]{0,8}[-_]?(?:[a-z]+[-_])?x{3,}", value):
+        return True  # x's alone, or after a key prefix: sk-xxxx, AKIAXXXX
+    lowered = value.lower()
+    return lowered in RULES["placeholders"] or bool(re.fullmatch(r"your[_-][\w-]*", lowered))
 
 
 def _git_names(repo: str, *args: str) -> list[str] | None:
@@ -104,15 +108,20 @@ def _main(argv: list[str] | None = None) -> int:
         ignored = _git_names(args.repo, "--others", "--ignored", "--exclude-standard",
                              "--directory")
         untracked = _git_names(args.repo, "--others", "--exclude-standard")
+        # --directory collapses an ignored folder to one entry; this finds .env files in it.
+        ignored_env = _git_names(args.repo, "--others", "--ignored", "--exclude-standard",
+                                 "--", ":(glob)**/.env*")
     except FileNotFoundError:
         print("error: git is not installed", file=sys.stderr)
         return 1
-    if tracked is None or ignored is None or untracked is None:
+    if tracked is None or ignored is None or untracked is None or ignored_env is None:
         print(f"error: not a git repo: {args.repo}", file=sys.stderr)
         return 1
 
     repo = Path(args.repo)
-    local_env = sorted({n for n in ignored + untracked if _is_env(PurePosixPath(n).name)})
+    local_env = sorted({
+        n for n in ignored + untracked + ignored_env if _is_env(PurePosixPath(n).name)
+    })
     found = [f for n in tracked for f in _scan_file(repo, n, committed=True)]
     found += [f for n in local_env for f in _scan_file(repo, n, committed=False)]
     found.sort(key=lambda f: (f["path"], f["line"]))

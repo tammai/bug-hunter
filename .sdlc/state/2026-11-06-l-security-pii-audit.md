@@ -10,7 +10,7 @@ Started: 2026-11-06
 Base: e3cc6e3
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: ec6f5c2 tree f580f85deee190387066bbaa5a51e6035de97297
+Verified: 13dd08b tree 117a1d76056b26a70ec195230c10eb4be9ec15dd
 Slice: B4   Slice base: dc9f54e   Slice gates: none
 Current: Stage 3 – Review
 
@@ -53,6 +53,8 @@ inline, in parts (backlog): four parts too large for one session's context
 - 2026-11-06 review: ran security, code high (Risk: high; L; Public Surface), self-chosen: L
 - 2026-11-06 Stage 3: fail — review r1: security S1, S2 (+S3-S6); code H1-H4, M1-M4 (+L1-L4, F1); all fixed now
 - 2026-11-06 Stage 2: pass
+- 2026-11-06 Stage 3: fail — review r2: security N1, S2, N3 (+T1-T3); code N1-N3 (+T1); user: fix until no findings
+- 2026-11-06 Stage 2: pass
 
 ## Deviations
 - 2026-11-06 scripts/scope.py What: the unsafe-folder warning now prints once per folder after both installs and audits, reading 'no install or audit for …'. Why: audits reuse the install rules, so the same folder warned twice. Effect: the existing count of 6 warnings in test_stacks still holds.
@@ -61,6 +63,7 @@ inline, in parts (backlog): four parts too large for one session's context
 - 2026-11-06 commands/audit.md, tests/test_plugin_files.py What: findings are screened with findings.py check before verifiers see them, and deduped with the new findings.py dedupe against earlier runs. Why: review S3 (an unscreened finding could carry a secret into a verifier prompt) and M4 (re-runs refiled scripted findings). Effect: AC-011's step-order test now has check before the verifier and dedupe before next.
 - 2026-11-06 scripts/findings.py, scripts/secrets_scan.py, scripts/scope.py, scripts/stacks.json, tests/* What: review round 1 fixes: whole-value placeholder rule shared by scan and check; strict NAME=value env pattern in check; every REPORT.md and inventory line scrubbed; npm error JSON and missing results are failures; npm fix names the package to upgrade; meta validated; inventory skips the header, accepts outer pipes and merges earlier runs; fsync; per-line most-severe hit; $-prefixed values reported unless references; unreadable files skipped; AWS/private-key patterns case-sensitive; ignored dirs listed with --directory; lockfiles out of --focus security; composer audit --no-plugins --no-scripts. Why: review S1, S2, S4, S5, S6, H1-H4, M1-M3, L1-L4. Effect: the test that {} is a clean npm audit now expects a failure; AC-002's composer command changed.
 - 2026-11-06 scripts/secrets_scan.py What: is_placeholder is a module function imported by findings.py. Why: the scanner and findings.py check must apply the same whole-value placeholder rule (review S2/S4). Effect: one definition of what counts as a placeholder.
+- 2026-11-06 scripts/secrets_scan.py, scripts/secret_patterns.json, scripts/findings.py, tests/* What: round 3. is_placeholder counts only whole placeholders (<...> or an unclosed <word, ${...}, exact words, a key prefix then x's); new masked-key pattern (known prefix, real characters, then masking); findings/report check catches NAME=value anywhere on a line, spaced or quoted, unless the value is code, plus long base64 key bodies; scanner adds a glob query for .env files inside ignored folders; dedupe keys on the root-cause path:line (fix-here case-insensitive), merges dropped duplicates' Where lines, refuses the same folder twice. Why: review r2 security N1, S2, N3, T1, T2; code N1, N2, N3, T1. Effect: placeholder word list is now exact-match only; T3 ($pw read as a .env variable reference) stays, by dotenv convention.
 
 ## Open questions
 -

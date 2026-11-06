@@ -249,3 +249,52 @@ def test_npm_fix_names_the_right_package_and_reruns_dedupe(tmp_path):
     assert result.returncode == 0, result.stderr
     left = sorted(p.name for p in out.glob("*.md"))
     assert left == ["agent-2.md"]
+
+
+def test_check_and_report_catch_secrets_anywhere_on_a_line(tmp_path):
+    real = "Zq9" + "TxW2vLp8"
+    masked_aws = "AKIAQ3J5ZP" + "xxxx"
+    for leak in (f'SECRET_KEY = "{real}"', f"api_token: {real}", f"- DB_PASSWORD={real}9",
+                 f"| db | password={real} |", masked_aws, "MII" + "Bv" * 40):
+        text = GOOD.replace("## Fix\n", f"## Fix\n```\n{leak}\n```\n")
+        result = run_script("findings", "check", write(tmp_path, text, "leak.md"))
+        assert result.returncode == 1 and "secret" in result.stdout, leak
+
+    fine = GOOD.replace("## Impact\n",
+                        "## Impact\nThe API key: rotate it. token = req.body.token\n")
+    assert run_script("findings", "check", write(tmp_path, fine, "fine.md")).returncode == 0
+
+    audit = tmp_path / "audit"
+    audit.mkdir()
+    meta = tmp_path / "meta.json"
+    meta.write_text(json.dumps({"dropped": [
+        {"title": "x", "reason": f"NOT CONFIRMED — config has DB_PASSWORD={real}9"},
+        {"title": f"key {masked_aws}", "reason": "failed check"}]}), encoding="utf-8")
+    assert run_script("findings", "report", audit, "--meta", meta).returncode == 0
+    report = (audit / "REPORT.md").read_text(encoding="utf-8")
+    assert real not in report and masked_aws[:10] not in report
+
+
+def test_dedupe_keys_on_path_line_and_merges_where(tmp_path):
+    new, audit = tmp_path / "new", tmp_path / "audit"
+    new.mkdir()
+    audit.mkdir()
+    first = GOOD.replace("- `src/services/orders.js:30` (findById without owner filter)",
+                         "- `src/services/orders.js:30` (no owner filter) (Fix here)")
+    second = (GOOD.replace("**Severity:** high", "**Severity:** critical")
+              .replace("# Any user can read any order by id", "# Orders readable by anyone")
+              .replace("- `src/routes/orders.js:12` (GET /orders/:id)",
+                       "- `src/routes/admin.js:40` (GET /admin/orders/:id)")
+              .replace("- `src/services/orders.js:30` (findById without owner filter)",
+                       "- `src/services/orders.js:30` missing ownership check (fix here)"))
+    (new / "a.md").write_text(first, encoding="utf-8")
+    (new / "b.md").write_text(second, encoding="utf-8")
+    assert run_script("findings", "dedupe", new, audit).returncode == 0
+    [kept] = list(new.glob("*.md"))
+    text = kept.read_text(encoding="utf-8")
+    assert "**Severity:** critical" in text
+    assert "src/routes/orders.js:12" in text and "src/routes/admin.js:40" in text
+    assert run_script("findings", "check", kept).returncode == 0
+
+    result = run_script("findings", "dedupe", audit, audit)
+    assert result.returncode == 1 and "same folder" in result.stderr
