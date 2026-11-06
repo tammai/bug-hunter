@@ -86,8 +86,8 @@ def _safe_folder(folder: PurePosixPath) -> bool:
     )
 
 
-def _installs(files: list[str]) -> list[dict]:
-    """The locked install command for each tracked lockfile outside test and fixture folders."""
+def _installs(files: list[str], rules: list[dict] | None = None) -> list[dict]:
+    """The command for each tracked lockfile outside test and fixture folders."""
     tracked = set(files)
     skip_dirs = TEST_DIRS | set(STACKS["fixture_dirs"])
     found: dict[tuple[str, str], dict] = {}
@@ -96,7 +96,7 @@ def _installs(files: list[str]) -> list[dict]:
         folder = path.parent
         if any(part in skip_dirs for part in folder.parts):
             continue
-        for rule in STACKS["installs"]:
+        for rule in rules if rules is not None else STACKS["installs"]:
             if path.name != rule["lockfile"]:
                 continue
             marker = (folder / rule.get("when", rule.get("unless", ""))).as_posix()
@@ -105,8 +105,6 @@ def _installs(files: list[str]) -> list[dict]:
             if "unless" in rule and marker in tracked:
                 continue
             if not _safe_folder(folder):
-                print(f"warning: no install for {str(folder)!r}: unsafe folder name",
-                      file=sys.stderr)
                 continue
             dir_, command = str(folder), rule["command"]
             step = command if dir_ == "." else f"(cd '{dir_}' && {command})"
@@ -114,9 +112,38 @@ def _installs(files: list[str]) -> list[dict]:
     return sorted(found.values(), key=lambda i: (_natural_key(i["dir"]), i["command"]))
 
 
-def _build(files: list[str], paths: list[str], cap: int | None) -> dict:
+SECURITY = STACKS["security"]
+
+
+LOCKFILES = {rule["lockfile"] for rule in STACKS["installs"] + STACKS["audits"]}
+
+
+def _security_file(path: PurePosixPath) -> bool:
+    """A config, schema or deployment file a security audit reads alongside the source."""
+    name = path.name
+    # Lockfiles are dependency lists, covered by the dependency audit, not code to read.
+    if name in SECURITY["name_excludes"] or name in LOCKFILES or name.endswith(".lock"):
+        return False
+    return (
+        path.suffix in SECURITY["extensions"]
+        or name in SECURITY["names"]
+        or name.startswith(tuple(SECURITY["name_prefixes"]))
+        or any(part in SECURITY["folders"] for part in path.parts[:-1])
+    )
+
+
+def _security_relevant(part: dict) -> bool:
+    words = re.split(r"[/._\- ]+", " ".join([part["dir"], *part["files"]]).lower())
+    return any(word.startswith(tuple(SECURITY["keywords"])) for word in words if word)
+
+
+def _build(files: list[str], paths: list[str], cap: int | None, focus: bool = False) -> dict:
     wanted = [PurePosixPath(f) for f in files if not paths or _under(f, paths)]
-    wanted = [p for p in wanted if p.suffix in SOURCE_EXTENSIONS and not _is_test(p)]
+    wanted = [
+        p for p in wanted
+        if (p.suffix in SOURCE_EXTENSIONS or (focus and _security_file(p))) and not _is_test(p)
+        and not (focus and any(part in SECURITY["exclude_dirs"] for part in p.parts[:-1]))
+    ]
     wanted.sort(key=lambda p: (_natural_key(str(p.parent)), _natural_key(p.name)))
 
     by_dir: dict[str, list[str]] = {}
@@ -129,6 +156,11 @@ def _build(files: list[str], paths: list[str], cap: int | None) -> dict:
                 {"id": len(parts) + 1, "dir": directory, "files": names[start : start + PART_SIZE]}
             ))
 
+    if focus:
+        # Stable: within each group the folders keep their natural order.
+        parts.sort(key=lambda part: not _security_relevant(part))
+        for number, part in enumerate(parts, 1):
+            part["id"] = number
     kept = parts if cap is None else parts[:cap]
     return {
         "parts": kept,
@@ -138,11 +170,46 @@ def _build(files: list[str], paths: list[str], cap: int | None) -> dict:
     }
 
 
+def _depends_on(root: Path, tracked: set[str], folder: PurePosixPath, package: str) -> bool:
+    """Whether the nearest tracked package.json above folder lists package as a dependency."""
+    for candidate in (folder, *folder.parents):
+        manifest = (candidate / "package.json").as_posix().removeprefix("./")
+        if manifest not in tracked:
+            continue
+        try:
+            data = json.loads((root / manifest).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        if not isinstance(data, dict):
+            return False
+        return any(
+            isinstance(deps, dict) and package in deps
+            for deps in (data.get(k) for k in ("dependencies", "devDependencies",
+                                                "peerDependencies"))
+        )
+    return False
+
+
+def _checklists(part: dict, root: Path, tracked: set[str]) -> list[str]:
+    rule = SECURITY["checklists"]
+    found = list(rule["always"])
+    found += [rule["stacks"][s] for s in part["stacks"] if s in rule["stacks"]]
+    vue = rule["vue"]
+    if any(PurePosixPath(f).suffix in vue["extensions"] for f in part["files"]) or (
+        "node" in part["stacks"]
+        and _depends_on(root, tracked, PurePosixPath(part["dir"]), vue["dependency"])
+    ):
+        found.append("vue")
+    return found
+
+
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo")
     parser.add_argument("paths", nargs="*", help="limit to files under these repo-relative paths")
     parser.add_argument("--max", type=int, dest="cap", help="at most this many hunters")
+    parser.add_argument("--focus", choices=["security"],
+                        help="security audit: config and schema files too, security parts first")
     args = parser.parse_args(argv)
     if args.cap is not None and args.cap < 1:
         parser.error("--max must be 1 or more")
@@ -165,13 +232,26 @@ def _main(argv: list[str] | None = None) -> int:
         outside = [a for a, p in zip(args.paths, paths, strict=True) if p is None]
         print(f"error: not inside the repo: {', '.join(outside)}", file=sys.stderr)
         return 1
-    empty = [p for p in paths or [""] if not _build(files, [p], None)["parts"]]
+    focus = args.focus == "security"
+    empty = [p for p in paths or [""] if not _build(files, [p], None, focus)["parts"]]
     if empty:
         where = ", ".join(p or "." for p in empty) if paths else args.repo
         print(f"error: no tracked source files under: {where}", file=sys.stderr)
         return 1
-    out = _build(files, paths, args.cap)
+    out = _build(files, paths, args.cap, focus)
+    if focus:
+        tracked_set = set(files)
+        for part in out["parts"] + out["skipped"]:
+            part["checklists"] = _checklists(part, root, tracked_set)
     out["installs"] = _installs(files)
+    out["audits"] = _installs(files, STACKS["audits"])
+    lockfiles = {r["lockfile"] for r in STACKS["installs"] + STACKS["audits"]}
+    for folder in sorted({
+        PurePosixPath(f).parent for f in files
+        if PurePosixPath(f).name in lockfiles and not _safe_folder(PurePosixPath(f).parent)
+    }, key=str):
+        print(f"warning: no install or audit for {str(folder)!r}: unsafe folder name",
+              file=sys.stderr)
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 

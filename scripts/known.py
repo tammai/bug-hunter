@@ -49,7 +49,19 @@ def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo")
     parser.add_argument("drafts_dir")
+    parser.add_argument("--audit", action="store_true",
+                        help="list earlier audit findings only; never query issues")
     args = parser.parse_args(argv)
+
+    if args.audit:
+        # Vulnerabilities are never cross-referenced with the repo's public issues.
+        print("## Earlier audit findings")
+        audit = numbered(Path(args.drafts_dir))
+        for _, path in audit:
+            print(f"- {path.stem} {_clean(title(path) or '') or '(no title)'}")
+        if not audit:
+            print("- none")
+        return 0
 
     issues, why = _open_issues(args.repo)
     print("## Open issues")

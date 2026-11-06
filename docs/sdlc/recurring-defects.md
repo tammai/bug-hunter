@@ -12,3 +12,7 @@ One line per defect: what it looks like, then the severity.
 - Agent isolation done by moving `HOME` only, missing variables already expanded to the real home, Java's `user.home`, JVM option variables and active virtualenvs: high
 - `eval "$(cmd)"` used for a safety setup step, so a failed or empty `cmd` runs the rest unprotected: high
 - A tool setting kept pointed at the owner's real folders (runtime managers, SDKs) while the tool can auto-install into them from a repo file: high
+- Deciding "is this a secret?" from the shape of free text (`NAME = value`, long base64) instead of checking against the values actually found: high (it trades leaks for rejected findings each way it is tuned)
+- A placeholder or redaction test that matches a substring, so a partly masked real value (`Pass<redacted>`, `AKIA…xxxx`) counts as a placeholder: high
+- A "looks like a path" or "looks like code" exemption that also matches real secret alphabets (base64 values starting with `/`, JWTs with dots): high
+- A multi-line block parser (PEM body) that enters block mode on a header mention, or never leaves it, so the rest of the file is skipped: high

@@ -90,6 +90,46 @@ It files only the drafts you name, from your own `gh` login, with the label you 
 
 Each filed draft is recorded in `posted.json` next to the drafts, so it's never filed twice. If filing stops part way, the drafts already filed stay recorded.
 
+## Audit for security and personal data
+
+Before a deploy, from the root of the repo:
+
+```
+/audit [paths…] [--max N]
+```
+
+It audits the code, config, schema and deployment files, security-relevant folders first, for:
+- **Authorization:** IDOR, missing role checks, mass assignment.
+- **Injection:** SQL, NoSQL, command, path traversal, SSRF, XSS.
+- **Secrets:** in code, config or `.env` files.
+- **Session and auth:** expiry, CSRF, rate limits, password hashing.
+- **Personal data:** logged, returned beyond need, sent to third parties, stored unencrypted, or kept with no way to delete it.
+
+It also runs `npm audit` or `composer audit` where the repo has those lockfiles. Like `/hunt`, it shows the cost and waits for your yes first.
+
+Each finding has evidence at one of three levels:
+- **proven:** a repro or a script showed it;
+- **traced:** every step from input to problem is cited as `path:line` with the code;
+- **advisory:** a dependency advisory.
+
+Every finding an agent writes is checked by a second agent that gets only the finding and tries to disprove it. Only findings it can't disprove are kept; the rest are listed in the report as not confirmed.
+
+**Output.** Findings go to `~/.bug-hunter/<host>/<owner>/<repo>/audit/NN.md`, readable only by you. Each has a Severity, Category, CWE, Proof, Where, Evidence, Impact and Fix. `REPORT.md` holds:
+- the table, sorted by severity;
+- a PII inventory: each personal field, and where it's logged, returned, sent, stored and deleted;
+- what was dropped, and what wasn't covered.
+
+Secret values never appear in any output. Every finding and report line is checked against the shapes of known key types (AWS, GitHub, Stripe, OpenAI, Anthropic, Slack, Google, JWTs, private keys, masked keys) and against fingerprints of every secret the scan found, so a known secret is caught anywhere in a line, and so are its 8-character slices (12 for all-lowercase or all-uppercase ones). Very short or word-like values (under 6 characters, numbers, `true`, a single short word) aren't fingerprinted, because ordinary text is full of them. A secret the scan didn't see and that has no known shape relies on the agents writing `<redacted>`, as they're told to; personal data relies on that rule too. Nothing is ever filed or posted: `/hunt-post` refuses audit findings.
+
+**Tell it who may see what.** Write `~/.bug-hunter/<host>/<owner>/<repo>/policy.md` with:
+- your roles and who may see whose data;
+- the routes that are public by design;
+- any extra fields that count as personal data for your business.
+
+Without it, an authorization finding that rests on an assumed rule says so and is capped at medium.
+
+**Not covered yet:** dependency audits for pnpm, Yarn, Python, Go, Rust, JVM and Ruby; security checklists beyond generic, Node and Vue; running services (findings that need a live database or API are traced, not proven); scanning deployed environments.
+
 ## Safety
 
 Hunting runs the target repo's code on your machine. Run it only on repos you trust: container isolation isn't supported yet.
@@ -111,10 +151,11 @@ uv run ruff check .
 
 | Folder | What's in it |
 |---|---|
-| `commands/` | `/hunt` and `/hunt-post` |
-| `agents/` | `bug-hunter` and `repro-verifier` |
+| `commands/` | `/hunt`, `/hunt-post` and `/audit` |
+| `agents/` | `bug-hunter`, `repro-verifier`, `security-auditor` and `finding-verifier` |
 | `edge-inputs/` | the edge-input lists hunters work through |
-| `scripts/` | standard-library Python the commands call: `scope.py`, `known.py`, `drafts.py`, `post.py`, `throwaway.py` |
+| `security/` | the security and PII checklists auditors work through |
+| `scripts/` | standard-library Python the commands call: `scope.py`, `known.py`, `drafts.py`, `post.py`, `throwaway.py`, `isolate.py`, `secrets_scan.py`, `findings.py` |
 | `tests/` | pytest for the scripts, and checks on the prompt files |
 
 Changes go through sdlc (`/sdlc:start`). Principles: [constitution](docs/sdlc/constitution.md). Background: [BRIEF.md](BRIEF.md) and the [PRD](docs/sdlc/prd.md). Releases: [release runbook](knowledge/runbooks/release.md).

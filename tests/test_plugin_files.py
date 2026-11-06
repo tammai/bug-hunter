@@ -120,3 +120,64 @@ def test_agents_allow_only_the_listed_locked_installs():
         assert "npm ci`)" not in body, rel
     _, verifier = read("agents/repro-verifier.md")
     assert "any other install" in verifier and "CANNOT RUN" in verifier
+
+
+def test_audit_agents_are_read_only_isolated_and_adversarial():
+    for rel in ("agents/security-auditor.md", "agents/finding-verifier.md"):
+        meta, body = read(rel)
+        assert meta.get("name") and meta.get("description") and meta.get("tools"), rel
+        tools = {t.strip() for t in meta["tools"].split(",")}
+        assert not tools & {"Edit", "Write", "NotebookEdit", "MultiEdit"}, rel
+        assert ISOLATE_LINE in body and "scripts/throwaway.py" in body, rel
+        for needed in ("proven", "traced", "advisory", "<redacted>", "policy.md",
+                       "**Severity:**", "## Where", "## Evidence", "## Impact", "## Fix"):
+            assert needed in body, f"{rel}: {needed}"
+    _, auditor = read("agents/security-auditor.md")
+    assert "at most 8 findings" in auditor and "=== PII INVENTORY ===" in auditor
+    _, verifier = read("agents/finding-verifier.md")
+    assert "the finding alone" in verifier and "disprove" in verifier
+    for verdict in ("VERDICT: CONFIRMED", "VERDICT: NOT CONFIRMED", "VERDICT: CANNOT CHECK"):
+        assert verdict in verifier
+
+
+CHECKLIST_ITEMS = {
+    "generic": ["IDOR", "role check", "SQL injection", "command injection", "path traversal",
+                "SSRF", "secret", "rate limit", "CORS", "error", "critical", "high", "medium",
+                "low"],
+    "node": ["req.params", "middleware order", "prototype pollution", "alg", "eval(", "ReDoS"],
+    "vue": ["v-html", "localStorage", "VITE_", "VUE_APP_", "open redirect", "route guard"],
+    "pii": ["email", "phone", "national id", "payment card", "location", "health",
+            "pii-logged", "pii-exposed", "pii-third-party", "pii-storage", "pii-retention"],
+}
+
+
+def test_security_checklists_cover_their_items():
+    for name, items in CHECKLIST_ITEMS.items():
+        text = (ROOT / f"security/{name}.md").read_text(encoding="utf-8").casefold()
+        for item in items:
+            assert item.casefold() in text, f"{name}: {item}"
+
+
+def test_audit_command_asks_first_and_never_posts():
+    meta, body = read("commands/audit.md")
+    assert meta.get("description") and "--max" in meta.get("argument-hint", "")
+    order = ["--focus security", "owner's yes", "scripts/throwaway.py", "scripts/secrets_scan.py",
+             "from-secrets-scan", "from-npm-audit", "bug-hunter:security-auditor",
+             "findings.py\" check", "bug-hunter:finding-verifier", "findings.py\" dedupe",
+             "findings.py\" next", "findings.py\" inventory", "findings.py\" report"]
+    positions = [body.index(marker) for marker in order]
+    assert positions == sorted(positions)
+    for banned in ("post.py", "gh issue", "gh api"):
+        assert banned not in body, banned
+
+
+def test_constitution_prd_and_readme_cover_audit():
+    constitution = (ROOT / "docs/sdlc/constitution.md").read_text(encoding="utf-8")
+    assert "**Version**: 1.1.0" in constitution
+    assert "traced" in constitution and "audit finding" in constitution.lower()
+    prd = (ROOT / "docs/sdlc/prd.md").read_text(encoding="utf-8")
+    goals, non_goals = prd.split("**Non-goals**")
+    assert "security and PII" in goals
+    assert "audit findings" in non_goals.split("## Core")[0]
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "/audit" in readme and "policy.md" in readme
