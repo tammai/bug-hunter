@@ -1,0 +1,242 @@
+import json
+import os
+import socket
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+from conftest import SCRIPTS, run_script
+
+ORIGIN = "https://github.com/acme/shop.git"
+TOKEN = "Bearer Zq8Wx7CeTk41"
+TENANT = "acme-tenant-42"
+
+
+def home_env(tmp_path: Path) -> tuple[dict[str, str], Path]:
+    home = tmp_path / "home dir"
+    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home))
+    return env, home / ".bug-hunter" / "github.com" / "acme" / "shop" / "targets.json"
+
+
+def write_targets(path: Path, targets) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(targets if isinstance(targets, str) else json.dumps(targets),
+                    encoding="utf-8")
+
+
+def start_stub(tmp_path: Path, rules: list[dict]):
+    scenario = tmp_path / "stub.json"
+    scenario.write_text(json.dumps(rules), encoding="utf-8")
+    log = tmp_path / "stub log.jsonl"
+    proc = subprocess.Popen(
+        [sys.executable, str(SCRIPTS / "stub_server.py"), "--scenario", str(scenario),
+         "--log", str(log)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return proc, proc.stdout.readline().strip().removeprefix("listening on "), log
+
+
+def start_proxy(repo, target, env, log, *extra):
+    proc = subprocess.Popen(
+        [sys.executable, str(SCRIPTS / "live_proxy.py"), "--repo", str(repo), "--target", target,
+         "--log", str(log), *extra],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    line = proc.stdout.readline().strip()
+    assert line.startswith("listening on http://127.0.0.1:"), (line, proc.stderr.read())
+    return proc, line.removeprefix("listening on ")
+
+
+def stop(*procs) -> str:
+    out = ""
+    for proc in procs:
+        proc.terminate()
+        stdout, stderr = proc.communicate(timeout=5)
+        out += stdout + stderr
+    return out
+
+
+def call(url, method="GET", body=None, headers=None):
+    req = urllib.request.Request(url, data=body, method=method, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, dict(resp.headers), resp.read().decode()
+    except urllib.error.HTTPError as err:
+        return err.code, dict(err.headers), err.read().decode()
+
+
+def raw(base: str, request: bytes) -> bytes:
+    host, port = base.removeprefix("http://").split(":")
+    with socket.create_connection((host, int(port)), timeout=5) as sock:
+        sock.sendall(request)
+        return sock.recv(200).split(b"\r\n")[0]
+
+
+def entries(log: Path) -> list[dict]:
+    if not log.exists():
+        return []
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+
+
+def test_targets_resolve_or_fail_cleanly(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    log = tmp_path / "proxy.jsonl"
+    for target in ("http://localhost:5173", "http://127.0.0.1:8000/api", "http://[::1]:3000"):
+        proc, _ = start_proxy(repo, target, env, log)
+        stop(proc)
+
+    def fails(target: str) -> None:
+        result = run_script("live_proxy", "--repo", repo, "--target", target, "--log", log,
+                            env=env)
+        assert result.returncode == 1, (target, result.stdout)
+        assert result.stderr.startswith("error:") and "Traceback" not in result.stderr, target
+
+    fails("uat")  # no targets.json yet
+    write_targets(targets, "{not json")
+    fails("uat")
+    write_targets(targets, {"uat": {"url": "https://uat.example.com"},
+                            "ftp": {"url": "ftp://files.example.com"},
+                            "typed": {"url": "https://uat.example.com", "writes": "yes"},
+                            "accts": {"url": "https://uat.example.com", "accounts": ["alice"]}})
+    proc, _ = start_proxy(repo, "uat", env, log)
+    stop(proc)
+    for target in ("prod", "https://uat.example.com", "https://example.com", "http://localhost",
+                   "ftp", "typed", "accts", ""):
+        fails(target)
+
+
+def test_forwards_only_to_the_target(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    stub, stub_base, stub_log = start_stub(tmp_path, [
+        {"path": "/api/items", "responses": [
+            {"status": 418, "headers": {"X-Upstream": "yes"}, "body": {"ok": 1}}]},
+        {"path": "/api/go", "responses": [
+            {"status": 302, "headers": {"Location": "https://example.com/elsewhere"}}]},
+    ])
+    write_targets(targets, {"uat": {"url": stub_base + "/api"}})
+    proxy, base = start_proxy(repo, "uat", env, tmp_path / "proxy.jsonl")
+    try:
+        status, headers, body = call(base + "/items?page=2&q=a%20b")
+        assert status == 418 and headers["X-Upstream"] == "yes" and json.loads(body) == {"ok": 1}
+        status, headers, _ = call_no_redirect(base + "/go")
+        assert status == 302 and headers["Location"] == "https://example.com/elsewhere"
+        assert b" 400 " in raw(base, b"GET http://example.com/x HTTP/1.1\r\nHost: x\r\n\r\n")
+        assert b" 400 " in raw(base, b"GET /../secret HTTP/1.1\r\nHost: x\r\n\r\n")
+        assert b" 400 " in raw(base, b"GET /%2e%2e/secret HTTP/1.1\r\nHost: x\r\n\r\n")
+    finally:
+        stop(proxy, stub)
+    seen = entries(stub_log)
+    assert [(e["path"], e["query"]) for e in seen] == [
+        ("/api/items", "page=2&q=a%20b"), ("/api/go", "")]
+
+
+def call_no_redirect(url):
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+
+    opener = urllib.request.build_opener(NoRedirect)
+    try:
+        with opener.open(url, timeout=10) as resp:
+            return resp.status, dict(resp.headers), resp.read().decode()
+    except urllib.error.HTTPError as err:
+        return err.code, dict(err.headers), err.read().decode()
+
+
+def test_accounts_are_added_and_never_logged(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    stub, stub_base, stub_log = start_stub(tmp_path, [{"path": "/me", "responses": [{}]}])
+    write_targets(targets, {"uat": {"url": stub_base, "accounts": {
+        "alice": {"Authorization": TOKEN, "X-Tenant": TENANT}}}})
+    proxy_log = tmp_path / "proxy.jsonl"
+    proxy, base = start_proxy(repo, "uat", env, proxy_log)
+    try:
+        assert call(base + "/me", headers={"X-Bug-Hunter-Account": "alice"})[0] == 200
+        assert call(base + "/me", headers={"X-Bug-Hunter-Account": "mallory"})[0] == 400
+        assert call(base + "/me", headers={"Authorization": "Bearer invented"})[0] == 200
+    finally:
+        output = stop(proxy, stub)
+    seen = entries(stub_log)
+    assert len(seen) == 2
+    first = {k.lower(): v for k, v in seen[0]["headers"].items()}
+    assert first["x-tenant"] == TENANT and "authorization" in first
+    assert "x-bug-hunter-account" not in first
+    logged = proxy_log.read_text(encoding="utf-8")
+    assert [e.get("account") for e in entries(proxy_log)][:1] == ["alice"]
+    for secret in ("Zq8Wx7CeTk41", TENANT):
+        assert secret not in logged and secret not in output, secret
+
+
+def test_writes_only_where_allowed_and_logged(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    stub, stub_base, stub_log = start_stub(tmp_path, [{"path": "/orders", "responses": [
+        {"status": 201, "body": {"id": 7}}]}])
+    write_targets(targets, {"uat": {"url": stub_base}})
+    read_only_log = tmp_path / "ro.jsonl"
+    proxy, base = start_proxy(repo, "uat", env, read_only_log)
+    try:
+        for method in ("POST", "PUT", "PATCH", "DELETE"):
+            status, _, body = call(base + "/orders", method, b'{"qty": 1}',
+                                   {"Content-Type": "application/json"})
+            assert status == 403 and "error" in json.loads(body), method
+        assert call(base + "/orders")[0] == 201
+    finally:
+        stop(proxy)
+    assert [e["method"] for e in entries(stub_log)] == ["GET"]
+
+    writes_log = tmp_path / "rw.jsonl"
+    proxy, base = start_proxy(repo, stub_base, env, writes_log)  # localhost: writes allowed
+    try:
+        status, _, _ = call(base + "/orders?password=hunter2x", "POST",
+                            b'{"qty": -1, "password": "hunter2x"}',
+                            {"Content-Type": "application/json"})
+        assert status == 201
+    finally:
+        stop(proxy, stub)
+    assert entries(stub_log)[-1]["method"] == "POST"
+    line = entries(writes_log)[-1]
+    assert (line["method"], line["path"], line["status"]) == ("POST", "/orders", 201)
+    assert "account" in line and "hunter2x" not in writes_log.read_text(encoding="utf-8")
+
+
+def test_budget_and_rate(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, _ = home_env(tmp_path)
+    stub, stub_base, stub_log = start_stub(tmp_path, [{"path": "/x", "responses": [{}]}])
+    proxy, base = start_proxy(repo, stub_base, env, tmp_path / "p.jsonl",
+                              "--max-requests", "6", "--rate", "5")
+    statuses: list[int] = []
+    try:
+        threads = [threading.Thread(target=lambda: statuses.append(call(base + "/x")[0]))
+                   for _ in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+        assert call(base + "/x")[0] == 429
+    finally:
+        stop(proxy, stub)
+    assert sorted(statuses) == [200] * 6
+    times = sorted(e["time"] for e in entries(stub_log))
+    assert len(times) == 6 and times[-1] - times[0] >= 0.9
+
+
+def test_proxy_flags_are_checked(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, _ = home_env(tmp_path)
+    for flag, value in (("--max-requests", "0"), ("--rate", "0"), ("--rate", "nan"),
+                        ("--idle-exit", "0")):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "live_proxy.py"), "--repo", str(repo), "--target",
+             "http://localhost:9", "--log", str(tmp_path / "l.jsonl"), flag, value],
+            capture_output=True, text=True, env=env, timeout=10)
+        assert result.returncode != 0 and "Traceback" not in result.stderr, (flag, value)
+    started = time.monotonic()
+    proc, _ = start_proxy(repo, "http://localhost:9", env, tmp_path / "l.jsonl",
+                          "--idle-exit", "1")
+    assert proc.wait(timeout=10) == 0 and time.monotonic() - started < 10

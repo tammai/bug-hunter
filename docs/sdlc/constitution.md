@@ -1,5 +1,12 @@
 <!--
 Sync report
+- Version: 1.1.0 → 1.2.0 (MINOR: guidance materially expanded; nothing removed)
+- Principles changed: III. Hands Off the Target (live hunts may send requests to an owner-allowed
+  dev server or UAT through the proxy; never production)
+- Follow-ups: .claude/rules/plugin-prompts.md's first line ("run its code only in a scratch copy
+  or temp dir") should mention the live-target exception and point at Principle III.
+
+Previous sync report
 - Version: 1.0.0 → 1.1.0 (MINOR: guidance materially expanded for audit findings; nothing removed)
 - Principles changed: I. Proof Before Report (audit findings: proof levels and an independent
   attempt to disprove), II. The Owner Posts (audit findings are never filed), VI. Bounded Cost
@@ -24,7 +31,13 @@ Rationale: a person decides what is filed in their repo, and a published vulnera
 
 ### III. Hands Off the Target
 Hunters and verifiers MUST NOT edit the target repo. Target code MUST run only in a throwaway copy or temp dir (a container for repos the owner doesn't trust). Scratch files MUST stay in the scratch dir, never in the target.
-Rationale: hunting must leave no trace and do no harm.
+A live hunt (`/hunt --target`) MAY send requests to a running server, and then MUST:
+- send them only through bug-hunter's proxy (`scripts/live_proxy.py`);
+- reach only localhost or a target the owner listed by name in their `targets.json`, outside the repo, and never production;
+- write only where the owner allowed writes for that target;
+- show the request budget before the run and stop at it.
+Agents MUST NOT be given the target's URL or its account tokens.
+Rationale: hunting must leave no trace and do no harm; a live hunt may change only what the owner said it may.
 
 ### IV. Test-First Scripts
 Every change to `scripts/` MUST start with a failing pytest that covers the behaviour, including the edge inputs bug-hunter itself hunts for (spaces and non-ASCII in paths, CRLF, empty files, missing JSON keys, subprocess failure). Scripts MUST use only the Python 3.12 standard library.
@@ -53,4 +66,4 @@ Changes go through sdlc (define → build → review → ship). CI runs `uv run 
 
 This constitution overrides other practice in this repo. Amendments go through `sdlc:project-constitution` with a version bump and a sync report. Reviews check changes against the MUSTs above.
 
-**Version**: 1.1.0 | **Ratified**: 2026-11-05 | **Last Amended**: 2026-11-06
+**Version**: 1.2.0 | **Ratified**: 2026-11-05 | **Last Amended**: 2026-11-06

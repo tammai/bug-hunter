@@ -18,6 +18,7 @@ Developers and maintainers who own a repo and want its edge-case bugs found and 
 - One command takes a repo to a folder of ready-to-file drafts.
 - No duplicates of open issues or earlier findings.
 - The expected cost is shown before a run, with a cap on the number of hunters.
+- `/hunt --target` hunts a running local dev server or UAT the owner allowed, through a proxy that holds the test logins and a request budget; never production.
 - Before deploy, a security and PII audit (`/audit`) reports authorization, injection, secrets, session and personal-data problems, each with evidence a second agent failed to disprove, plus a PII inventory, in a private report.
 
 **Non-goals**

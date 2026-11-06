@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 
 from conftest import run_script
@@ -114,3 +115,28 @@ def test_skips_names_that_are_not_utf8(make_repo):
     assert result.returncode == 0, result.stderr
     assert [f for p in out["parts"] for f in p["files"]] == ["ok.py"]
     assert "UTF-8" in result.stderr and "Traceback" not in result.stderr
+
+
+def test_live_keeps_only_parts_serving_http(make_repo):
+    repo = make_repo({
+        "api/server.js": "const app = express()\napp.get('/orders', list)\n",
+        "web/views.py": "@app.route('/orders')\ndef orders():\n    return []\n",
+        "svc/main.go": 'func main() {\n\thttp.HandleFunc("/x", h)\n}\n',
+        "ctl/OrderController.java": '@GetMapping("/orders")\npublic List<O> all() {}\n',
+        "lib/util.py": "def total(items):\n    return sum(items)\n",
+    })
+    live = run_script("scope", repo, "--live")
+    assert live.returncode == 0, live.stderr
+    parts = {p["dir"]: p["edge_inputs"] for p in json.loads(live.stdout)["parts"]}
+    assert set(parts) == {"api", "web", "svc", "ctl"}
+    assert all(inputs[-1] == "live-http" for inputs in parts.values())
+
+    plain = json.loads(run_script("scope", repo).stdout)
+    assert "lib" in {p["dir"] for p in plain["parts"]}
+    assert all("live-http" not in p["edge_inputs"] for p in plain["parts"])
+
+    shutil.rmtree(repo)
+    none = make_repo({"lib/util.py": "def total(items):\n    return sum(items)\n"})
+    result = run_script("scope", none, "--live")
+    assert result.returncode == 1 and result.stderr.startswith("error:")
+    assert "Traceback" not in result.stderr

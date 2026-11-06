@@ -196,8 +196,17 @@ CALLS_OUT = re.compile("|".join(INTEGRATIONS["markers"]), re.M)
 CALLS_OUT_JS = re.compile("|".join(INTEGRATIONS["markers"] + INTEGRATIONS["js_markers"]), re.M)
 
 
+ROUTES = STACKS["routes"]
+SERVES_HTTP = re.compile("|".join(ROUTES["markers"]), re.M)
+
+
 def _calls_third_parties(root: Path, files: list[str]) -> bool:
     """Whether any file uses an HTTP client or a third-party SDK."""
+    return _any_matches(root, files, CALLS_OUT, CALLS_OUT_JS)
+
+
+def _any_matches(root: Path, files: list[str], markers: re.Pattern,
+                 js_markers: re.Pattern) -> bool:
     for name in files:
         path = root / name
         try:
@@ -207,8 +216,8 @@ def _calls_third_parties(root: Path, files: list[str]) -> bool:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        markers = CALLS_OUT_JS if path.suffix in INTEGRATIONS["js_extensions"] else CALLS_OUT
-        if markers.search(text):
+        found = js_markers if path.suffix in INTEGRATIONS["js_extensions"] else markers
+        if found.search(text):
             return True
     return False
 
@@ -236,6 +245,8 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max", type=int, dest="cap", help="at most this many hunters")
     parser.add_argument("--focus", choices=["security"],
                         help="security audit: config and schema files too, security parts first")
+    parser.add_argument("--live", action="store_true",
+                        help="only parts that serve HTTP routes, for hunting a running server")
     args = parser.parse_args(argv)
     if args.cap is not None and args.cap < 1:
         parser.error("--max must be 1 or more")
@@ -264,10 +275,24 @@ def _main(argv: list[str] | None = None) -> int:
         where = ", ".join(p or "." for p in empty) if paths else args.repo
         print(f"error: no tracked source files under: {where}", file=sys.stderr)
         return 1
-    out = _build(files, paths, args.cap, focus)
+    out = _build(files, paths, None if args.live else args.cap, focus)
+    if args.live:
+        serving = [p for p in out["parts"] if _any_matches(root, p["files"], SERVES_HTTP,
+                                                            SERVES_HTTP)]
+        if not serving:
+            print("error: no part defines HTTP routes, so there is nothing to hunt live",
+                  file=sys.stderr)
+            return 1
+        for number, part in enumerate(serving, 1):
+            part["id"] = number
+        kept = serving if args.cap is None else serving[: args.cap]
+        out = {"parts": kept, "skipped": serving[len(kept):], "hunters": len(kept),
+               "est_tokens": len(kept) * TOKENS_PER_HUNTER}
     for part in out["parts"]:
         if _calls_third_parties(root, part["files"]):
             part["edge_inputs"].append(INTEGRATIONS["edge_inputs"])
+        if args.live:
+            part["edge_inputs"].append(ROUTES["edge_inputs"])
     if focus:
         tracked_set = set(files)
         for part in out["parts"] + out["skipped"]:
