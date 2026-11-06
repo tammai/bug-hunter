@@ -33,7 +33,7 @@ def is_placeholder(value: str) -> bool:
         return True  # `<your api key>` cut at its first space
     if "<" in value or ">" in value:
         return False
-    if re.fullmatch(rf"{RULES['key_prefix']}?[xX*#•]{{3,}}", value):
+    if re.fullmatch(rf"{RULES['key_prefix']}?(?:[xX*#•]{{3,}}|\.{{3,}}|…+)", value):
         return True  # masking alone, or after a known key prefix: sk-xxxx, AKIAXXXX
     lowered = value.lower()
     return bool(
@@ -43,9 +43,14 @@ def is_placeholder(value: str) -> bool:
     )
 
 
+TRIVIAL = {"true", "false", "yes", "no", "on", "off", "null", "none"}
+
+
 def counts(pattern: dict, value: str) -> bool:
     """Whether a pattern's match is a value worth reporting, not a reference or stand-in."""
-    if REFERENCE.fullmatch(value):
+    if REFERENCE.fullmatch(value) or value.isdigit() or value.lower() in TRIVIAL:
+        return False
+    if len(value) < 4:
         return False
     if pattern.get("needs_mix") and not (re.search(r"[A-Za-z]", value)
                                          and re.search(r"\d", value)):
@@ -57,30 +62,61 @@ def _digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def windows(text: str) -> list[str]:
-    """The 8-character slices fingerprinted and checked; single-case words are left out
-    because ordinary prose is full of them."""
-    return [
-        text[i : i + 8] for i in range(len(text) - 7)
-        if not (text[i : i + 8].isalpha()
-                and (text[i : i + 8].islower() or text[i : i + 8].isupper()))
-    ]
+def _single_case(text: str) -> bool:
+    return text.isalpha() and (text.islower() or text.isupper())
+
+
+def windows(text: str, size: int = 8) -> list[str]:
+    """Slices of one size; at 8, single-case words are left out because prose is full of them."""
+    slices = [text[i : i + size] for i in range(len(text) - size + 1)]
+    return [w for w in slices if size != 8 or not _single_case(w)]
+
+
+def _fingerprintable(value: str) -> bool:
+    """Worth fingerprinting: long enough, and not a word or setting that prose also uses."""
+    if len(value) < 6 or value.isdigit() or value.lower() in TRIVIAL:
+        return False
+    words = re.fullmatch(r"[a-z]+(?:[-_.][a-z]+)*", value.lower())
+    return not (words and (value.islower() or value.isupper())
+                and sum(c.isalpha() for c in value) < 12)
 
 
 def fingerprints(values: list[str]) -> dict:
-    """Hashes of each secret and of its slices, so findings can be checked without the values."""
+    """Hashes of each secret, its 8-character slices and its 12-character single-case slices,
+    so findings can be checked without the values themselves."""
+    kept = [v for v in values if _fingerprintable(v)]
     return {
-        "tokens": sorted({_digest(v) for v in values}),
-        "windows": sorted({_digest(w) for v in values for w in windows(v)}),
+        "lengths": sorted({len(v) for v in kept}),
+        "values": sorted({_digest(v) for v in kept}),
+        "windows": sorted({_digest(w) for v in kept for w in windows(v)}),
+        "long_windows": sorted({_digest(w) for v in kept for w in windows(v, 12)
+                                if _single_case(w)}),
     }
 
 
+def load_prints(data: object) -> dict:
+    """Fingerprints as sets, checked for shape once."""
+    if not isinstance(data, dict):
+        raise ValueError("fingerprints must be a JSON object")
+    loaded: dict = {"lengths": [n for n in data.get("lengths", []) if isinstance(n, int)]}
+    for key in ("values", "windows", "long_windows"):
+        items = data.get(key, [])
+        if not isinstance(items, list):
+            raise ValueError(f"fingerprints {key} must be a list")
+        loaded[key] = {str(i) for i in items}
+    return loaded
+
+
 def known_secret_in(text: str, prints: dict) -> bool:
-    tokens = set(prints.get("tokens", []))
-    slices = set(prints.get("windows", []))
-    if any(_digest(t) in tokens for t in re.split(r"[\s'\"=:,;|`()\[\]{}<>]+", text) if t):
+    """Whether text holds a known secret anywhere, or one of its fingerprinted slices."""
+    for length in prints["lengths"]:
+        if any(_digest(text[i : i + length]) in prints["values"]
+               for i in range(len(text) - length + 1)):
+            return True
+    if any(_digest(w) in prints["windows"] for w in windows(text)):
         return True
-    return any(_digest(w) in slices for w in windows(text))
+    return any(_digest(w) in prints["long_windows"] for w in windows(text, 12)
+               if _single_case(w))
 
 
 def _git_names(repo: str, *args: str) -> list[str] | None:
@@ -130,7 +166,15 @@ def _scan_file(repo: Path, name: str, committed: bool,
     if text is None:
         return []
     found = []
+    in_key = False
     for number, line in enumerate(text.splitlines(), 1):
+        if in_key:
+            # A key's body lines are the secret, not just its BEGIN header.
+            if "-----END" in line:
+                in_key = False
+            elif values is not None and len(line.strip()) >= 16:
+                values.append(line.strip())
+            continue
         hits = []
         for order, pattern in enumerate(PATTERNS):
             if pattern.get("env_only") and not _is_env(rel.name):
@@ -141,6 +185,8 @@ def _scan_file(repo: Path, name: str, committed: bool,
                     continue
                 if values is not None and not is_placeholder(value):
                     values.append(value)
+                if pattern["name"] == "private-key":
+                    in_key = True
                 severity = _severity(pattern, rel, value, committed)
                 hits.append((SEVERITY_RANK[severity], order, pattern["name"], len(value),
                              severity))
@@ -167,7 +213,8 @@ def _main(argv: list[str] | None = None) -> int:
         # --directory collapses an ignored folder to one entry; this finds .env files in it.
         ignored_env = _git_names(
             args.repo, "--others", "--ignored", "--exclude-standard", "--", ":(glob)**/.env*",
-            *(f":(exclude,glob)**/{d}/**" for d in RULES["skip_dirs"]),
+            *(f":(exclude,glob)**/{d}/**"
+              for d in RULES["skip_dirs"] + RULES["env_glob_excludes"]),
         )
     except FileNotFoundError:
         print("error: git is not installed", file=sys.stderr)

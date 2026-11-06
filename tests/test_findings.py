@@ -331,3 +331,64 @@ def test_dedupe_keys_on_path_line_and_merges_where(tmp_path):
 
     result = run_script("findings", "dedupe", audit, audit)
     assert result.returncode == 1 and "same folder" in result.stderr
+
+
+def test_known_values_are_found_whatever_surrounds_them(make_repo, tmp_path):
+    letters = "letmein" + "nowplease"
+    short = "Hu" + "n7er"
+    body = ["MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7" + "Vq" * 6,
+            "kU2Zq9TxW2vLp8Rk" + "Ab" * 22]
+    repo = make_repo({
+        ".env": f"DB_PASSWORD={letters}\nPIN_PASSWORD={short}\nTOKEN_TTL=3600\nKEY_ID=1\n"
+                "SESSION_SECRET_ROTATE=true\nAPI_KEY_HEADER=x-api-key\n",
+        "deploy/key.pem": "-----BEGIN " + "PRIVATE KEY-----\n" + "\n".join(body)
+                          + "\n-----END " + "PRIVATE KEY-----\n",
+        "db.yaml": "url: postgres://postgres:postgres@db:5432/app\n",
+    })
+    prints = tmp_path / "fingerprints.json"
+    assert run_script("secrets_scan", repo, "--fingerprints", prints).returncode == 0
+
+    leaks = (f"the .env password is {letters}.", f"**{letters}**", f"{letters}!",
+             f"/{letters}/", f"{letters[:12]}…", f"{short}.", f"`{short}`", body[0], body[1][:40])
+    for leak in leaks:
+        text = GOOD.replace("## Fix\n", f"## Fix\n```\n{leak}\n```\n")
+        result = run_script("findings", "check", write(tmp_path, text, "leak.md"),
+                            "--fingerprints", prints)
+        assert result.returncode == 1 and "secret" in result.stdout, leak
+
+    harmless = GOOD.replace("src/routes/orders.js:12", "src/routes/orders.js:1").replace(
+        "## Fix\n", "## Fix\nSet TOKEN_TTL to 3600, send the `x-api-key` header, "
+        "true for postgres, line 8.\n```\nsha256 " + "ab12" * 16 + "\n```\n")
+    result = run_script("findings", "check", write(tmp_path, harmless, "ok.md"),
+                        "--fingerprints", prints)
+    assert result.returncode == 0, result.stdout
+
+
+def test_doc_placeholders_and_cut_keys(tmp_path):
+    ok = GOOD.replace("## Fix\n", "## Fix\nUse a key like `sk-proj-...` or `sk-ant-…`, "
+                      'and cache as `cacheKey: "users:v2"`.\n')
+    assert run_script("findings", "check", write(tmp_path, ok, "ok.md")).returncode == 0
+    for cut in ("AKIA" + "Q3J5ZP", "sk-" + "proj-" + "Ab12Cd<redacted>",
+                "ghp" + "_" + "Ab12Cd (truncated)"):
+        text = GOOD.replace("## Fix\n", f"## Fix\n```\n{cut}\n```\n")
+        result = run_script("findings", "check", write(tmp_path, text, "cut.md"))
+        assert result.returncode == 1 and "secret" in result.stdout, cut
+
+
+def test_where_merge_handles_crlf_and_spaced_headings(tmp_path):
+    new, audit = tmp_path / "new", tmp_path / "audit"
+    new.mkdir()
+    audit.mkdir()
+    first = GOOD.replace("## Where", "##  Where  ").replace("\n", "\r\n")
+    second = (GOOD.replace("**Severity:** high", "**Severity:** low")
+              .replace("- `src/routes/orders.js:12` (GET /orders/:id)",
+                       "- `src/routes/admin.js:40` (GET /admin/orders/:id)"))
+    (new / "a.md").write_bytes(first.encode())
+    (new / "b.md").write_text(second, encoding="utf-8")
+    assert run_script("findings", "dedupe", new, audit).returncode == 0
+    [kept] = list(new.glob("*.md"))
+    text = kept.read_text(encoding="utf-8")
+    assert "src/routes/admin.js:40" in text
+    where = text.split("Where")[1].split("## Evidence")[0]
+    assert "src/routes/admin.js:40" in where
+    assert run_script("findings", "check", kept).returncode == 0

@@ -9,7 +9,14 @@ import tempfile
 from pathlib import Path
 
 from drafts import drafts_dir, numbered, title
-from secrets_scan import PATTERNS, SEVERITY_RANK, counts, is_placeholder, known_secret_in
+from secrets_scan import (
+    PATTERNS,
+    SEVERITY_RANK,
+    counts,
+    is_placeholder,
+    known_secret_in,
+    load_prints,
+)
 
 SEVERITIES = ["critical", "high", "medium", "low"]
 CATEGORIES = ["authz", "injection", "secrets", "session", "pii-logged", "pii-exposed",
@@ -31,6 +38,9 @@ class _Malformed(Exception):
 # check uses the vendor-shaped patterns, which code doesn't match, and the fingerprints of the
 # secrets the scan actually found.
 CHECK_PATTERNS = [p for p in PATTERNS if not p.get("env_only")]
+# A long base64 line with both cases is a key body even when the scan never saw that key.
+KEY_BODY = re.compile(r"^\s*(?=[A-Za-z0-9+/]*[A-Z])(?=[A-Za-z0-9+/]*[a-z])"
+                      r"[A-Za-z0-9+/]{60,}={0,2}\s*$", re.M)
 PRINTS: dict = {}
 
 
@@ -42,6 +52,8 @@ def _secret_hits(text: str) -> list[str]:
             if counts(pattern, value) and not is_placeholder(value):
                 hits.append(pattern["name"])
                 break
+    if KEY_BODY.search(text):
+        hits.append("key-body")
     if PRINTS and known_secret_in(text, PRINTS):
         hits.append("a secret found in this repo")
     return hits
@@ -302,11 +314,22 @@ def _merge_where(path: Path, extra: list[str]) -> None:
     lines = path.read_text(encoding="utf-8").splitlines()
     have = set(_where("\n".join(lines)))
     new = [line for line in extra if line not in have]
-    start = next((i for i, line in enumerate(lines) if line.rstrip() == "## Where"), None)
+    start = end = None
+    fence = False
+    # Headings are found the way _parse finds them: outside code blocks, spacing ignored.
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith(("```", "~~~")):
+            fence = not fence
+        if fence or not line.startswith("## "):
+            continue
+        if start is None and line[3:].strip() == "Where":
+            start = i
+        elif start is not None:
+            end = i
+            break
     if not new or start is None:
         return
-    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")),
-               len(lines))
+    end = len(lines) if end is None else end
     while end > start + 1 and not lines[end - 1].strip():
         end -= 1
     _write_private(path, "\n".join(lines[:end] + new + lines[end:]) + "\n")
@@ -421,10 +444,10 @@ def _main(argv: list[str] | None = None) -> int:
 
     try:
         if getattr(args, "fingerprints", None):
-            prints = _load(args.fingerprints)
-            if not isinstance(prints, dict):
-                raise _Malformed("--fingerprints must be the JSON secrets_scan.py wrote")
-            PRINTS.update(prints)
+            try:
+                PRINTS.update(load_prints(_load(args.fingerprints)))
+            except ValueError as exc:
+                raise _Malformed(f"--fingerprints: {exc}") from exc
         if args.command == "check":
             text = Path(args.file).read_text(encoding="utf-8")
             found = _problems(text)

@@ -141,3 +141,9 @@ def test_masked_jwt_and_hardcoded_credentials_are_found(make_repo):
     assert ("src/a.js", 2, "hardcoded-credential") in got
     assert not any(f["path"] == "src/a.js" and f["line"] == 3 for f in found)
     assert ("src/b.py", 1, "masked-key") in got and ("src/b.py", 2, "masked-key") in got
+
+
+def test_harmless_config_values_are_not_secrets(make_repo):
+    repo = make_repo({".env": "TOKEN_TTL=3600\nKEY_ID=1\nSESSION_SECRET_ROTATE=true\n"
+                              "PASSWORD_MIN_LENGTH=8\n"})
+    assert scan(repo)[1] == []
