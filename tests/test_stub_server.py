@@ -381,3 +381,29 @@ def test_idle_exit_below_a_second_is_refused(tmp_path):
          "--log", str(tmp_path / "l.jsonl"), "--idle-exit", "1e-9"],
         capture_output=True, text=True, timeout=10)
     assert result.returncode != 0 and "idle-exit" in result.stderr
+
+
+def test_replies_to_clients_that_hung_up_are_dropped_quietly(tmp_path):
+    import socket
+    import struct
+    proc, base, log = start(tmp_path, [
+        {"method": "POST", "path": "/in", "responses": [{"status": 200}]},
+        {"path": "/slow", "responses": [{"status": 200, "body": "late", "delay": 0.5}]},
+    ])
+    host, port = base.removeprefix("http://").split(":")
+    try:
+        raw = socket.create_connection((host, int(port)), timeout=5)
+        raw.sendall(b"POST /in HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
+                    b"4\r\nabcd\r\n0\r\n")
+        raw.close()
+        raw = socket.create_connection((host, int(port)), timeout=5)
+        raw.sendall(b"GET /slow HTTP/1.1\r\nHost: x\r\n\r\n")
+        raw.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        raw.close()  # a reset while the stub is still waiting to answer
+        time.sleep(1.5)
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+    entries = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert any("closed" in e.get("note", "") and e["body"] == "abcd" for e in entries)
+    assert "Traceback" not in proc.stderr.read()

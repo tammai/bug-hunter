@@ -247,3 +247,14 @@ def test_fetch_ternary_without_space_and_method_brace_on_next_line(make_repo):
     by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
     assert by_dir["tight"][-1] == "integrations"
     assert "integrations" not in by_dir["nextline"]
+
+
+def test_fetch_call_followed_by_a_block_on_the_next_line(make_repo):
+    repo = make_repo({
+        "blockafter/a.js": "const r = await fetch(u)\n{\n  let y = 1\n}\n",
+        "nextline/b.ts": "class Repo {\n  fetch(url: string): Promise<Response>\n  {\n"
+                         "    return x\n  }\n}\n",
+    })
+    by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
+    assert by_dir["blockafter"][-1] == "integrations"
+    assert "integrations" not in by_dir["nextline"]

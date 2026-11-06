@@ -10,7 +10,7 @@ Started: 2026-11-06
 Base: 36650f9
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: 8ac96a7 tree 73eb8166cc293e3369a6a78fafc5b78684b6f37f
+Verified: d18a030 tree a61e657a0feaf8e87b79e2cb11fc24be64f6e40c
 Current: Stage 3 – Review
 
 ## Stages
@@ -56,6 +56,9 @@ inline, one part
 - 2026-11-06 Stage 3: fail — code review r6: R6-1 high, R6-2..R6-6 bugs; R6-7, R6-8 tickets; asking the user
 - 2026-11-06 Stage 3: fail — code review r6: R6-1 high, R6-2..R6-6 bugs; user chose round 7
 - 2026-11-06 Stage 2: pass
+- 2026-11-06 Stage 3: fail — code review r7: all six r6 findings fixed; R7-1 medium, R7-2, R7-3, R7-5 low bugs; R7-4 ticket; asking the user
+- 2026-11-06 Stage 3: fail — code review r7: R7-1 medium, R7-2, R7-3, R7-5 low bugs; R7-4 ticket; user chose round 8
+- 2026-11-06 Stage 2: pass
 
 ## Deviations
 - 2026-11-06 tests/test_plugin_files.py What: the every-stack edge-list test now allows integrations.md next to generic.md. Why: integrations is chosen by what a part calls, not by its stack, so stacks.json names it in its own integrations block. Effect: the test still fails on any other unnamed list.
@@ -65,6 +68,7 @@ inline, one part
 - 2026-11-06 scripts/stub_server.py, scripts/stacks.json, agents/*.md, tests/* What: round 5. A redaction that decides to withhold always withholds; only a body that isn't in its claimed shape may be logged raw, and only with no secret word and no \\u or %xx escapes; --idle-exit waits for in-flight responses; chunk sizes must be plain hex (negative refused); the fetch( marker skips definitions with a return type or multi-line parameters; node-fetch restored; .mts, .cts and .html count as JS for markers, and .mts/.cts join the node stack's file types so those files are hunted at all; drafts start the stub on a fixed port and wait for it; the verifier's stale stub note removed; SECRET_HEADER alias removed. Why: built-in code review r4 R4-1, R4-3..R4-9. Effect: R4-2 (v0.2.0's stub lacks --idle-exit) needs no flag now, since drafts rely on the 600 s default from v0.3.0.
 - 2026-11-06 scripts/stub_server.py, scripts/stacks.json, agents/bug-hunter.md, tests/* What: round 6. One secret check (_has_secret) for every name, value, header and fallback body, decoding nested %xx, \u, \x and &# escapes before matching (an unparsed body with escapes but no secret is now logged); a malformed body's partial goes through it; an empty chunk-size line is malformed; --idle-exit must be a finite number above 0; the fetch( definition lookahead needs the return type's colon right after ) and stays on one line, so ternaries count; drafts start the stub on port 0, read the URL from stub.out, save stub.pid and end with a kill step. Why: built-in code review r5 R5-1..R5-3, R5-5..R5-7. Effect: R5-4 (.html only matters for --focus security) is a ticket, not a bug.
 - 2026-11-06 scripts/stub_server.py, scripts/stacks.json, agents/bug-hunter.md, tests/* What: round 7. A form or query piece is withheld when its decoded text has a secret word anywhere, unless it is a plain name=value pair with a secret name (then the value is redacted); the fetch( definition lookahead takes a type only when the colon follows ) at once and isn't followed by {, and allows the brace on the next line; --idle-exit must be at least 1 s; a client that closes mid-body (chunked or short Content-Length) is logged with note 'client closed mid-body' and gets no answer; the draft prose no longer says fixed port. Why: built-in code review r6 R6-1..R6-6. Effect: R6-7 (stub lingers until idle exit when a draft fails midway) and R6-8 (deeply nested %25 withheld) are tickets.
+- 2026-11-06 scripts/stub_server.py, scripts/stacks.json, tests/* What: round 8. End of input in the chunked trailers counts as a hang-up (logged as client closed mid-body, no answer); a reply to a client that has hung up (broken pipe, reset) is dropped quietly for every request, not just bad bodies; the fetch( lookahead lets the { sit on the next line only after a return type, so a call followed by a block on the next line counts again (an untyped fetch method with its brace on the next line now counts as a call: one extra edge list). Why: built-in code review r7 R7-1..R7-3, R7-5. Effect: R7-4 (a bare secret word with no = withholds the whole query) is a ticket.
 
 ## Open questions
 -

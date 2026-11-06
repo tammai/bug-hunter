@@ -196,6 +196,12 @@ def _handler(rules: list[dict], log: Path, seen: list) -> type[BaseHTTPRequestHa
         def log_message(self, *args: object) -> None:
             pass  # the JSON log is the record; stderr stays quiet
 
+        def handle(self) -> None:
+            try:
+                super().handle()
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the client hung up before the answer; nothing is left to tell it
+
         def _read_body(self) -> tuple[bytes, int]:
             """The whole request body (chunked or sized), so the socket is left clean."""
             self._kept, self._total = bytearray(), 0
@@ -216,8 +222,12 @@ def _handler(rules: list[dict], log: Path, seen: list) -> type[BaseHTTPRequestHa
                     if size > MAX_CHUNK:
                         raise ValueError("chunk too large")
                     if size == 0:
-                        while self.rfile.readline().strip():
-                            pass  # trailers
+                        while True:  # trailers, up to the blank line
+                            line = self.rfile.readline()
+                            if not line:
+                                raise ConnectionError("client closed mid-body")
+                            if not line.strip():
+                                break
                         break
                     keep(self.rfile.read(size))
                     self.rfile.readline()
