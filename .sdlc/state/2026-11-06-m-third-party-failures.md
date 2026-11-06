@@ -60,6 +60,7 @@ inline, one part
 - 2026-11-06 Stage 3: fail — code review r7: R7-1 medium, R7-2, R7-3, R7-5 low bugs; R7-4 ticket; user chose round 8
 - 2026-11-06 Stage 2: pass
 - 2026-11-06 Stage 3: pass — code review r8 PASS
+- 2026-11-06 deployed v0.3.0 to GitHub release: smoke test pass
 
 ## Deviations
 - 2026-11-06 tests/test_plugin_files.py What: the every-stack edge-list test now allows integrations.md next to generic.md. Why: integrations is chosen by what a part calls, not by its stack, so stacks.json names it in its own integrations block. Effect: the test still fails on any other unnamed list.
