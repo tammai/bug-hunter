@@ -424,3 +424,42 @@ def test_one_line_key_bodies_are_fingerprinted_and_urls_are_not(make_repo, tmp_p
         result = run_script("findings", "check", write(tmp_path, GOOD, "g.md"),
                             "--fingerprints", prints)
         assert result.returncode == 1 and "Traceback" not in result.stderr, bad
+
+
+def test_key_bodies_in_every_layout_and_slash_secrets_are_fingerprinted(make_repo, tmp_path):
+    from test_secrets_scan import BEGIN, BODY, END
+
+    slash_line = "/Rk4AbCdZq9TxW2vLp8" + "Qw3Er5Ty7Ui9Op1As" * 2
+    concat = "Zq9TxW2vLp8Rk4Ab" + "Cd5Ef7Gh9Ij1Kl3Mn" * 2
+    legacy = "Lg8Hy6Tf4Rd2Se0Wa" + "Qz7Xs5Cd3Vf1Bg9Nh" * 2
+    env_secret = "/Zq9TxW2vLp8" + "Rk4AbCdEfGh"
+    repo = make_repo({
+        "keys/a.pem": f"{BEGIN}\n{BODY}\n{slash_line}\n{END}\n",
+        "src/Fixture.java": f'String KEY = "{BEGIN}\\n" +\n    "{concat}\\n" +\n'
+                            f'    "{BODY[:48]}\\n" +\n    "{END}\\n";\nint after = 1;\n',
+        "keys/old.pem": f"{BEGIN}\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,AB12CD34\n\n"
+                        f"{legacy}\n{END}\n",
+        ".env": f"AWS_SECRET_ACCESS_KEY={env_secret}\n"
+                f'GCP_KEY={{"private_key":"{BEGIN}\\n{BODY}\\n{END}\\n",'
+                '"token_uri":"https://oauth2.googleapis.com/token"}\n',
+        "src/cfg.js": 'const keyFile = "certs/server1.pem";\nconst keyDir = "/usr/local/keys";\n',
+    })
+    prints = tmp_path / "fingerprints.json"
+    scan = run_script("secrets_scan", repo, "--fingerprints", prints)
+    assert scan.returncode == 0, scan.stderr
+    found = {(f["path"], f["line"]) for f in json.loads(scan.stdout)}
+    assert (".env", 1) in found
+    assert ("src/cfg.js", 1) not in found and ("src/cfg.js", 2) not in found
+
+    for leak in (slash_line[5:45], concat[3:40], legacy[2:40], env_secret):
+        text = GOOD.replace("## Fix\n", f"## Fix\n```\n{leak}\n```\n")
+        result = run_script("findings", "check", write(tmp_path, text, "leak.md"),
+                            "--fingerprints", prints)
+        assert result.returncode == 1 and "secret" in result.stdout, leak
+
+    fine = GOOD.replace("## Fix\n", "## Fix\nThe token URI is "
+                        "https://oauth2.googleapis.com/token; keys live in `/usr/local/keys` "
+                        "and `certs/server1.pem`.\n")
+    result = run_script("findings", "check", write(tmp_path, fine, "fine.md"),
+                        "--fingerprints", prints)
+    assert result.returncode == 0, result.stdout

@@ -48,6 +48,7 @@ def is_placeholder(value: str) -> bool:
     )
 
 
+KEY_LINE = re.compile(r"""\s*["']?([A-Za-z0-9+/]{16,}={0,2})(?:\\n)?["']?\s*[+,;]?\s*""")
 TRIVIAL = {"true", "false", "yes", "no", "on", "off", "null", "none"}
 
 
@@ -60,10 +61,17 @@ def counts(pattern: dict, value: str) -> bool:
     if pattern.get("needs_mix") and not (re.search(r"[A-Za-z]", value)
                                          and re.search(r"\d", value)):
         return False
-    if pattern.get("not_url") and ("://" in value or value.startswith("/")
-                                   or re.search(r":[a-z]", value)):
+    if pattern.get("not_url") and (_looks_like_path(value) or re.search(r":[a-z]", value)):
         return False  # a URL, a path or a namespaced key like users:v2
     return True
+
+
+def _looks_like_path(value: str) -> bool:
+    """A URL or a lowercase file path; base64 can start with / too, so case matters here."""
+    return "://" in value or bool(
+        re.fullmatch(r"(?:/[a-z0-9._-]+)+/?", value)
+        or re.fullmatch(r"[a-z0-9._-]+(?:/[a-z0-9._-]+)+\.[a-z0-9]{1,5}", value)
+    )
 
 
 def _digest(text: str) -> str:
@@ -84,7 +92,7 @@ def _fingerprintable(value: str) -> bool:
     """Worth fingerprinting: long enough, and not a word or setting that prose also uses."""
     if len(value) < 6 or value.isdigit() or value.lower() in TRIVIAL:
         return False
-    if "://" in value or value.startswith("/"):
+    if _looks_like_path(value):
         return False
     words = re.fullmatch(r"[A-Za-z]+(?:[-_.][A-Za-z]+)*", value)
     return not (words and sum(c.isalpha() for c in value) < 12)
@@ -181,12 +189,15 @@ def _scan_file(repo: Path, name: str, committed: bool,
     in_key = False
     for number, line in enumerate(text.splitlines(), 1):
         if in_key:
-            # A key's body lines are the secret, not just its BEGIN header. Anything that
-            # isn't base64 ends the body and is scanned like any other line.
-            body = line.strip()
-            if re.fullmatch(r"[A-Za-z0-9+/]{16,}={0,2}", body):
+            # A key's body is the secret, not just its BEGIN header. Body lines may be bare
+            # or quoted and joined in code ("...\n" +); legacy encrypted keys put headers
+            # and a blank line first. Anything else ends the body and is scanned normally.
+            body = KEY_LINE.fullmatch(line)
+            if body:
                 if values is not None:
-                    values.append(body)
+                    values.append(body[1])
+                continue
+            if not line.strip() or re.match(r"\s*(?:Proc-Type|DEK-Info):", line):
                 continue
             in_key = False
             if "-----END" in line:
@@ -202,13 +213,13 @@ def _scan_file(repo: Path, name: str, committed: bool,
                 if values is not None and not is_placeholder(value):
                     values.append(value)
                 if pattern["name"] == "private-key":
-                    rest = line[match.end():]
+                    rest = line[match.end():].split("-----END")[0]
                     if values is not None:
                         # A one-line key (GCP JSON, .env) holds its body after the header,
                         # with literal \n escapes between the base64 lines.
                         values += re.findall(r"[A-Za-z0-9+/]{16,}={0,2}",
                                              rest.replace("\\n", "\n"))
-                    in_key = "-----END" not in rest
+                    in_key = "-----END" not in line[match.end():]
                 severity = _severity(pattern, rel, value, committed)
                 hits.append((SEVERITY_RANK[severity], order, pattern["name"], len(value),
                              severity))
