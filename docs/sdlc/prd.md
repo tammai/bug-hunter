@@ -18,11 +18,12 @@ Developers and maintainers who own a repo and want its edge-case bugs found and 
 - One command takes a repo to a folder of ready-to-file drafts.
 - No duplicates of open issues or earlier findings.
 - The expected cost is shown before a run, with a cap on the number of hunters.
+- Before deploy, a security and PII audit (`/audit`) reports authorization, injection, secrets, session and personal-data problems, each with evidence a second agent failed to disprove, plus a PII inventory, in a private report.
 
 **Non-goals**
-- Posting or filing anything the owner didn't pick.
+- Posting or filing anything the owner didn't pick, and posting audit findings at all.
 - Fixing bugs (tohe does that).
-- Reporting style issues, feature requests, design flaws or problems that only show under load.
+- Reporting style issues, feature requests, design flaws or problems that only show under load (security and PII problems are covered by `/audit`).
 - Editing the target repo.
 
 ## Core capabilities
@@ -32,6 +33,7 @@ Developers and maintainers who own a repo and want its edge-case bugs found and 
 3. `repro-verifier` agent: re-runs one repro and says whether it reproduces.
 4. Skip what's known: hunters are given open issues and earlier findings.
 5. `/hunt-post <numbers>`: files the chosen drafts with the owner's own `gh` login and a label they choose.
+6. `/audit [paths] [--max N]`: secrets scan, npm/composer dependency audit, one `security-auditor` per part and one `finding-verifier` per finding; numbered findings and `REPORT.md` with a PII inventory in `~/.bug-hunter/<host>/<owner>/<repo>/audit/`. Optional owner `policy.md` says who may see what.
 
 ## Constraints
 
@@ -50,5 +52,5 @@ Developers and maintainers who own a repo and want its edge-case bugs found and 
 
 ## Open questions
 
-- Container isolation for untrusted repos: now or later?
-- Which kinds of code get edge-input lists first (the brief names Python CLI, Go, Node and web)?
+- Container isolation for untrusted repos: later (decided 2026-11-05).
+- Edge-input lists: generic, Python CLI, Node/Vue, Go, Rust, JVM, Ruby and PHP shipped (2026-11-06).

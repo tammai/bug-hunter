@@ -10,8 +10,8 @@ Started: 2026-11-06
 Base: e3cc6e3
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: 5049441 tree eb2c310d74fc326f588a6c968929fe4f627c6dc6
-Slice: B3   Slice base: 5049441   Slice gates: none
+Verified: dc9f54e tree d06ee5b1c6618f72d13ee410918b843f3d435da0
+Slice: B4   Slice base: dc9f54e   Slice gates: none
 Current: Stage 2 – Build
 
 ## Stages
@@ -52,6 +52,7 @@ inline, in parts (backlog): four parts too large for one session's context
 
 ## Deviations
 - 2026-11-06 scripts/scope.py What: the unsafe-folder warning now prints once per folder after both installs and audits, reading 'no install or audit for …'. Why: audits reuse the install rules, so the same folder warned twice. Effect: the existing count of 6 warnings in test_stacks still holds.
+- 2026-11-06 .claude/rules/plugin-prompts.md What: rule updated to match constitution 1.1.0 (audit proof levels, audit findings never posted, <redacted>) and now loads for security/**. Why: the constitution skill flagged it as contradicting the amended Principle I. Effect: prompt-editing sessions get the right rule.
 
 ## Open questions
 -
