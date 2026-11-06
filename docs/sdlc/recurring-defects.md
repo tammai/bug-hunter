@@ -16,3 +16,6 @@ One line per defect: what it looks like, then the severity.
 - A placeholder or redaction test that matches a substring, so a partly masked real value (`Pass<redacted>`, `AKIA…xxxx`) counts as a placeholder: high
 - A "looks like a path" or "looks like code" exemption that also matches real secret alphabets (base64 values starting with `/`, JWTs with dots): high
 - A multi-line block parser (PEM body) that enters block mode on a header mention, or never leaves it, so the rest of the file is skipped: high
+- Log redaction that matches secret words in raw text without first decoding `%xx` (nested), `\u`, `\x` and `&#` escapes, so `%2574oken` or `password` is logged: high
+- A fallback path (malformed input, parse error, a body that was withheld) that logs raw input under a weaker check than the main path: high
+- A log of request bodies that redacts by text pattern instead of parsing the body's own shape (JSON, ndjson, form, multipart), so secret-named keys with object values, multi-line parts or bracketed names (`user[password]`) leak: high

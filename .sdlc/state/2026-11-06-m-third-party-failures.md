@@ -1,5 +1,5 @@
 # 2026-11-06-m-third-party-failures
-Status: active
+Status: done
 Process: 3
 Change: docs/sdlc/changes/2026-11-06-m-third-party-failures.md   (this feature's record for people)
 Track: M   (sized up because: —; footprint: 11 files)
@@ -10,13 +10,13 @@ Started: 2026-11-06
 Base: 36650f9
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: d18a030 tree a61e657a0feaf8e87b79e2cb11fc24be64f6e40c
-Current: Stage 3 – Review
+Verified: 90856d5 tree 0171a613e116c2e08a763c905cbc49d06a331ee5
+Current: Stage 4 – Ship
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
 - [x] 2 Build
-- [ ] 3 Review   — the change file's ## Review
+- [x] 3 Review   — the change file's ## Review
 - [ ] 4 Ship     — PR: (Learn: knowledge, recurring-defects.md)
 
 ## How the build runs
@@ -59,6 +59,7 @@ inline, one part
 - 2026-11-06 Stage 3: fail — code review r7: all six r6 findings fixed; R7-1 medium, R7-2, R7-3, R7-5 low bugs; R7-4 ticket; asking the user
 - 2026-11-06 Stage 3: fail — code review r7: R7-1 medium, R7-2, R7-3, R7-5 low bugs; R7-4 ticket; user chose round 8
 - 2026-11-06 Stage 2: pass
+- 2026-11-06 Stage 3: pass — code review r8 PASS
 
 ## Deviations
 - 2026-11-06 tests/test_plugin_files.py What: the every-stack edge-list test now allows integrations.md next to generic.md. Why: integrations is chosen by what a part calls, not by its stack, so stacks.json names it in its own integrations block. Effect: the test still fails on any other unnamed list.
