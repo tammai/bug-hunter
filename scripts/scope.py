@@ -190,6 +190,25 @@ def _depends_on(root: Path, tracked: set[str], folder: PurePosixPath, package: s
     return False
 
 
+INTEGRATIONS = STACKS["integrations"]
+CALLS_OUT = re.compile("|".join(INTEGRATIONS["markers"]), re.M)
+
+
+def _calls_third_parties(root: Path, files: list[str]) -> bool:
+    """Whether any file uses an HTTP client or a third-party SDK."""
+    for name in files:
+        path = root / name
+        try:
+            if path.is_symlink() or path.stat().st_size > INTEGRATIONS["max_bytes"]:
+                continue
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if CALLS_OUT.search(text):
+            return True
+    return False
+
+
 def _checklists(part: dict, root: Path, tracked: set[str]) -> list[str]:
     rule = SECURITY["checklists"]
     found = list(rule["always"])
@@ -239,6 +258,9 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"error: no tracked source files under: {where}", file=sys.stderr)
         return 1
     out = _build(files, paths, args.cap, focus)
+    for part in out["parts"] + out["skipped"]:
+        if _calls_third_parties(root, part["files"]):
+            part["edge_inputs"].append(INTEGRATIONS["edge_inputs"])
     if focus:
         tracked_set = set(files)
         for part in out["parts"] + out["skipped"]:

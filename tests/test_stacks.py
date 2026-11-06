@@ -132,3 +132,22 @@ def test_root_install_step_is_the_bare_command(make_repo):
     assert scope(repo)["installs"] == [
         {"dir": ".", "command": "npm ci --ignore-scripts", "step": "npm ci --ignore-scripts"}
     ]
+
+
+def test_parts_calling_third_parties_get_integrations(make_repo):
+    repo = make_repo({
+        "pay/charge.js": "import axios from 'axios'\nexport const pay = () => axios.post(u)\n",
+        "util/math.js": "export const add = (a, b) => a + b\n",
+        "app/client.py": "import requests\n",
+        "svc/main.go": "resp, err := http.Get(url)\n",
+        "aws/s3.ts": "import { S3Client } from '@aws-sdk/client-s3'\n",
+        "big/huge.js": "x".join([""] * 1_100_000) + "\naxios.get(u)\n",
+    })
+    (repo / "bin").mkdir()
+    by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
+    assert by_dir["pay"] == ["generic", "node", "integrations"]
+    assert by_dir["app"] == ["generic", "python-cli", "integrations"]
+    assert by_dir["svc"] == ["generic", "go", "integrations"]
+    assert by_dir["aws"] == ["generic", "node", "integrations"]
+    assert by_dir["util"] == ["generic", "node"]
+    assert by_dir["big"] == ["generic", "node"]

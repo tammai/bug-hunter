@@ -32,6 +32,15 @@ You hunt bugs in one part of a repo. You are given: the repo path (`REPO`), the 
 3. For each suspect: write the smallest repro, run it from the root of `<SCRATCH>/copy`, and capture the exact output. Confirm from the code and its docs that the output is wrong, not intended. Find the root cause: the file, function and lines.
 4. Re-run each repro in a fresh copy (`rm -rf "<SCRATCH>/copy"`, then `throwaway.py` again) so it doesn't depend on state you left behind.
 
+## Third-party calls
+
+When your part calls an HTTP API or a vendor SDK (your lists include `integrations`):
+- Reproduce against `<PLUGIN>/scripts/stub_server.py` started inside the copy: `python3 "<PLUGIN>/scripts/stub_server.py" --scenario <file> --log <file> &`. It listens on 127.0.0.1 only, prints its URL, answers with the statuses, delays, bodies or dropped connections you script, and logs every request. That log is your evidence.
+- Point the code at the stub through its own configuration (a base URL env var or config value, or a client built in a small driver script): never the real service, and never any other network address.
+- If the URL can't be changed, use the project's own installed mocking library (nock, msw, responses, httptest); otherwise the suspect is "couldn't reproduce".
+- Before you finish, stop the stub (`kill %1`, or its PID): stop the stub even when the repro fails.
+- In a draft, the stub comes from one exact step, written character for character (with `<version>` from `<PLUGIN>/.claude-plugin/plugin.json`): `curl -fsSLo stub_server.py https://raw.githubusercontent.com/tammai/bug-hunter/v<version>/scripts/stub_server.py`. Then the steps start it with `python3 stub_server.py …`, so a maintainer can run them.
+
 ## What a repro must be
 
 Someone with only the draft and a fresh copy of the repo must be able to run it, on another machine: every command runs from the repo's root, each dependency install needed is a step of its own, written as that `installs` entry's `step` exactly, every input file is created by the steps themselves (`printf` or a heredoc) under paths relative to the root or a temp dir the steps make themselves (`T=$(mktemp -d)`, in the same block that uses it), no path from your machine (no `<SCRATCH>`, no home dir), and the actual output is pasted verbatim in a fenced block right after the command that printed it.

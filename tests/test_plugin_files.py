@@ -97,7 +97,7 @@ def test_every_stack_has_an_edge_input_list_covering_its_traps():
     named = {s["edge_inputs"] for s in stacks}
     files = {p.stem for p in (ROOT / "edge-inputs").glob("*.md")}
     assert named <= files
-    assert files - named == {"generic"}
+    assert files - named == {"generic", "integrations"}
     for name in named:
         assert (ROOT / f"edge-inputs/{name}.md").read_text(encoding="utf-8").strip(), name
     for name, traps in TRAPS.items():
@@ -181,3 +181,25 @@ def test_constitution_prd_and_readme_cover_audit():
     assert "audit findings" in non_goals.split("## Core")[0]
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "/audit" in readme and "policy.md" in readme
+
+
+STUB_FETCH = ("curl -fsSLo stub_server.py "
+              "https://raw.githubusercontent.com/tammai/bug-hunter/v")
+
+
+def test_integrations_list_covers_failure_modes():
+    text = (ROOT / "edge-inputs/integrations.md").read_text(encoding="utf-8").casefold()
+    for item in ("timeout", "slow", "429", "retry-after", "5xx", "idempotent", "malformed",
+                 "partial", "empty", "html", "expired token", "connection refused", "reset",
+                 "duplicate", "out of order", "signature", "swallow", "pagination",
+                 "stub_server.py"):
+        assert item in text, item
+
+
+def test_agents_use_the_stub_offline():
+    _, hunter = read("agents/bug-hunter.md")
+    for needed in ("<PLUGIN>/scripts/stub_server.py", "127.0.0.1", STUB_FETCH,
+                   "never the real service", "stop the stub"):
+        assert needed in hunter, needed
+    _, verifier = read("agents/repro-verifier.md")
+    assert STUB_FETCH in verifier and "<PLUGIN>/scripts/stub_server.py" in verifier
