@@ -97,7 +97,7 @@ def test_every_stack_has_an_edge_input_list_covering_its_traps():
     named = {s["edge_inputs"] for s in stacks}
     files = {p.stem for p in (ROOT / "edge-inputs").glob("*.md")}
     assert named <= files
-    assert files - named == {"generic"}
+    assert files - named == {"generic", "integrations"}
     for name in named:
         assert (ROOT / f"edge-inputs/{name}.md").read_text(encoding="utf-8").strip(), name
     for name, traps in TRAPS.items():
@@ -181,3 +181,67 @@ def test_constitution_prd_and_readme_cover_audit():
     assert "audit findings" in non_goals.split("## Core")[0]
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "/audit" in readme and "policy.md" in readme
+
+
+STUB_FETCH = ("curl -fsSLo stub_server.py "
+              "https://raw.githubusercontent.com/tammai/bug-hunter/v")
+
+
+def test_integrations_list_covers_failure_modes():
+    text = (ROOT / "edge-inputs/integrations.md").read_text(encoding="utf-8").casefold()
+    for item in ("timeout", "slow", "429", "retry-after", "5xx", "idempotent", "malformed",
+                 "partial", "empty", "html", "expired token", "connection refused", "reset",
+                 "duplicate", "out of order", "signature", "swallow", "pagination",
+                 "stub_server.py"):
+        assert item in text, item
+
+
+def test_agents_use_the_stub_offline():
+    _, hunter = read("agents/bug-hunter.md")
+    for needed in ("<PLUGIN>/scripts/stub_server.py", "127.0.0.1", STUB_FETCH,
+                   "never the real service", "stop the stub"):
+        assert needed in hunter, needed
+    _, verifier = read("agents/repro-verifier.md")
+    assert STUB_FETCH in verifier and "<PLUGIN>/scripts/stub_server.py" in verifier
+
+
+def test_stub_is_stopped_by_pid_and_hunt_names_integrations():
+    _, hunter = read("agents/bug-hunter.md")
+    assert "kill %1" not in hunter and "stub.pid" in hunter and "> " in hunter
+    _, hunt = read("commands/hunt.md")
+    assert "gets only the generic list" not in hunt and "integrations" in hunt
+
+
+def test_stub_lifecycle_rules_in_both_agents():
+    _, hunter = read("agents/bug-hunter.md")
+    assert "mktemp -d" in hunter and "listening" in hunter
+    _, verifier = read("agents/repro-verifier.md")
+    assert "kill %1" not in verifier
+
+
+def test_stub_start_and_stop_are_safe_as_written():
+    _, hunter = read("agents/bug-hunter.md")
+    assert hunter.index("$S/s.json") < hunter.index('--scenario "$S/s.json"')
+    assert "kill -0" in hunter and 'echo "$S"' in hunter and "--idle-exit" in hunter
+    _, verifier = read("agents/repro-verifier.md")
+    assert "also save its PID" not in verifier and "--idle-exit" in verifier
+
+
+def test_draft_stub_step_is_reachable_and_verifier_note_is_gone():
+    _, hunter = read("agents/bug-hunter.md")
+    assert "python3 stub_server.py --scenario s.json --log stub.log --port" in hunter
+    assert "until grep -q listening stub.out" in hunter
+    _, verifier = read("agents/repro-verifier.md")
+    assert "may still be running" not in verifier
+
+
+def test_draft_stub_uses_a_free_port_and_stops():
+    _, hunter = read("agents/bug-hunter.md")
+    assert "8765" not in hunter and "--port 0" in hunter
+    assert "echo $! > stub.pid" in hunter and 'kill "$(cat stub.pid)"' in hunter
+    assert "s/^listening on //p" in hunter
+
+
+def test_draft_stub_prose_names_no_fixed_port():
+    _, hunter = read("agents/bug-hunter.md")
+    assert "fixed port" not in hunter

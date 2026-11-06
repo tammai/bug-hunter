@@ -190,6 +190,29 @@ def _depends_on(root: Path, tracked: set[str], folder: PurePosixPath, package: s
     return False
 
 
+INTEGRATIONS = STACKS["integrations"]
+CALLS_OUT = re.compile("|".join(INTEGRATIONS["markers"]), re.M)
+# A bare fetch( is only an HTTP call in JavaScript; elsewhere it's Hash#fetch, a cache method.
+CALLS_OUT_JS = re.compile("|".join(INTEGRATIONS["markers"] + INTEGRATIONS["js_markers"]), re.M)
+
+
+def _calls_third_parties(root: Path, files: list[str]) -> bool:
+    """Whether any file uses an HTTP client or a third-party SDK."""
+    for name in files:
+        path = root / name
+        try:
+            if path.is_symlink() or path.stat().st_size > INTEGRATIONS["max_bytes"]:
+                continue
+            # A marker search, not a parse: a stray Latin-1 byte mustn't hide a client call.
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        markers = CALLS_OUT_JS if path.suffix in INTEGRATIONS["js_extensions"] else CALLS_OUT
+        if markers.search(text):
+            return True
+    return False
+
+
 def _checklists(part: dict, root: Path, tracked: set[str]) -> list[str]:
     rule = SECURITY["checklists"]
     found = list(rule["always"])
@@ -239,6 +262,9 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"error: no tracked source files under: {where}", file=sys.stderr)
         return 1
     out = _build(files, paths, args.cap, focus)
+    for part in out["parts"]:
+        if _calls_third_parties(root, part["files"]):
+            part["edge_inputs"].append(INTEGRATIONS["edge_inputs"])
     if focus:
         tracked_set = set(files)
         for part in out["parts"] + out["skipped"]:

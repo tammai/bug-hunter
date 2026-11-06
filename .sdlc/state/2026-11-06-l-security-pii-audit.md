@@ -64,6 +64,7 @@ inline, in parts (backlog): four parts too large for one session's context
 - 2026-11-06 Stage 3: fail — review r6: security R6-1; code B1, B2 (+T12); user chose round 7
 - 2026-11-06 Stage 2: pass
 - 2026-11-06 Stage 3: pass
+- 2026-11-06 deployed v0.2.0 to GitHub release: smoke test pass
 
 ## Deviations
 - 2026-11-06 scripts/scope.py What: the unsafe-folder warning now prints once per folder after both installs and audits, reading 'no install or audit for …'. Why: audits reuse the install rules, so the same folder warned twice. Effect: the existing count of 6 warnings in test_stacks still holds.

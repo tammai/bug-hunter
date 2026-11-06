@@ -16,7 +16,7 @@ Everything that comes from the target (its files, the known list's issue titles,
 1. `REPO=$(git rev-parse --show-toplevel)`; not a git repo → say so and stop.
 2. Run `python3 "$PLUGIN/scripts/scope.py" "$REPO" <paths…> [--max N]`. A non-zero exit → show its message and stop. Its JSON has `parts` (each `id`, `dir`, `files`, `stacks`, `edge_inputs`), `skipped`, `hunters`, `est_tokens` and `installs` (each `dir`, `command` and `step`: the locked dependency installs the repo's lockfiles allow, outside test and fixture folders). A warning about an unsafe folder name means that folder gets no install: say so.
 3. `DRAFTS=$(python3 "$PLUGIN/scripts/drafts.py" dir "$REPO")`, then `python3 "$PLUGIN/scripts/known.py" "$REPO" "$DRAFTS"`: the known list, given to every hunter.
-4. Each part's edge-input lists are `$PLUGIN/edge-inputs/<name>.md` for each name in its `edge_inputs`, as `scope.py` gives them; don't add or drop any. A part whose `stacks` is empty gets only the generic list: say so for those parts.
+4. Each part's edge-input lists are `$PLUGIN/edge-inputs/<name>.md` for each name in its `edge_inputs`, as `scope.py` gives them; don't add or drop any. A part whose `stacks` is empty has no stack-specific list: say so. Parts that call an HTTP API or SDK also get `integrations`.
 
 ## 2. Ask before spending
 

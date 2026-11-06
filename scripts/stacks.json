@@ -3,7 +3,7 @@
   "fixture_dirs": ["testdata", "fixtures", "__fixtures__"],
   "stacks": [
     {"name": "python", "extensions": [".py"], "edge_inputs": "python-cli", "test_suffixes": ["_test.py"]},
-    {"name": "node", "extensions": [".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte"], "edge_inputs": "node", "test_suffixes": []},
+    {"name": "node", "extensions": [".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte", ".mts", ".cts"], "edge_inputs": "node", "test_suffixes": []},
     {"name": "go", "extensions": [".go"], "edge_inputs": "go", "test_suffixes": ["_test.go"]},
     {"name": "rust", "extensions": [".rs"], "edge_inputs": "rust", "test_suffixes": []},
     {"name": "jvm", "extensions": [".java", ".kt"], "edge_inputs": "jvm", "test_suffixes": ["Test.java", "Tests.java", "Test.kt", "Tests.kt"]},
@@ -31,5 +31,6 @@
   "audits": [
     {"lockfile": "package-lock.json", "command": "npm audit --omit=dev --json"},
     {"lockfile": "composer.lock", "command": "composer audit --no-plugins --no-scripts --format=json"}
-  ]
+  ],
+  "integrations": {"edge_inputs": "integrations", "markers": ["axios", "\\bgot\\(", "superagent", "\\brequests\\.", "^\\s*import requests", "httpx", "aiohttp", "urllib\\.request", "urllib3", "\\bhttp\\.(?:Get|Post|NewRequest|Client|DefaultClient)\\b", "\"net/http\"", "reqwest", "\\bhyper::", "RestTemplate", "WebClient", "OkHttp", "\\bHttpClient\\b", "Guzzle", "curl_init", "Faraday", "Net::HTTP", "HTTParty", "@aws-sdk", "\\bboto3\\b", "aws-sdk", "\\bstripe\\b", "\\btwilio\\b", "sendgrid", "mailgun", "\\bhttps?\\.request\\(", "\\bundici\\b", "XMLHttpRequest", "\\bhttp\\.client\\b", "URLSession", "HttpURLConnection", "[Ww]ebhook(?:Handler|Controller|Router|Secret|Signature|_secret|_handler|s?\\.post|s?\\.route)", "constructEvent"], "max_bytes": 1000000, "js_markers": ["(?<![\\w.$])(?<!function )(?<!async )fetch\\((?!(?:[^()]|\\([^()]*\\))*\\)(?::\\s*[^\\s{=;?][^={;?\n]*\\s*|[ \\t]*)\\{)", "\\b(?:window|globalThis)\\.fetch\\(", "node-fetch"], "js_extensions": [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".tsx", ".jsx", ".vue", ".svelte", ".html"]}
 }

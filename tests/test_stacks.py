@@ -132,3 +132,129 @@ def test_root_install_step_is_the_bare_command(make_repo):
     assert scope(repo)["installs"] == [
         {"dir": ".", "command": "npm ci --ignore-scripts", "step": "npm ci --ignore-scripts"}
     ]
+
+
+def test_parts_calling_third_parties_get_integrations(make_repo):
+    repo = make_repo({
+        "pay/charge.js": "import axios from 'axios'\nexport const pay = () => axios.post(u)\n",
+        "util/math.js": "export const add = (a, b) => a + b\n",
+        "app/client.py": "import requests\n",
+        "svc/main.go": "resp, err := http.Get(url)\n",
+        "aws/s3.ts": "import { S3Client } from '@aws-sdk/client-s3'\n",
+        "big/huge.js": "x".join([""] * 1_100_000) + "\naxios.get(u)\n",
+    })
+    (repo / "bin").mkdir()
+    by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
+    assert by_dir["pay"] == ["generic", "node", "integrations"]
+    assert by_dir["app"] == ["generic", "python-cli", "integrations"]
+    assert by_dir["svc"] == ["generic", "go", "integrations"]
+    assert by_dir["aws"] == ["generic", "node", "integrations"]
+    assert by_dir["util"] == ["generic", "node"]
+    assert by_dir["big"] == ["generic", "node"]
+
+
+def test_integration_markers_match_real_clients_only(make_repo):
+    repo = make_repo({
+        "rb/conf.rb": 'url = ENV.fetch("DB_URL")\ncache.fetch(:x) { 1 }\n',
+        "nodehttp/a.js": "const req = https.request(opts, cb)\n",
+        "swift/A.swift": "URLSession.shared.dataTask(with: url)\n",
+        "py/b.py": "import http.client\n",
+        "notes/c.js": "// TODO: maybe a webhook later\nexport const x = 1\n",
+    })
+    (repo / "php").mkdir()
+    (repo / "php/pay.php").write_bytes(b"<?php // caf\xe9\n$ch = curl_init($url);\n")
+    import subprocess
+    subprocess.run(["git", "add", "php/pay.php"], cwd=repo, check=True)
+    by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
+    assert "integrations" not in by_dir["rb"]
+    assert "integrations" not in by_dir["notes"]
+    for d in ("nodehttp", "swift", "py", "php"):
+        assert by_dir[d][-1] == "integrations", d
+
+    result = run_script("scope", repo, "--max", "1")
+    skipped = json.loads(result.stdout)["skipped"]
+    assert all("integrations" not in p["edge_inputs"] for p in skipped)
+
+
+def test_fetch_markers_skip_definitions_and_catch_globals(make_repo):
+    repo = make_repo({
+        "cache/store.py": "class Store:\n    def fetch(self, key):\n        return 1\n",
+        "jsdef/a.js": "async function fetch(url) { return 1 }\n",
+        "browser/b.js": "window.fetch('/api')\n",
+        "glob/c.ts": "globalThis.fetch(u)\n",
+        "jwt/d.js": "export const ok = verifySignature(token, key)\n",
+    })
+    by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
+    for d in ("cache", "jsdef", "jwt"):
+        assert "integrations" not in by_dir[d], d
+    for d in ("browser", "glob"):
+        assert by_dir[d][-1] == "integrations", d
+
+
+def test_fetch_counts_only_as_a_js_global_call(make_repo):
+    repo = make_repo({
+        "pycache/a.py": "class C:\n    def get(self):\n        return self.fetch(key)\n",
+        "go/a.go": "func fetch(url string) error { return nil }\n",
+        "rs/a.rs": "fn fetch(&self) {}\n",
+        "kt/A.kt": "fun fetch(url: String) {}\n",
+        "jsclass/a.js": "class Api {\n  async fetch(url) {\n    return 1\n  }\n"
+                        "  fetch(u) {\n  }\n}\n",
+        "rb/a.rb": "value = fetch(:k)\n",
+        "jscall/a.js": "const r = await fetch('/api')\n",
+        "tscall/b.ts": "export const get = (u: string) => fetch(u)\n",
+    })
+    by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
+    for d in ("pycache", "go", "rs", "kt", "jsclass", "rb"):
+        assert "integrations" not in by_dir[d], d
+    for d in ("jscall", "tscall"):
+        assert by_dir[d][-1] == "integrations", d
+
+
+def test_fetch_definitions_with_types_and_more_js_files(make_repo):
+    repo = make_repo({
+        "tsrepo/a.ts": "class Repo {\n  fetch(url: string): Promise<Response> {\n"
+                       "    return x\n  }\n}\n",
+        "tsmulti/b.ts": "class R {\n  fetch(\n    url,\n  ) {\n    return 1\n  }\n}\n",
+        "renamed/c.js": "const httpGet = require('node-fetch')\nawait httpGet(url)\n",
+        "esm/d.mts": "export const get = async (u) => await fetch(u)\n",
+        "page/e.html": "<script>fetch('/api').then(r => r.json())</script>\n",
+        "multicall/f.js": "const r = fetch(\n  url,\n  { method: 'POST' },\n)\n",
+    })
+    by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
+    assert "integrations" not in by_dir["tsrepo"] and "integrations" not in by_dir["tsmulti"]
+    for d in ("renamed", "esm", "multicall"):
+        assert by_dir[d][-1] == "integrations", d
+
+
+def test_fetch_in_a_ternary_is_a_call(make_repo):
+    repo = make_repo({
+        "tern/a.js": "const r = ok ? await fetch(u) : {}\n",
+        "ternlines/b.ts": "const r = ok\n  ? await fetch(u)\n  : {}\n",
+        "tsrepo/c.ts": "class Repo {\n  fetch(url: string): Promise<Response> {\n"
+                       "    return x\n  }\n}\n",
+    })
+    by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
+    assert by_dir["tern"][-1] == "integrations" and by_dir["ternlines"][-1] == "integrations"
+    assert "integrations" not in by_dir["tsrepo"]
+
+
+def test_fetch_ternary_without_space_and_method_brace_on_next_line(make_repo):
+    repo = make_repo({
+        "tight/a.js": "const r = x ? fetch(u): {}\n",
+        "nextline/b.ts": "class Repo {\n  fetch(url: string): Promise<Response>\n  {\n"
+                         "    return x\n  }\n}\n",
+    })
+    by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
+    assert by_dir["tight"][-1] == "integrations"
+    assert "integrations" not in by_dir["nextline"]
+
+
+def test_fetch_call_followed_by_a_block_on_the_next_line(make_repo):
+    repo = make_repo({
+        "blockafter/a.js": "const r = await fetch(u)\n{\n  let y = 1\n}\n",
+        "nextline/b.ts": "class Repo {\n  fetch(url: string): Promise<Response>\n  {\n"
+                         "    return x\n  }\n}\n",
+    })
+    by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
+    assert by_dir["blockafter"][-1] == "integrations"
+    assert "integrations" not in by_dir["nextline"]
