@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -21,8 +22,15 @@ ALWAYS_UNSET = [
     "SSH_AUTH_SOCK", "GOOGLE_APPLICATION_CREDENTIALS", "NETRC",
     "VIRTUAL_ENV", "CONDA_PREFIX", "CONDA_DEFAULT_ENV", "PYTHONHOME",
     "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "JAVA_OPTS", "MAVEN_OPTS", "MAVEN_ARGS", "GRADLE_OPTS",
-    "NODE_OPTIONS", "MISE_GLOBAL_CONFIG_FILE", "MISE_SYSTEM_CONFIG_FILE",
+    "MAVEN_CONFIG", "NODE_OPTIONS", "MISE_GLOBAL_CONFIG_FILE",
 ]
+JVM_OPTION_VARS = ["JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "JAVA_OPTS",
+                   "MAVEN_OPTS", "GRADLE_OPTS"]
+# Proxy routing survives the JVM option variables being dropped, so Maven and Gradle still
+# work behind a corporate proxy; proxy users and passwords never do.
+PROXY_FLAG = re.compile(
+    r"-D(?:(?:https?|ftp)\.(?:proxyHost|proxyPort|nonProxyHosts)|socksProxy(?:Host|Port))=\S+"
+)
 # Kept as they are when set: SDKs and JDKs often live under the home, and a corporate CA
 # bundle is what lets installs through a TLS-inspecting proxy.
 KEEP_IF_SET = [
@@ -77,8 +85,10 @@ def _plan(scratch: Path, env: dict[str, str]) -> tuple[list[str], dict[str, str]
         "npm_config_cache": str(home / ".npm"),
         # Java reads user.home from the password database, not HOME, so Maven would still find
         # ~/.m2/settings.xml and its server credentials without this.
-        "JAVA_TOOL_OPTIONS": f"-Duser.home={home}",
+        "JAVA_TOOL_OPTIONS": " ".join([f"-Duser.home={home}", *_proxy_flags(env)]),
         "MISE_CONFIG_DIR": str(home / ".config/mise"),
+        # Never created: points mise away from /etc/mise and its [env].
+        "MISE_SYSTEM_CONFIG_FILE": str(scratch / "no-mise-system.toml"),
         # A repo's mise.toml or .tool-versions must not install runtimes into the real home.
         "MISE_AUTO_INSTALL": "0",
         "MISE_NOT_FOUND_AUTO_INSTALL": "0",
@@ -111,23 +121,61 @@ def _plan(scratch: Path, env: dict[str, str]) -> tuple[list[str], dict[str, str]
     return sorted(unset), exports
 
 
-def _write(path: Path, text: str) -> None:
-    """Write a file in the scratch home, replacing (not following) anything planted there."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.is_symlink() or path.exists():
-        path.unlink()
-    with open(path, "x", encoding="utf-8") as out:
-        out.write(text)
+def _proxy_flags(env: dict[str, str]) -> list[str]:
+    flags: list[str] = []
+    for key in JVM_OPTION_VARS:
+        for flag in PROXY_FLAG.findall(env.get(key, "")):
+            if flag not in flags:
+                flags.append(flag)
+    return flags
+
+
+def _folder(scratch: Path, folder: Path) -> None:
+    """Create folder under scratch one level at a time, refusing any symlink on the way."""
+    current = scratch
+    for part in folder.relative_to(scratch).parts:
+        current = current / part
+        if current.is_symlink():
+            raise OSError(f"{current} is a symlink; refusing to write through it")
+        current.mkdir(exist_ok=True)
+
+
+def _write(scratch: Path, path: Path, text: str) -> None:
+    """Write a file under scratch atomically, never following a planted symlink."""
+    _folder(scratch, path.parent)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".isolate-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write(text)
+        # os.replace swaps the name itself, so a symlink planted at the target is replaced.
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _read(path: Path) -> str | None:
+    """A regular file's text; None for anything else (missing, FIFO, device, unreadable)."""
+    try:
+        return path.read_text(encoding="utf-8") if path.is_file() else None
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def _mise_tools(env: dict[str, str], real: Path) -> dict:
-    candidates = [env.get("MISE_GLOBAL_CONFIG_FILE"), env.get("MISE_CONFIG_DIR")
-                  and str(Path(env["MISE_CONFIG_DIR"]) / "config.toml"),
-                  str(real / ".config/mise/config.toml")]
+    candidates = [
+        env.get("MISE_GLOBAL_CONFIG_FILE"),
+        env.get("MISE_CONFIG_DIR") and str(Path(env["MISE_CONFIG_DIR"]) / "config.toml"),
+        env.get("XDG_CONFIG_HOME") and str(Path(env["XDG_CONFIG_HOME"]) / "mise/config.toml"),
+        str(real / ".config/mise/config.toml"),
+    ]
     for candidate in filter(None, candidates):
+        text = _read(Path(candidate))
+        if text is None:
+            continue
         try:
-            tools = tomllib.loads(Path(candidate).read_text(encoding="utf-8")).get("tools")
-        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+            tools = tomllib.loads(text).get("tools")
+        except tomllib.TOMLDecodeError:
             continue
         return tools if isinstance(tools, dict) else {}
     return {}
@@ -143,16 +191,16 @@ def _version(value: object) -> str | list[str] | None:
     return None
 
 
-def _carry_versions(env: dict[str, str], real: Path, home: Path) -> None:
+def _carry_versions(env: dict[str, str], real: Path, scratch: Path) -> None:
     """Copy the owner's global runtime versions, without mise's [env] and other settings."""
-    try:
-        _write(home / ".tool-versions", (real / ".tool-versions").read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
-        pass
+    home = scratch / "home"
+    tool_versions = _read(real / ".tool-versions")
+    if tool_versions is not None:
+        _write(scratch, home / ".tool-versions", tool_versions)
     tools = {name: v for name, raw in _mise_tools(env, real).items() if (v := _version(raw))}
     if tools:
         # JSON strings and lists of strings are valid TOML values and quoted keys.
-        _write(home / ".config/mise/config.toml", "[tools]\n" + "".join(
+        _write(scratch, home / ".config/mise/config.toml", "[tools]\n" + "".join(
             f"{json.dumps(name)} = {json.dumps(v)}\n" for name, v in tools.items()
         ))
 
@@ -167,8 +215,9 @@ def _main(argv: list[str] | None = None) -> int:
               "use a mktemp -d path", file=sys.stderr)
         return 1
     try:
-        (scratch / "home").mkdir(parents=True, exist_ok=True)
-        (scratch / "no-gh").mkdir(exist_ok=True)
+        scratch.mkdir(parents=True, exist_ok=True)
+        _folder(scratch, scratch / "home")
+        _folder(scratch, scratch / "no-gh")
     except OSError as exc:
         print(f"error: can't use {scratch}: {exc}", file=sys.stderr)
         return 1
@@ -176,10 +225,11 @@ def _main(argv: list[str] | None = None) -> int:
     env = dict(os.environ)
     real = Path(env.get("HOME") or Path.home())
     try:
-        _carry_versions(env, real, scratch / "home")
+        _carry_versions(env, real, scratch)
         # The Android Gradle plugin would otherwise download a pinned SDK into the kept
         # ANDROID_HOME, which is the owner's real SDK.
-        _write(scratch / "home/.gradle/gradle.properties", "android.builder.sdkDownload=false\n")
+        _write(scratch, scratch / "home/.gradle/gradle.properties",
+               "android.builder.sdkDownload=false\n")
     except OSError as exc:
         print(f"error: can't prepare {scratch / 'home'}: {exc}", file=sys.stderr)
         return 1

@@ -186,8 +186,9 @@ def test_jvm_and_node_option_variables_are_dropped_and_android_downloads_off(tmp
            "MISE_GLOBAL_CONFIG_FILE": "/etc/mise.toml", "MISE_SYSTEM_CONFIG_FILE": "/etc/m.toml"}
     got = isolated_env(scratch, env)
     for gone in ("MAVEN_OPTS", "MAVEN_ARGS", "GRADLE_OPTS", "JAVA_OPTS", "NODE_OPTIONS",
-                 "MISE_GLOBAL_CONFIG_FILE", "MISE_SYSTEM_CONFIG_FILE"):
+                 "MISE_GLOBAL_CONFIG_FILE"):
         assert gone not in got, gone
+    assert got["MISE_SYSTEM_CONFIG_FILE"] != "/etc/m.toml"
     props = (scratch / "home/.gradle/gradle.properties").read_text(encoding="utf-8")
     assert "android.builder.sdkDownload=false" in props
 
@@ -261,3 +262,77 @@ def test_the_agents_isolation_line_fails_closed(tmp_path):
     result = subprocess.run(["bash", "-c", f"{line} touch {shlex.quote(str(marker))}"],
                             capture_output=True)
     assert result.returncode != 0 and not marker.exists()
+
+
+def test_symlinked_folders_in_the_scratch_home_stop_isolation(tmp_path):
+    real = tmp_path / "real"
+    victim = tmp_path / "victim-gradle"
+    victim.mkdir()
+    (victim / "gradle.properties").write_text("signing.password=keep\n", encoding="utf-8")
+    scratch = tmp_path / "s"
+    (scratch / "home").mkdir(parents=True)
+    os.symlink(victim, scratch / "home/.gradle")
+    result = run_script("isolate", scratch, env={"PATH": os.environ["PATH"], "HOME": str(real)})
+    assert result.returncode == 1 and "symlink" in result.stderr
+    assert (victim / "gradle.properties").read_text(encoding="utf-8") == "signing.password=keep\n"
+
+    scratch2 = tmp_path / "s2"
+    scratch2.mkdir()
+    os.symlink(real, scratch2 / "home")
+    real.mkdir()
+    result = run_script("isolate", scratch2, env={"PATH": os.environ["PATH"], "HOME": str(real)})
+    assert result.returncode == 1 and not (real / ".gradle").exists()
+
+
+def test_fifo_version_files_are_skipped_not_read(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    os.mkfifo(real / ".tool-versions")
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    result = subprocess.run(
+        [sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch)],
+        env={"PATH": os.environ["PATH"], "HOME": str(real)}, capture_output=True, timeout=10,
+    )
+    assert result.returncode == 0
+    assert not (scratch / "home/.tool-versions").exists()
+
+
+def test_maven_config_dropped_and_mise_system_config_hidden(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    got = isolated_env(scratch, {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "h"),
+                                 "MAVEN_CONFIG": "-s /r/settings.xml"})
+    assert "MAVEN_CONFIG" not in got
+    system = Path(got["MISE_SYSTEM_CONFIG_FILE"])
+    assert system.is_relative_to(scratch) and not system.exists()
+
+
+def test_xdg_config_home_mise_tools_are_carried(tmp_path):
+    real = tmp_path / "real"
+    xdg = tmp_path / "xdg"
+    (xdg / "mise").mkdir(parents=True)
+    (xdg / "mise/config.toml").write_text('[tools]\ngo = "1.23"\n', encoding="utf-8")
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    isolated_env(scratch, {"PATH": os.environ["PATH"], "HOME": str(real),
+                           "XDG_CONFIG_HOME": str(xdg)})
+    mise = (scratch / "home/.config/mise/config.toml").read_text(encoding="utf-8")
+    assert tomllib.loads(mise) == {"tools": {"go": "1.23"}}
+
+
+def test_proxy_flags_survive_but_proxy_passwords_do_not(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "h"),
+           "GRADLE_OPTS": "-Xmx1g -Dhttps.proxyHost=proxy.corp -Dhttps.proxyPort=8080 "
+                          "-Dhttps.proxyPassword=hunter2",
+           "MAVEN_OPTS": "-Dhttp.nonProxyHosts=localhost|*.corp -Dhttp.proxyUser=me"}
+    got = isolated_env(scratch, env)
+    home = scratch / "home"
+    flags = got["JAVA_TOOL_OPTIONS"].split()
+    assert flags[0] == f"-Duser.home={home}"
+    assert sorted(flags[1:]) == sorted([
+        "-Dhttps.proxyHost=proxy.corp", "-Dhttps.proxyPort=8080",
+        "-Dhttp.nonProxyHosts=localhost|*.corp",
+    ])
