@@ -1,5 +1,5 @@
 # 2026-11-06-l-live-targets
-Status: active
+Status: done
 Process: 3
 Change: docs/sdlc/changes/2026-11-06-l-live-targets.md   (this feature's record for people)
 Track: L   (sized up because: approach and safety model needed an interview; footprint: 14 files)
@@ -10,8 +10,8 @@ Started: 2026-11-06
 Base: c4ffa8d
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: e8eefb2 tree c3e45938c01f0541497f644ac9dfcf7d7dfd1810
-Current: Stage 3 – Review
+Verified: 2efeae5 tree eeb6fc34459649f571fae76016ce22ab679ce3bd
+Current: Stage 4 – Ship
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
@@ -62,6 +62,7 @@ inline, one part
 - 2026-11-06 round 5: security PASS, code PASS; low findings S5-1, S5-2, C5-1, C5-2 fixed in round 6
 - 2026-11-06 Stage 3: pass — round 6: fixing the round 5 low findings
 - 2026-11-06 Stage 2: pass
+- 2026-11-06 Stage 3: pass — security r6 PASS, code r6 PASS, no findings left open but tickets
 
 ## Deviations
 - 2026-11-06 tests/test_plugin_files.py What: the every-stack edge-list test now allows live-http.md, and the constitution test expects version 1.2.0. Why: live-http is chosen by routes, not stack, like integrations; principle III was amended to 1.2.0 (approved in Define). Effect: both still fail on any other unnamed list or version.

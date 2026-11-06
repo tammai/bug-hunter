@@ -80,3 +80,35 @@
 - WebSockets, gRPC, server-sent events.
 - Cleaning up data the run wrote; the report lists the writes.
 - Enforcing the proxy at the OS level: agents could still open a socket to another host. Their prompts forbid it and they're never given the target URL or tokens, which is the same trust model as the offline no-network rule.
+
+## Review
+
+- **Recommended and chosen:** security and code high, because `Risk: high` (test-account tokens; agents' requests reach a live server), `## Public Surface` isn't `- none`, and the track is L; chosen by the trigger list (L, self-chosen). Rounds past 2 chosen by the user ("fix, continue until no findings").
+- **Verdicts** (`.sdlc/.work/findings/2026-11-06-l-live-targets/`):
+  - security: r1 FAIL — S1, S2 (S3, S4 raised to high by me); r2 FAIL — S2-1; r3 PASS; r4 PASS; r5 PASS; r6 PASS.
+  - code-reviewer (high): r1 FAIL — C1–C8; r2 FAIL — C2-1; r3 FAIL — C3-1; r4 PASS; r5 PASS; r6 PASS.
+  - The low findings of the passing rounds (S3-1, S3-2, S4-1–S4-3, S5-1, S5-2, C3-2–C3-4, C4-1–C4-3, C5-1, C5-2) were fixed too, at the user's request; round 6 passed with no new findings.
+  - Dependency audit: none ran. The plugin ships no dependencies (`dependencies = []`) and `pip-audit` isn't installed here.
+- **Fixed** (each with a failing test first, in `tests/test_live_proxy.py` unless named):
+  - S1, C5: account header values with line breaks or non-Latin-1 characters leaked the token in a traceback → validated at start without echoing (`test_bad_targets_fail_without_echoing_secrets`).
+  - S3, C4, S2-1: responses echoing a token or the target URL reached agents → every derived form of each account value masked exactly, the target's address swapped for the proxy's, compressed bodies refused (`test_responses_keep_target_headers_and_hide_tokens_and_url`, `test_masks_every_form_of_an_account_value`, `test_masking_is_exact_and_covers_more_logins`, `test_masking_round_five_forms`, `test_compressed_bodies_refused_without_echo_but_bodiless_replies_pass`).
+  - S4: method overrides on read-only targets → 403 (`test_odd_paths_overrides_and_query_dots`).
+  - C1: live repro placeholders unset by isolation or unseen as prefixes → exported after the isolation step (`tests/test_plugin_files.py::test_live_steps_export_placeholders_and_keep_the_proxy_up`).
+  - C2: the proxy's own Server and Date headers, HEAD lengths → only the target's headers (`test_responses_keep_target_headers_and_hide_tokens_and_url`).
+  - C3: chi missed, axios instances kept → markers fixed, 11 frameworks tested (`tests/test_scope.py::test_live_route_markers_across_frameworks`).
+  - C2-1, C3-1 (from fixes): host and word-password masking mangled ordinary text → bounded host matching, exact secret matching (`test_masks_hosts_only_where_they_stand_alone`, `test_masking_is_exact_and_covers_more_logins`).
+  - Medium bugs S2, C6, C7, C8, low S5 and C14 fixed the same way.
+- **Tickets:**
+  - C9: hunters and verifiers share one request budget; hunters can use it all.
+  - C10: for Rails and Laravel only the routes file is a live part, not the controllers.
+  - C11: a malformed `targets.json` shows Python's raw JSON parser message.
+  - C12: a draft that names the proxy URL passes the draft check.
+  - C13: HTTPS targets behind an internal CA get 502 on every request, and nothing probes the target before the cost question.
+  - S2-4, C2-4: a restarted proxy's remaining budget doesn't count logged 502s, so a run can exceed the approved budget by one request per 502.
+  - S2-5: the status line's reason phrase is relayed unmasked.
+  - C2-2: the chi marker also matches Go clients with relative paths (resty's `.R().Get("/x")`).
+  - S5-1 remainder: a value mixing `&amp;` with numeric entities, and Go's JS-string escapes, aren't masked.
+  - A token the target itself re-cases, base64s or encrypts isn't masked; agents never hold tokens, so masking is the second line.
+- **Drift and manual checks:** the state file's Deviations: AC-007 refined before the red step (real account values, not every literal header); two plugin-file tests updated for `live-http` and constitution 1.2.0; `load_target` shared with `drafts.py`; AC-002's exception (responses masked, no proxy headers added); `--check` and the `/hunt` proxy lifecycle; rounds 3–6 masking rules. No `manual` ACs.
+- **Security:** no critical or high finding open; no secrets in the diff (tests use invented tokens). Constitution principle III amended to v1.2.0 for live hunts.
+- **Lessons filed:** [knowledge/gotchas/redacting-logged-requests.md](../../../knowledge/gotchas/redacting-logged-requests.md) (masking what a live target echoes); six lines in [recurring-defects.md](../recurring-defects.md); `.claude/rules/plugin-prompts.md` names the live-target exception.

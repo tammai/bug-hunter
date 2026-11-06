@@ -23,3 +23,8 @@ One line per defect: what it looks like, then the severity.
 - A capability check that names `os.replace` (or another alias) in `os.supports_dir_fd`, which only lists `os.rename`, so the safe descriptor path silently turns off and the fallback passes the same tests: high
 - On Windows, environment handling built on `os.environ` (names uppercased) feeding a case-sensitive shell, so `unset NAME` misses `Name` and mixed-case secrets survive: high
 - A log of request bodies that redacts by text pattern instead of parsing the body's own shape (JSON, ndjson, form, multipart), so secret-named keys with object values, multi-line parts or bracketed names (`user[password]`) leak: high
+- Credentials loaded from a config file and sent as HTTP headers without checking them first, so a value with a line break or a non-Latin-1 character raises inside the HTTP library and its traceback prints the token: high
+- A proxy that relays a server's responses unchanged to an agent that must not see the credentials it added, so an echoing endpoint (debug page, `Location`) hands them back: high
+- A read-only guard that checks only the request method, so `X-HTTP-Method-Override` or `_method` turns an allowed GET into a write: high
+- A shell step that sets a variable as a command prefix (`BASE=x curl "$BASE"`), which the same command's own expansion never sees, or that a later setup step unsets (`isolate.py` drops `*AUTH*`): high
+- Masking that matches secrets case-insensitively or bare host names inside words, so ordinary response text is mangled and hunters report the proxy's damage as the target's bug: medium
