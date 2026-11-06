@@ -3,6 +3,7 @@
 import argparse
 import base64
 import binascii
+import html
 import http.client
 import json
 import math
@@ -131,7 +132,13 @@ def _forms(value: str) -> set[str]:
     encoded = {quote(value, safe=""), quote(value), quote_plus(value)}
     # Percent-encoding's hex may come back in either case; the value itself may not.
     encoded |= {re.sub(r"%[0-9A-F]{2}", lambda m: m.group().lower(), e) for e in encoded}
-    return {value, escaped, escaped.replace("/", "\\/"), value.replace("/", "\\/")} | encoded
+    # HTML templates escape &, <, >, quotes, and Go's also + and =, as named or numeric entities.
+    entities = {html.escape(value)}
+    for style in ("&#{:d};", "&#x{:X};"):
+        for chars in ("+=", "+=/"):
+            entities.add("".join(style.format(ord(c)) if c in chars else c for c in value))
+    return {value, escaped, escaped.replace("/", "\\/"), value.replace("/", "\\/")} \
+        | encoded | entities
 
 
 def _basic_passwords(target: dict) -> list[tuple[str, str]]:
@@ -146,7 +153,11 @@ def _basic_passwords(target: dict) -> list[tuple[str, str]]:
                 raw = base64.b64decode(credential.strip(), validate=True)
             except (binascii.Error, ValueError):
                 continue
-            found += [(name, raw.decode(codec, errors="ignore")) for codec in ("utf-8", "latin-1")]
+            for codec in ("utf-8", "latin-1"):
+                try:
+                    found.append((name, raw.decode(codec)))
+                except UnicodeDecodeError:
+                    continue  # not this encoding; a lossy decode would be a wrong pattern
     return found
 
 
@@ -164,10 +175,18 @@ def _secrets(target: dict) -> list[str]:
     return sorted((v for v in found if len(v) >= 6), key=len, reverse=True)
 
 
-def _word_passwords(target: dict) -> list[str]:
-    """Accounts whose Basic password is a plain word, which responses may contain anyway."""
-    return sorted({name for name, decoded in _basic_passwords(target)
-                   if re.fullmatch(r"[A-Za-z]+\d{0,3}", decoded.partition(":")[2])})
+def _password_warnings(target: dict) -> list[str]:
+    """What the owner should know about Basic passwords the masking handles poorly."""
+    warnings = set()
+    for name, decoded in _basic_passwords(target):
+        password = decoded.partition(":")[2]
+        if len(password) < 6:
+            warnings.add(f"account {name}'s password is shorter than 6 characters, so the proxy "
+                         "can't hide it if the target echoes it alone; use a longer one")
+        elif re.fullmatch(r"[A-Za-z]+\d{0,3}", password):
+            warnings.add(f"account {name}'s password is a plain word; responses that contain "
+                         "it exactly will show <redacted> there")
+    return sorted(warnings)
 
 
 def _masker(target: dict, proxy_url: str):
@@ -176,16 +195,27 @@ def _masker(target: dict, proxy_url: str):
     secrets = _secrets(target)
     # One pass per kind, built once per proxy; matched exactly, so "Password" in a form label
     # survives an account whose password is "password".
-    secret = re.compile(b"|".join(re.escape(v.encode("utf-8", "surrogateescape"))
-                                  for v in secrets)) if secrets else None
+    # Each value as UTF-8 and, where it fits, as Latin-1 bytes: targets echo either.
+    forms = {v.encode("utf-8") for v in secrets}
+    for v in secrets:
+        try:
+            forms.add(v.encode("latin-1"))
+        except UnicodeEncodeError:
+            pass
+    secret = re.compile(b"|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))
+                        ) if forms else None
     address = re.compile(re.escape(f"{base.scheme}://{base.netloc}").encode(), re.I)
     # A bare host is masked only where it stands alone, and a plain name ("uat") only with
     # its port: on its own it would mangle words like /actuator.
     hosts = [base.netloc] if ":" in base.netloc or "." in base.netloc else []
     if base.hostname not in LOCAL_HOSTS and ("." in base.hostname or ":" in base.hostname):
         hosts.append(base.hostname)
-    host = re.compile(rb"(?<![\w.:-])(?:" + b"|".join(re.escape(h).encode() for h in hosts)
-                      + rb")(?![\w-])", re.I) if hosts else None
+    # An IPv6 host must not match inside a longer address, so ":" before it also blocks it;
+    # for other hosts ":" is ordinary punctuation ("Host:uat.acme.test").
+    alternatives = [(rb"(?<![\w.:-])" if h.count(":") > 1 and not h.startswith("[")
+                     else rb"(?<![\w.-])") + re.escape(h).encode() + rb"(?![\w-])"
+                    for h in hosts]
+    host = re.compile(b"|".join(alternatives), re.I) if hosts else None
 
     def mask(data: bytes) -> bytes:
         if secret:
@@ -390,9 +420,8 @@ def _main(argv: list[str] | None = None) -> int:
         accounts = ", ".join(target["accounts"]) or "none"
         print(f"target ok: {args.target} (writes: {'yes' if target['writes'] else 'no'}; "
               f"accounts: {accounts})")
-        for name in _word_passwords(target):
-            print(f"warning: account {name}'s password is a plain word; responses that contain "
-                  "it exactly will show <redacted> there")
+        for warning in _password_warnings(target):
+            print(f"warning: {warning}")
         return 0
     seen = [time.monotonic(), 0]  # last activity, requests in flight
     proxy_url: list[str] = [""]

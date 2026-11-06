@@ -10,13 +10,13 @@ Started: 2026-11-06
 Base: c4ffa8d
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: eb63daa tree 1f236888b19822a411635040379475afd6fd7546
+Verified: c318977 tree a9da2cb164032b963ccd31dc62d0b5d8dd710f9f
 Current: Stage 3 – Review
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
 - [x] 2 Build
-- [ ] 3 Review   — the change file's ## Review
+- [x] 3 Review   — the change file's ## Review
 - [ ] 4 Ship     — PR: (Learn: knowledge, recurring-defects.md)
 
 ## How the build runs
@@ -56,6 +56,9 @@ inline, one part
 - 2026-11-06 Stage 2: pass
 - 2026-11-06 Stage 3: fail — round 3: security PASS; code C3-1 medium (case-insensitive masking of word passwords); folding in tickets S3-1, S3-2, C3-2..C3-4 from the same masking code; continuing per the user's 'continue until no findings'
 - 2026-11-06 Stage 2: pass
+- 2026-11-06 round 4: security PASS, code PASS; low findings S4-1..S4-3, C4-1..C4-3 fixed in round 5 per the user's 'continue until no findings'
+- 2026-11-06 Stage 3: pass — round 5: fixing the round 4 low findings
+- 2026-11-06 Stage 2: pass
 
 ## Deviations
 - 2026-11-06 tests/test_plugin_files.py What: the every-stack edge-list test now allows live-http.md, and the constitution test expects version 1.2.0. Why: live-http is chosen by routes, not stack, like integrations; principle III was amended to 1.2.0 (approved in Define). Effect: both still fail on any other unnamed list or version.
@@ -66,6 +69,7 @@ inline, one part
 - 2026-11-06 agents/bug-hunter.md, agents/repro-verifier.md, scripts/stacks.json, tests/* What: live repros export BASE and <ACCOUNT>_AUTH after the isolation prefix; route markers add chi (Get/Post/Route/Mount on a / path) and drop 'api.' so axios instances aren't routes; AC-006's framework coverage is tested across 11 frameworks. Why: code r1 C1 (isolate.py unsets *AUTH*; a prefix assignment isn't seen by the same command's expansion), C3. Effect: none beyond the fixes.
 - 2026-11-06 scripts/live_proxy.py What: round 3. Masking covers every form derived from each account value: as is, JSON-escaped (with and without \/), percent-encoded (quote, quote with /, quote_plus, either hex case), and for Basic the decoded user:password and the password alone; a bare host is masked only at word boundaries and a dotless one only with its port; a compressed response (Content-Encoding not identity) gets 502 instead of being relayed unmasked. Why: security r2 S2-1, S2-2; code r2 C2-1. Effect: a target named by a short dotless host keeps that word visible in responses when it appears without its port.
 - 2026-11-06 scripts/live_proxy.py, tests/test_live_proxy.py What: round 4. Account values are masked exactly (case-sensitive), with lower-case-hex copies of the percent-encoded forms; one combined pattern per kind, built once per proxy; Basic logins decode as UTF-8 and Latin-1 and tolerate extra spaces; a bare IPv6 host is masked; HEAD, 204 and 304 replies pass whatever their Content-Encoding, and the 502 for a compressed body no longer echoes the encoding; --check warns when a Basic password is a plain word. The round 3 test's fully lower-cased token form became a lower-case-hex form. Why: code r3 C3-1 (case-insensitive masking mangled words matching a word password), tickets S3-1, S3-2, C3-2, C3-3, C3-4 in the same code. Effect: a word password is still masked where it appears exactly, which --check now says.
+- 2026-11-06 scripts/live_proxy.py, tests/test_live_proxy.py What: round 5. The ':' host lookbehind applies only to a bare IPv6 host; HTML-escaped forms (html.escape, and + = / as decimal or hex entities) are masked; values are matched as UTF-8 and Latin-1 bytes, and a Basic credential that isn't valid UTF-8 is no longer decoded lossily; --check warns that passwords under 6 characters can't be hidden and keeps the plain-word warning for the rest; a round 4 assertion that passed without masking now checks a lower-case-hex form. Why: round 4 low findings S4-1..S4-3, C4-1..C4-3, fixed at the user's 'continue until no findings'. Effect: none beyond the fixes.
 
 ## Open questions
 -

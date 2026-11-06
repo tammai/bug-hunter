@@ -421,7 +421,9 @@ def test_masking_is_exact_and_covers_more_logins():
     assert mask(f"{word} {word.upper()} {word.lower()}".encode()) == \
         f"<redacted> {word.upper()} {word.lower()}".encode()
     assert utf8_pw.encode() not in mask(f"pw={utf8_pw}".encode())
-    assert b"Gh12" not in mask(quote("ab/cd+ef=Gh12", safe="").lower().encode())
+    lower_hex = re.sub(r"%[0-9A-F]{2}", lambda m: m.group().lower(),
+                       quote("ab/cd+ef=Gh12", safe=""))
+    assert lower_hex.encode() not in mask(lower_hex.encode())
     assert mask(b"host fd00::1 here") == b"host <target> here"
 
 
@@ -458,3 +460,33 @@ def test_compressed_bodies_refused_without_echo_but_bodiless_replies_pass(make_r
     assert status == 502 and "Zz9Yy8" not in body
     assert "Zz9Yy8" not in log.read_text(encoding="utf-8")
     assert head_status == 200 and empty_status == 204
+
+
+def test_masking_round_five_forms():
+    import base64
+
+    from live_proxy import _masker
+    latin = "p\u00e4sswordX"
+    dotted = _masker({"url": "https://uat.acme.test", "accounts": {
+        "ops": {"Authorization": "Basic " + base64.b64encode(
+            f"ops:{latin}".encode("latin-1")).decode()},
+        "api": {"Authorization": "Bearer ab/cd+ef=Gh12"}}}, "http://127.0.0.1:9")
+    assert dotted(b"Host:uat.acme.test") == b"Host:<target>"
+    assert latin.encode("latin-1") not in dotted(b"pw=" + latin.encode("latin-1"))
+    for html_form in ("ab/cd&#43;ef&#61;Gh12", "ab&#47;cd&#43;ef&#61;Gh12",
+                      "ab/cd&#x2B;ef&#x3D;Gh12"):
+        assert html_form.encode() not in dotted(html_form.encode()), html_form
+    v6 = _masker({"url": "https://[fd00::1]", "accounts": {}}, "http://127.0.0.1:9")
+    assert v6(b"at fd00::1 and ::ffff:fd00::1x") == b"at <target> and ::ffff:fd00::1x"
+
+
+def test_check_warns_about_short_passwords(make_repo, tmp_path):
+    import base64
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    write_targets(targets, {"uat": {"url": "https://uat.example.com", "accounts": {
+        "ops": {"Authorization": "Basic " + base64.b64encode(b"ops:Ab1").decode()}}}})
+    ok = run_script("live_proxy", "--repo", repo, "--target", "uat", "--log",
+                    tmp_path / "l.jsonl", "--check", env=env)
+    out = ok.stdout + ok.stderr
+    assert ok.returncode == 0 and "shorter than 6" in out and "will show <redacted>" not in out
