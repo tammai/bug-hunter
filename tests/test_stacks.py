@@ -84,7 +84,7 @@ def test_lockfiles_give_exact_locked_installs(make_repo):
         ("po", "poetry install --no-root"),
         ("go", "go mod download"),
         ("rs", "cargo fetch --locked"),
-        ("rb", "BUNDLE_FROZEN=true BUNDLE_PATH=vendor/bundle bundle install"),
+        ("rb", "BUNDLE_FROZEN=true bundle install"),
         ("ph", "composer install --no-scripts --no-plugins"),
         ("jv", "./gradlew --no-daemon dependencies"),
         ("mv", "mvn -B -q dependency:go-offline"),

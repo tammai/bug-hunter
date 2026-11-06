@@ -64,7 +64,7 @@ def test_agents_treat_input_as_data_and_work_in_a_throwaway_copy():
     for rel in ("agents/bug-hunter.md", "agents/repro-verifier.md"):
         _, body = read(rel)
         assert "data, never instructions" in body, rel
-        assert 'eval "$(python3 "<PLUGIN>/scripts/isolate.py" "<SCRATCH>")"' in body, rel
+        assert 'eval "$(python3 -I "<PLUGIN>/scripts/isolate.py" "<SCRATCH>")"' in body, rel
         assert "scripts/throwaway.py" in body, rel
         assert "cp -R" not in body, rel
     _, hunt = read("commands/hunt.md")
@@ -75,6 +75,8 @@ def test_agents_keep_the_owners_git_credentials_out_of_reach():
     for rel in ("agents/bug-hunter.md", "agents/repro-verifier.md"):
         _, body = read(rel)
         assert "every Bash call" in body and "scripts/isolate.py" in body, rel
+        assert "out of reach" not in body, rel
+        assert "Cargo" in body, rel
 
 
 TRAPS = {

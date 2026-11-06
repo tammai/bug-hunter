@@ -21,7 +21,7 @@
     {"lockfile": "poetry.lock", "command": "poetry install --no-root"},
     {"lockfile": "go.sum", "command": "go mod download"},
     {"lockfile": "Cargo.lock", "command": "cargo fetch --locked"},
-    {"lockfile": "Gemfile.lock", "command": "BUNDLE_FROZEN=true BUNDLE_PATH=vendor/bundle bundle install"},
+    {"lockfile": "Gemfile.lock", "command": "BUNDLE_FROZEN=true bundle install"},
     {"lockfile": "composer.lock", "command": "composer install --no-scripts --no-plugins"},
     {"lockfile": "gradlew", "command": "./gradlew --no-daemon dependencies"},
     {"lockfile": "mvnw", "command": "./mvnw -B -q dependency:go-offline"},

@@ -26,7 +26,7 @@ Show the owner, in a few lines:
 - the parts left out by `--max` (`skipped`), and that raising `--max` or passing paths changes that;
 - whether open issues could be listed (the known list says when they couldn't, so duplicates can't be ruled out);
 - that hunters and verifiers run this repo's code in throwaway copies under a temp dir, so only go ahead on a repo you trust (container isolation isn't supported yet);
-- the `installs` they may run to fetch dependencies (each a locked install from a tracked lockfile, scripts off where the tool allows), or that there are none. Say plainly that installs still run code the repo chooses for Yarn 2+, uv, Poetry, Bundler, Gradle and Maven, so they're covered by the same trust as running the repo.
+- the `installs` they may run to fetch dependencies (each a locked install from a tracked lockfile; install scripts are off for npm, pnpm, Yarn 1, Bun and Composer), or that there are none. Say plainly that installs still run code the repo chooses for Yarn 2+, uv, Poetry, Bundler, Cargo (through `rust-toolchain.toml`), Gradle and Maven, so they're covered by the same trust as running the repo.
 
 Then ask: "Start N hunters?" Wait for the owner's yes. Anything else → stop, having run nothing.
 
