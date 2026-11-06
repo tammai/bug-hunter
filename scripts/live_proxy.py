@@ -4,12 +4,13 @@ import argparse
 import http.client
 import json
 import math
+import re
 import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from drafts import drafts_dir
 from stub_server import _redact_body, _redact_query
@@ -22,6 +23,11 @@ NOT_FORWARDED = {"connection", "keep-alive", "proxy-connection", "proxy-authoriz
                  "trailer", "transfer-encoding", "upgrade", "host", "content-length",
                  ACCOUNT_HEADER}
 MAX_BODY = 50 * 1024 * 1024
+HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+# Drafts write an account as "$<NAME>_AUTH", so its name must be a shell variable name.
+ACCOUNT_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
+# Frameworks that honour these turn a GET into a write.
+METHOD_OVERRIDES = {"x-http-method-override", "x-http-method", "x-method-override"}
 
 
 class BadTarget(Exception):
@@ -34,7 +40,8 @@ def _http_url(text: str) -> bool:
         port = url.port
     except ValueError:
         return False
-    return url.scheme in ("http", "https") and bool(url.hostname) and port != 0
+    return url.scheme in ("http", "https") and bool(url.hostname) and port != 0 \
+        and url.username is None and url.password is None
 
 
 def _local_url(text: str) -> bool:
@@ -79,7 +86,7 @@ def load_target(repo: str, target: str) -> dict:
     entry = targets[target]
     if not isinstance(entry, dict) or not isinstance(entry.get("url"), str) \
             or not _http_url(entry["url"]):
-        raise BadTarget(f"{target}: url must be an http or https URL")
+        raise BadTarget(f"{target}: url must be an http or https URL with no user:password@")
     writes = entry.get("writes", False)
     if not isinstance(writes, bool):
         raise BadTarget(f"{target}: writes must be true or false")
@@ -90,18 +97,60 @@ def load_target(repo: str, target: str) -> dict:
         for name, headers in accounts.items()
     ):
         raise BadTarget(f"{target}: accounts must map names to objects of text headers")
+    for name, headers in accounts.items():
+        if not ACCOUNT_NAME.fullmatch(name):
+            raise BadTarget(f"{target}: account name {name!r} must be letters, digits and _, "
+                            "starting with a letter")
+        for header, value in headers.items():
+            # Never echo the value: it is a login.
+            if not HEADER_NAME.fullmatch(header):
+                raise BadTarget(f"{target}: account {name} has a header name that isn't valid")
+            try:
+                value.encode("latin-1")
+            except UnicodeEncodeError:
+                raise BadTarget(f"{target}: account {name}'s {header} value has characters "
+                                "HTTP headers can't carry") from None
+            if any(c in value for c in "\r\n\0"):
+                raise BadTarget(f"{target}: account {name}'s {header} value has a line break")
     return {"url": entry["url"].rstrip("/"), "writes": writes, "accounts": accounts}
 
 
 def _leaves_base(path: str) -> bool:
     """Whether a request path could climb out of the target's base path once decoded."""
-    decoded = unquote(path)
+    decoded = unquote(path.split("?", 1)[0])
     return not path.startswith("/") or any(
         segment in (".", "..") for segment in decoded.replace("\\", "/").split("/")
     )
 
 
-def _handler(target: dict, log: Path, budget: int, rate: float, seen: list):
+def _secrets(target: dict) -> list[str]:
+    """Every account value, and the parts a response might echo on their own."""
+    found = set()
+    for headers in target["accounts"].values():
+        for value in headers.values():
+            found |= {value, value.partition(" ")[2]}
+            found |= {cookie.partition("=")[2] for cookie in value.split(";")}
+    # Short pieces would mask ordinary words.
+    return sorted((v.strip() for v in found if len(v.strip()) >= 6), key=len, reverse=True)
+
+
+def _masker(target: dict, proxy_url: str):
+    """Hide account values and the target's address in what goes back to an agent."""
+    base = urlsplit(target["url"])
+    swaps = [(re.compile(re.escape(v).encode()), b"<redacted>") for v in _secrets(target)]
+    swaps.append((re.compile(re.escape(f"{base.scheme}://{base.netloc}").encode(), re.I),
+                  proxy_url.encode()))
+    hosts = [base.netloc] + ([] if base.hostname in LOCAL_HOSTS else [base.hostname])
+    swaps += [(re.compile(re.escape(h).encode(), re.I), b"<target>") for h in hosts]
+
+    def mask(data: bytes) -> bytes:
+        for pattern, replacement in swaps:
+            data = pattern.sub(replacement, data)
+        return data
+    return mask
+
+
+def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, proxy_url: list):
     base = urlsplit(target["url"])
     https = base.scheme == "https"
     connection = http.client.HTTPSConnection if https else http.client.HTTPConnection
@@ -121,7 +170,7 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list):
 
         def _reply(self, status: int, error: str) -> None:
             data = json.dumps({"error": error}).encode()
-            self.send_response(status)
+            self.send_response_only(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -163,7 +212,15 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list):
                     seen[1] -= 1
                     seen[0] = time.monotonic()
 
+        def _refuse(self, status: int, note: str, error: str, body: bytes = b"") -> None:
+            self._record(self.headers.get(ACCOUNT_HEADER, "").strip(), status, body, note=note)
+            self._reply(status, error)
+
         def _forward(self) -> None:
+            if not self.path.isascii():
+                self.close_connection = True
+                return self._refuse(400, "path isn't ASCII",
+                                    "percent-encode non-ASCII characters in the path")
             if _leaves_base(self.path):
                 self.close_connection = True
                 return self._reply(400, "only paths on the target, like /api/orders, are allowed")
@@ -185,6 +242,11 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list):
             if self.command in WRITES and not target["writes"]:
                 self._record(account, 403, body, note="writes not allowed")
                 return self._reply(403, "this target doesn't allow writes")
+            overridden = METHOD_OVERRIDES & {k.lower() for k in self.headers} or any(
+                k.lower() == "_method" for k, _ in parse_qsl(urlsplit(self.path).query))
+            if overridden and not target["writes"]:
+                self._record(account, 403, body, note="method override on a read-only target")
+                return self._reply(403, "this target doesn't allow writes")
             if not self._take_slot():
                 self._record(account, 429, body, note="request budget used up")
                 return self._reply(429, "the run's request budget is used up")
@@ -196,6 +258,9 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list):
                            if k.lower() not in {name.lower() for name in chosen}}
                 headers.update(chosen)
             headers["Host"] = base.netloc
+            # Uncompressed, so account values and the target's address can be masked.
+            headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
+            headers["Accept-Encoding"] = "identity"
             if body or self.command in WRITES:
                 headers["Content-Length"] = str(len(body))
             try:
@@ -205,15 +270,23 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list):
                 response = upstream.getresponse()
                 data = response.read(MAX_BODY + 1)[:MAX_BODY]
                 upstream.close()
-            except (OSError, http.client.HTTPException) as exc:
+            except (OSError, http.client.HTTPException, ValueError) as exc:
                 self._record(account, 502, body, note=f"target unreachable: {type(exc).__name__}")
                 return self._reply(502, f"target unreachable: {type(exc).__name__}")
             self._record(account, response.status, body)
-            self.send_response(response.status)
+            mask = _masker(target, proxy_url[0])
+            data = mask(data)
+            # send_response_only: no Server or Date of the proxy's own beside the target's.
+            self.send_response_only(response.status, response.reason)
             for name, value in response.getheaders():
                 if name.lower() not in NOT_FORWARDED:
-                    self.send_header(name, value)
-            self.send_header("Content-Length", str(len(data)))
+                    self.send_header(name, mask(value.encode("latin-1")).decode("latin-1"))
+            if self.command == "HEAD":
+                length = response.getheader("Content-Length")
+                if length is not None:
+                    self.send_header("Content-Length", length)
+            else:
+                self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(data)
@@ -249,21 +322,30 @@ def _main(argv: list[str] | None = None) -> int:
                         help="requests a second, at most")
     parser.add_argument("--idle-exit", type=_positive(1, float), default=600,
                         help="exit after this many seconds without a request")
+    parser.add_argument("--check", action="store_true",
+                        help="only check the target is allowed and well formed, then exit")
     args = parser.parse_args(argv)
     try:
         target = load_target(args.repo, args.target)
     except BadTarget as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    if args.check:
+        accounts = ", ".join(target["accounts"]) or "none"
+        print(f"target ok: {args.target} (writes: {'yes' if target['writes'] else 'no'}; "
+              f"accounts: {accounts})")
+        return 0
     seen = [time.monotonic(), 0]  # last activity, requests in flight
-    handler = _handler(target, Path(args.log), args.max_requests, args.rate, seen)
+    proxy_url: list[str] = [""]
+    handler = _handler(target, Path(args.log), args.max_requests, args.rate, seen, proxy_url)
     try:
         # Loopback only: the hunters on this machine are the only clients.
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     except OSError as exc:
         print(f"error: can't listen on 127.0.0.1: {exc.strerror}", file=sys.stderr)
         return 1
-    print(f"listening on http://127.0.0.1:{server.server_address[1]}", flush=True)
+    proxy_url[0] = f"http://127.0.0.1:{server.server_address[1]}"
+    print(f"listening on {proxy_url[0]}", flush=True)
 
     def watch() -> None:
         while seen[1] or time.monotonic() - seen[0] < args.idle_exit:

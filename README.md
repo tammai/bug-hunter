@@ -56,7 +56,7 @@ Hunters read the code's routes and handlers, then send edge inputs to the runnin
                         "bob": {"Cookie": "session=…"}}}}
   ```
 
-- **One proxy.** `/hunt` starts `scripts/live_proxy.py` on 127.0.0.1. It's the only way agents reach the target: it forwards to that one target, adds an account's headers, refuses `POST`, `PUT`, `PATCH` and `DELETE` unless `"writes": true` (localhost allows them), never follows redirects, and stops at a request budget (200 per agent, 5 a second). Agents never see the target URL or the tokens; refresh expired tokens in the file yourself.
+- **One proxy.** `/hunt` starts `scripts/live_proxy.py` on 127.0.0.1. It's the only way agents reach the target: it forwards to that one target, adds an account's headers, refuses `POST`, `PUT`, `PATCH` and `DELETE` unless `"writes": true` (localhost allows them), never follows redirects, masks the accounts' values and the target's address in what it returns, and stops at a request budget (200 per agent, 5 a second). Agents never see the target URL or the tokens; refresh expired tokens in the file yourself.
 - **Drafts stay shareable.** Steps are `curl "$BASE/…" -H "$ALICE_AUTH"` with a `Set before running:` line, and `drafts.py check --repo <repo> --target <name>` fails a draft that names the host or holds a token.
 - **Writes are listed.** The report lists every write the proxy forwarded, so you can clean up UAT.
 

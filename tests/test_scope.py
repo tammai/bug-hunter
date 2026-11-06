@@ -140,3 +140,29 @@ def test_live_keeps_only_parts_serving_http(make_repo):
     result = run_script("scope", none, "--live")
     assert result.returncode == 1 and result.stderr.startswith("error:")
     assert "Traceback" not in result.stderr
+
+
+def test_live_route_markers_across_frameworks(make_repo):
+    serving = {
+        "chi/main.go": 'r := chi.NewRouter()\nr.Get("/orders", list)\n',
+        "fastify/app.js": "fastify.post('/orders', create)\n",
+        "nest/orders.controller.ts": "@Controller('orders')\nexport class O {}\n",
+        "fastapi/main.py": "@router.get('/orders')\ndef orders():\n    return []\n",
+        "django/urls.py": "urlpatterns = [path('orders/', views.list)]\n",
+        "laravel/web.php": "<?php\nRoute::get('/orders', [O::class, 'index']);\n",
+        "rails/routes.rb": "Rails.application.routes.draw do\n  resources :orders\nend\n",
+        "sinatra/app.rb": "get '/orders' do\n  'ok'\nend\n",
+        "actix/main.rs": '#[get("/orders")]\nasync fn orders() {}\n',
+        "axum/main.rs": 'let app = Router::new().route("/orders", get(list));\n',
+        "echo/main.go": 'e := echo.New()\ne.GET("/orders", list)\n',
+    }
+    clients = {
+        "front/api.js": "const api = axios.create()\n"
+                        "export const list = () => api.get('/orders')\n",
+        "lib/util.py": "def total(items):\n    return sum(items)\n",
+    }
+    repo = make_repo({**serving, **clients})
+    live = run_script("scope", repo, "--live")
+    assert live.returncode == 0, live.stderr
+    kept = {p["dir"] for p in json.loads(live.stdout)["parts"]}
+    assert kept == {path.split("/")[0] for path in serving}, kept

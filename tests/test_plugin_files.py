@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 from test_isolate import ISOLATE_LINE
@@ -285,3 +286,16 @@ def test_hunt_target_flow_and_agent_rules():
             assert needed in text, needed
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "--target" in readme and "targets.json" in readme
+
+
+def test_live_steps_export_placeholders_and_keep_the_proxy_up():
+    _, hunter = read("agents/bug-hunter.md")
+    _, verifier = read("agents/repro-verifier.md")
+    for text in (hunter, verifier):
+        assert 'export BASE="<PROXY>"' in text
+        assert not re.search(r'(?<!export )BASE="<PROXY>" BOB_AUTH=', text)
+    _, hunt = read("commands/hunt.md")
+    assert "--check" in hunt and "kill -0" in hunt
+    assert hunt.index("--check") < hunt.index("Start N hunters?")
+    intro = hunt.split("## Live target")[0]
+    assert "--target" in intro

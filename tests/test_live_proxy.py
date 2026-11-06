@@ -28,13 +28,14 @@ def write_targets(path: Path, targets) -> None:
                     encoding="utf-8")
 
 
-def start_stub(tmp_path: Path, rules: list[dict]):
+def start_stub(tmp_path: Path, rules: list[dict], port: int = 0):
     scenario = tmp_path / "stub.json"
     scenario.write_text(json.dumps(rules), encoding="utf-8")
     log = tmp_path / "stub log.jsonl"
     proc = subprocess.Popen(
         [sys.executable, str(SCRIPTS / "stub_server.py"), "--scenario", str(scenario),
-         "--log", str(log)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+         "--log", str(log), "--port", str(port)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     return proc, proc.stdout.readline().strip().removeprefix("listening on "), log
 
 
@@ -240,3 +241,121 @@ def test_proxy_flags_are_checked(make_repo, tmp_path):
     proc, _ = start_proxy(repo, "http://localhost:9", env, tmp_path / "l.jsonl",
                           "--idle-exit", "1")
     assert proc.wait(timeout=10) == 0 and time.monotonic() - started < 10
+
+
+def test_bad_targets_fail_without_echoing_secrets(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    write_targets(targets, {
+        "newline": {"url": "https://uat.example.com",
+                    "accounts": {"alice": {"Authorization": "Bearer Kq7Lm2\r\nX-Evil: 1"}}},
+        "latin": {"url": "https://uat.example.com",
+                  "accounts": {"alice": {"Authorization": "Bearer Pp9Rr8…"}}},
+        "badname": {"url": "https://uat.example.com",
+                    "accounts": {"alice": {"Bad Header": "Vv5Ww6Xx"}}},
+        "dashed": {"url": "https://uat.example.com", "accounts": {"qa-admin": {"X-A": "1"}}},
+        "userinfo": {"url": "https://ops:Hh3Jj4@uat.example.com"},
+    })
+    for name in ("newline", "latin", "badname", "dashed", "userinfo"):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "live_proxy.py"), "--repo", str(repo), "--target",
+             name, "--log", str(tmp_path / "l.jsonl"), "--check"],
+            capture_output=True, text=True, env=env, timeout=10)
+        assert result.returncode == 1 and result.stderr.startswith("error:"), name
+        assert "Traceback" not in result.stderr, name
+        for secret in ("Kq7Lm2", "Pp9Rr8", "Vv5Ww6Xx", "Hh3Jj4"):
+            assert secret not in result.stderr + result.stdout, (name, secret)
+
+
+def test_check_validates_without_listening(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    write_targets(targets, {"uat": {"url": "https://uat.example.com",
+                                    "accounts": {"alice": {"Authorization": "Bearer Tt1Uu2"}}}})
+    ok = run_script("live_proxy", "--repo", repo, "--target", "uat", "--log",
+                    tmp_path / "l.jsonl", "--check", env=env)
+    assert ok.returncode == 0 and "listening" not in ok.stdout
+    assert "uat.example.com" not in ok.stdout and "Tt1Uu2" not in ok.stdout
+    assert "alice" in ok.stdout
+    bad = run_script("live_proxy", "--repo", repo, "--target", "prod", "--log",
+                     tmp_path / "l.jsonl", "--check", env=env)
+    assert bad.returncode == 1 and bad.stderr.startswith("error:")
+
+
+def headers_of(url: str, method: str = "GET") -> tuple[list[str], dict]:
+    import http.client
+    from urllib.parse import urlsplit
+    parts = urlsplit(url)
+    conn = http.client.HTTPConnection(parts.hostname, parts.port, timeout=10)
+    conn.request(method, parts.path)
+    resp = conn.getresponse()
+    resp.read()
+    conn.close()
+    return sorted(k.lower() for k, _ in resp.getheaders()), dict(resp.getheaders())
+
+
+def test_responses_keep_target_headers_and_hide_tokens_and_url(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    stub_base = f"http://127.0.0.1:{port}"
+    netloc = stub_base.removeprefix("http://")
+    stub, stub_base, _ = start_stub(tmp_path, [
+        {"path": "/plain", "responses": [{"status": 200, "body": "hello world"}]},
+        {"path": "/echo", "responses": [{"status": 302, "headers": {
+            "Location": stub_base + "/next", "X-Seen": TOKEN},
+            "body": f"auth={TOKEN} tenant={TENANT} self={stub_base}/me host={netloc}"}]},
+    ], port)
+    write_targets(targets, {"uat": {"url": stub_base, "accounts": {
+        "alice": {"Authorization": TOKEN, "X-Tenant": TENANT}}}})
+    proxy, base = start_proxy(repo, "uat", env, tmp_path / "p.jsonl")
+    try:
+        direct, _ = headers_of(stub_base + "/plain")
+        proxied, _ = headers_of(base + "/plain")
+        assert proxied == direct
+        _, head_direct = headers_of(stub_base + "/plain", "HEAD")
+        _, head_proxied = headers_of(base + "/plain", "HEAD")
+        assert head_proxied["Content-Length"] == head_direct["Content-Length"] == "11"
+        status, headers, body = call_no_redirect_with(base + "/echo",
+                                                      {"X-Bug-Hunter-Account": "alice"})
+    finally:
+        stop(proxy, stub)
+    assert status == 302 and headers["Location"] == base + "/next"
+    for secret in ("Zq8Wx7CeTk41", TENANT, netloc):
+        assert secret not in body and secret not in json.dumps(headers), secret
+    assert f"self={base}/me" in body
+
+
+def call_no_redirect_with(url, headers):
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+
+    opener = urllib.request.build_opener(NoRedirect)
+    try:
+        with opener.open(urllib.request.Request(url, headers=headers), timeout=10) as resp:
+            return resp.status, dict(resp.headers), resp.read().decode()
+    except urllib.error.HTTPError as err:
+        return err.code, dict(err.headers), err.read().decode()
+
+
+def test_odd_paths_overrides_and_query_dots(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    stub, stub_base, stub_log = start_stub(tmp_path, [{"path": "/x", "responses": [{}]}])
+    write_targets(targets, {"uat": {"url": stub_base}})
+    proxy_log = tmp_path / "p.jsonl"
+    proxy, base = start_proxy(repo, "uat", env, proxy_log, "--max-requests", "1")
+    try:
+        assert b" 400 " in raw(base, "GET /café HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+        assert call(base + "/x", headers={"X-HTTP-Method-Override": "DELETE"})[0] == 403
+        assert call(base + "/x?_method=DELETE")[0] == 403
+        assert call(base + "/x?file=../../etc/hosts")[0] == 200
+    finally:
+        output = stop(proxy, stub)
+    assert "Traceback" not in output
+    assert [e["query"] for e in entries(stub_log)] == ["file=../../etc/hosts"]
+    notes = [e.get("note", "") for e in entries(proxy_log)]
+    assert len(notes) == 4 and all(notes[:3])
