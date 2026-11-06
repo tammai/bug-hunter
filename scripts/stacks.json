@@ -1,0 +1,30 @@
+{
+  "other_extensions": [".sh", ".bash", ".cs", ".swift", ".c", ".h", ".cc", ".cpp", ".hpp", ".lua", ".pl"],
+  "fixture_dirs": ["testdata", "fixtures", "__fixtures__"],
+  "stacks": [
+    {"name": "python", "extensions": [".py"], "edge_inputs": "python-cli", "test_suffixes": ["_test.py"]},
+    {"name": "node", "extensions": [".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte"], "edge_inputs": "node", "test_suffixes": []},
+    {"name": "go", "extensions": [".go"], "edge_inputs": "go", "test_suffixes": ["_test.go"]},
+    {"name": "rust", "extensions": [".rs"], "edge_inputs": "rust", "test_suffixes": []},
+    {"name": "jvm", "extensions": [".java", ".kt"], "edge_inputs": "jvm", "test_suffixes": ["Test.java", "Tests.java", "Test.kt", "Tests.kt"]},
+    {"name": "ruby", "extensions": [".rb"], "edge_inputs": "ruby", "test_suffixes": ["_spec.rb", "_test.rb"]},
+    {"name": "php", "extensions": [".php"], "edge_inputs": "php", "test_suffixes": ["Test.php"]}
+  ],
+  "installs": [
+    {"lockfile": "package-lock.json", "command": "npm ci --ignore-scripts"},
+    {"lockfile": "pnpm-lock.yaml", "command": "pnpm install --frozen-lockfile --ignore-scripts"},
+    {"lockfile": "yarn.lock", "unless": ".yarnrc.yml", "command": "yarn install --frozen-lockfile --ignore-scripts"},
+    {"lockfile": "yarn.lock", "when": ".yarnrc.yml", "command": "YARN_ENABLE_SCRIPTS=0 yarn install --immutable"},
+    {"lockfile": "bun.lock", "command": "bun install --frozen-lockfile --ignore-scripts"},
+    {"lockfile": "bun.lockb", "command": "bun install --frozen-lockfile --ignore-scripts"},
+    {"lockfile": "uv.lock", "command": "uv sync --frozen"},
+    {"lockfile": "poetry.lock", "command": "poetry install --no-root"},
+    {"lockfile": "go.sum", "command": "go mod download"},
+    {"lockfile": "Cargo.lock", "command": "cargo fetch --locked"},
+    {"lockfile": "Gemfile.lock", "command": "BUNDLE_FROZEN=true bundle install"},
+    {"lockfile": "composer.lock", "command": "composer install --no-scripts --no-plugins"},
+    {"lockfile": "gradlew", "command": "./gradlew --no-daemon dependencies"},
+    {"lockfile": "mvnw", "command": "./mvnw -B -q dependency:go-offline"},
+    {"lockfile": "pom.xml", "command": "mvn -B -q dependency:go-offline", "unless": "mvnw"}
+  ]
+}
