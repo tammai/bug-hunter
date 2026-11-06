@@ -39,7 +39,7 @@ When your part calls an HTTP API or a vendor SDK (your lists include `integratio
 - Point the code at the stub through its own configuration (a base URL env var or config value, or a client built in a small driver script): never the real service, and never any other network address.
 - If the URL can't be changed, use the project's own installed mocking library (nock, msw, responses, httptest); otherwise the suspect is "couldn't reproduce".
 - Before you finish, stop the stub with `kill "$(cat <its temp folder>/stub.pid)"`; `--idle-exit` stops a forgotten one after ten quiet minutes (each Bash call is a new shell, so job numbers don't carry over): stop the stub even when the repro fails.
-- In a draft, the stub comes from one exact step, written character for character (with `<version>` from `<PLUGIN>/.claude-plugin/plugin.json`): `curl -fsSLo stub_server.py https://raw.githubusercontent.com/tammai/bug-hunter/v<version>/scripts/stub_server.py`. Then the steps start it with `python3 stub_server.py --scenario s.json --log stub.log --idle-exit 60 &`, so a maintainer can run them and it stops on its own.
+- In a draft, the stub comes from one exact step, written character for character (with `<version>` from `<PLUGIN>/.claude-plugin/plugin.json`): `curl -fsSLo stub_server.py https://raw.githubusercontent.com/tammai/bug-hunter/v<version>/scripts/stub_server.py`. Then the steps write `s.json` and start the stub on a fixed port and wait for it, all in one step: `python3 stub_server.py --scenario s.json --log stub.log --port 8765 > stub.out 2>&1 & until grep -q listening stub.out || ! kill -0 $! 2>/dev/null; do sleep 0.1; done; cat stub.out`. Later steps use `http://127.0.0.1:8765`. The stub stops itself after ten quiet minutes.
 
 ## What a repro must be
 

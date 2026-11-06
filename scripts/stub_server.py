@@ -20,7 +20,6 @@ SECRET_WORD = re.compile(
     r"token|secret|api[-_ ]?key|password|passwd|authorization|cookie|credential"
     r"|private[-_ ]?key|session", re.I,
 )
-SECRET_HEADER = SECRET_WORD
 MAX_BODY = 65536  # logged
 PARSE_LIMIT = 10 * 1024 * 1024  # read and parsed for redaction
 MAX_CHUNK = 64 * 1024 * 1024
@@ -80,6 +79,10 @@ class _Withhold(Exception):
     """The body may hold a secret that structured redaction couldn't isolate."""
 
 
+class _Unparsed(Exception):
+    """The body isn't in the shape it claimed; fine to log only if it plainly has no secret."""
+
+
 def _secret_name(name: str) -> bool:
     return bool(SECRET_WORD.search(unquote_plus(name)))
 
@@ -102,7 +105,7 @@ def _redact_json_text(text: str) -> str:
         try:  # newline-delimited JSON
             return "\n".join(json.dumps(_redact_json(json.loads(line))) for line in lines)
         except json.JSONDecodeError:
-            raise _Withhold from None
+            raise _Unparsed from None
 
 
 def _redact_pairs(text: str) -> str:
@@ -124,7 +127,7 @@ def _redact_multipart(raw: bytes, content_type: str) -> str:
         f"Content-Type: {content_type}\r\n\r\n".encode() + raw
     )
     if not message.is_multipart():
-        raise _Withhold
+        raise _Unparsed
     fields = []
     for part in message.iter_parts():
         name = part.get_param("name", header="content-disposition") or ""
@@ -143,9 +146,10 @@ def _redact_body(raw: bytes, content_type: str, complete: bool) -> str:
     text = raw.decode("utf-8", errors="replace")
     if not text.strip():
         return text
+    withheld = f"<body withheld: {len(raw)} bytes; it may hold a secret>"
     try:
         if not complete:
-            raise _Withhold  # cut short, so no parser sees the whole thing
+            return withheld  # cut short, so no parser sees the whole thing
         kind = content_type.lower()
         if "multipart/" in kind:
             return _redact_multipart(raw, content_type)
@@ -153,14 +157,15 @@ def _redact_body(raw: bytes, content_type: str, complete: bool) -> str:
             return _redact_json_text(text)
         if "x-www-form-urlencoded" in kind or re.fullmatch(r"[^\s=&]+=[^\s]*", text.strip()):
             return _redact_pairs(text.strip())
-        if SECRET_WORD.search(text):
-            raise _Withhold
+        raise _Unparsed
+    except _Withhold:
+        # Redaction found a secret it couldn't isolate: never fall back to the raw text.
+        return withheld
+    except (_Unparsed, ValueError, TypeError, LookupError):
+        # Escapes (\u0073, %73) can spell a secret word the raw text doesn't show.
+        if SECRET_WORD.search(text) or re.search(r"\\u[0-9a-fA-F]{4}|%[0-9a-fA-F]{2}", text):
+            return withheld
         return text
-    except (_Withhold, ValueError, TypeError, LookupError):
-        if complete and not SECRET_WORD.search(text):
-            return text
-        # Better to lose a log line than to paste a credential into a draft.
-        return f"<body withheld: {len(raw)} bytes; it may hold a secret>"
 
 
 def _redact_query(query: str) -> str:
@@ -173,7 +178,7 @@ def _redact_query(query: str) -> str:
         return "<query withheld: it may hold a secret>"
 
 
-def _handler(rules: list[dict], log: Path, seen: list[float]) -> type[BaseHTTPRequestHandler]:
+def _handler(rules: list[dict], log: Path, seen: list) -> type[BaseHTTPRequestHandler]:
     calls: dict[int, int] = {}
     lock = threading.Lock()
 
@@ -191,7 +196,10 @@ def _handler(rules: list[dict], log: Path, seen: list[float]) -> type[BaseHTTPRe
 
             if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
                 while True:
-                    size = int(self.rfile.readline().split(b";")[0].strip() or b"0", 16)
+                    size_text = self.rfile.readline().split(b";")[0].strip() or b"0"
+                    if not re.fullmatch(rb"[0-9a-fA-F]+", size_text):
+                        raise ValueError("chunk size isn't hex")
+                    size = int(size_text, 16)
                     if size > MAX_CHUNK:
                         raise ValueError("chunk too large")
                     if size == 0:
@@ -220,7 +228,7 @@ def _handler(rules: list[dict], log: Path, seen: list[float]) -> type[BaseHTTPRe
             entry = {
                 "time": round(time.time(), 3), "method": self.command, "path": url.path,
                 "query": _redact_query(url.query),
-                "headers": {k: "<redacted>" if SECRET_HEADER.search(k) else v
+                "headers": {k: "<redacted>" if SECRET_WORD.search(k) else v
                             for k, v in self.headers.items()},
                 "body": logged[:MAX_BODY],
                 "body_bytes": total,
@@ -231,7 +239,16 @@ def _handler(rules: list[dict], log: Path, seen: list[float]) -> type[BaseHTTPRe
                 out.write(json.dumps(entry) + "\n")
 
         def _respond(self) -> None:
-            seen[0] = time.monotonic()
+            with lock:
+                seen[1] += 1  # in flight: a slow scripted answer isn't idleness
+            try:
+                self._answer()
+            finally:
+                with lock:
+                    seen[1] -= 1
+                    seen[0] = time.monotonic()
+
+        def _answer(self) -> None:
             try:
                 body, total = self._read_body()
             except (ValueError, MemoryError):
@@ -311,7 +328,7 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--idle-exit", type=float, default=600,
                         help="exit after this many seconds without a request")
     args = parser.parse_args(argv)
-    seen = [time.monotonic()]
+    seen = [time.monotonic(), 0]  # last activity, requests in flight
     try:
         rules = _load(Path(args.scenario))
         # Loopback only: the stub must never be reachable from outside this machine.
@@ -327,7 +344,7 @@ def _main(argv: list[str] | None = None) -> int:
 
     def watch() -> None:
         # A stub nobody stopped stops itself, so a forgotten one can't linger.
-        while time.monotonic() - seen[0] < args.idle_exit:
+        while seen[1] or time.monotonic() - seen[0] < args.idle_exit:
             time.sleep(min(1.0, args.idle_exit / 4))
         server.shutdown()
 

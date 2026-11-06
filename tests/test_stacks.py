@@ -208,3 +208,19 @@ def test_fetch_counts_only_as_a_js_global_call(make_repo):
         assert "integrations" not in by_dir[d], d
     for d in ("jscall", "tscall"):
         assert by_dir[d][-1] == "integrations", d
+
+
+def test_fetch_definitions_with_types_and_more_js_files(make_repo):
+    repo = make_repo({
+        "tsrepo/a.ts": "class Repo {\n  fetch(url: string): Promise<Response> {\n"
+                       "    return x\n  }\n}\n",
+        "tsmulti/b.ts": "class R {\n  fetch(\n    url,\n  ) {\n    return 1\n  }\n}\n",
+        "renamed/c.js": "const httpGet = require('node-fetch')\nawait httpGet(url)\n",
+        "esm/d.mts": "export const get = async (u) => await fetch(u)\n",
+        "page/e.html": "<script>fetch('/api').then(r => r.json())</script>\n",
+        "multicall/f.js": "const r = fetch(\n  url,\n  { method: 'POST' },\n)\n",
+    })
+    by_dir = {p["dir"]: p["edge_inputs"] for p in scope(repo)["parts"]}
+    assert "integrations" not in by_dir["tsrepo"] and "integrations" not in by_dir["tsmulti"]
+    for d in ("renamed", "esm", "multicall"):
+        assert by_dir[d][-1] == "integrations", d

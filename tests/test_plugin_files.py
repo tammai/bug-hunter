@@ -225,3 +225,11 @@ def test_stub_start_and_stop_are_safe_as_written():
     assert "kill -0" in hunter and 'echo "$S"' in hunter and "--idle-exit" in hunter
     _, verifier = read("agents/repro-verifier.md")
     assert "also save its PID" not in verifier and "--idle-exit" in verifier
+
+
+def test_draft_stub_step_is_reachable_and_verifier_note_is_gone():
+    _, hunter = read("agents/bug-hunter.md")
+    assert "python3 stub_server.py --scenario s.json --log stub.log --port" in hunter
+    assert "until grep -q listening stub.out" in hunter
+    _, verifier = read("agents/repro-verifier.md")
+    assert "may still be running" not in verifier

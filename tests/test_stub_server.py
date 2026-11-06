@@ -277,3 +277,33 @@ def test_limits_statuses_and_idle_exit(tmp_path):
                              str(path), "--log", str(tmp_path / "i.jsonl"), "--idle-exit", "1"],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     assert idle.wait(timeout=10) == 0
+
+
+def test_escaped_secrets_slow_answers_and_negative_chunks(tmp_path):
+    import socket
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps([
+        {"method": "POST", "path": "/in", "responses": [{"status": 200}]},
+        {"path": "/slow", "responses": [{"status": 200, "body": "late", "delay": 2.5}]},
+    ]), encoding="utf-8")
+    log = tmp_path / "l.jsonl"
+    proc = subprocess.Popen([sys.executable, str(SCRIPTS / "stub_server.py"), "--scenario",
+                             str(path), "--log", str(log), "--idle-exit", "1"],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    base = proc.stdout.readline().strip().removeprefix("listening on ")
+    host, port = base.removeprefix("http://").split(":")
+    try:
+        call(base + "/in", "POST", b'{"x": "pa\\u0073sword Hu9nter2"}',
+             {"Content-Type": "application/json"})
+        call(base + "/in", "POST", b'{"payload": "{\\"\\u0074oken\\": \\"Zq8Wx7Ce\\"}"}',
+             {"Content-Type": "application/json"})
+        assert call(base + "/slow")[2] == "late"
+        raw = socket.create_connection((host, int(port)), timeout=5)
+        raw.sendall(b"POST /in HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n-1\r\n")
+        assert b" 400 " in raw.recv(200).split(b"\r\n")[0]
+        raw.close()
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+    text = log.read_text(encoding="utf-8")
+    assert "Hu9nter2" not in text and "Zq8Wx7Ce" not in text
