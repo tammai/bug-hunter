@@ -2,7 +2,7 @@
 
 A Claude Code plugin that hunts reproducible edge-case bugs in a repo and writes an issue draft for each. A bug is kept only when its repro was run by a hunter and re-run by a separate verifier from the draft alone. It never posts anything: you pick what gets filed.
 
-> **Status:** v0.1.0, not yet released. The scripts are tested, but there hasn't been a live `/hunt` run yet, so start with `--max 1`.
+> **Status:** v0.3.0, released (see [Releases](https://github.com/tammai/bug-hunter/releases)). The scripts are tested, but there hasn't been a live `/hunt` run yet, so start with `--max 1`.
 
 ## Install
 
