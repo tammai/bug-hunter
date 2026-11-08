@@ -35,6 +35,9 @@ Background: [BRIEF.md](../BRIEF.md) — where the recipe comes from; [PRD](../do
 - [runs/2026-11-08-b0-7-python-markdown2-rerun.md](runs/2026-11-08-b0-7-python-markdown2-rerun.md) — B0 run 7: Python CLI rerun, home-path defect found
 - [runs/2026-11-08-b0-8-json-server-service.md](runs/2026-11-08-b0-8-json-server-service.md) — B0 run 8: Node/TS hunt, leftover-process defect found
 - [runs/2026-11-08-b0-9-godotenv-cmd.md](runs/2026-11-08-b0-9-godotenv-cmd.md) — B0 run 9: Go CLI hunt, clean
+- [runs/2026-11-08-b0-10-json-server-adapters.md](runs/2026-11-08-b0-10-json-server-adapters.md) — B0 run 10: Node/TS hunt, leftover servers again
+- [runs/2026-11-08-b0-11-godotenv-autoload.md](runs/2026-11-08-b0-11-godotenv-autoload.md) — B0 run 11: Go hunt, no bugs, clean
+- [runs/2026-11-08-b0-12-live-flaskr-rerun.md](runs/2026-11-08-b0-12-live-flaskr-rerun.md) — B0 run 12: live rerun, clean; offline-only bug dropped
 
 ## Features
 -
