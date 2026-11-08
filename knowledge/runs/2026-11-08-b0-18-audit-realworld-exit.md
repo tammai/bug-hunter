@@ -22,7 +22,7 @@ description: 1 new low finding with every citation checked against the code; no 
 
 ## Result
 
-1 new finding, low, confirmed: 31 no security headers and `X-Powered-By: Express` on routes that return tokens and emails (fix at `src/main.ts:7` and `:13`). Every citation was checked by hand against the code: `main.ts:7` (`const app = express()`), `main.ts:13` (`app.use(cors())`, start of the middleware chain), `routes.ts:13` (`Router().use('/api', api)`), `auth.controller.ts:17/33/48/64` (`res…json({ user })`); `findings.py check --repo` passes. Secrets scan: nothing; npm audit: 14 advisories, all already reported; no suspect dropped; the auditor ruled out about 11 candidates itself. The scratch folder and fingerprints were removed; `git status` in the target repo is clean.
+1 new finding (31), low, confirmed. Every citation in it was checked by hand against the code (each cited line holds the code the finding describes) and `findings.py check --repo` passes. Secrets scan: nothing; npm audit: 14 advisories, all already reported; no suspect dropped. The finding texts stay in the owner's private audit folder (constitution II). The scratch folder and fingerprints were removed; `git status` in the target repo is clean.
 
 ## bug-hunter defects found
 

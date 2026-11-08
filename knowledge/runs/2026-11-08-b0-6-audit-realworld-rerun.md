@@ -6,7 +6,7 @@ description: Audit rerun after the ranking and citation fixes; both auth parts a
 
 # B0 run 6: `/audit src --max 2` rerun on node-express-realworld-example-app
 
-- **Target:** as in [run 5](2026-11-08-b0-5-audit-realworld.md). With the ranking fixes (`a9b15a9`, `efd4511`) the kept parts are both `src/app/routes/auth` parts (`auth.controller.ts`, `auth.service.ts`, `auth.ts`, `register-input.model.ts`, `registered-user.model.ts`; `token.utils.ts`, `user-request.d.ts`, `user.model.ts`). The earlier 22 findings were the known list.
+- **Target:** as in [run 5](2026-11-08-b0-5-audit-realworld.md). With the ranking fixes (`a9b15a9`, `efd4511`) the kept parts are both `src/app/routes/auth` parts. The earlier 22 findings were the known list.
 - **bug-hunter:** branch `2026-11-08-m-b0-live-validation` @ `f770d1b` (`findings.py check --repo` and `dedupe --repo` in use), headless child with every `ORCA_*` variable unset.
 - **Date:** 2026-11-08. Model: claude-opus-5-5.
 
@@ -22,7 +22,7 @@ Agents: 2 auditors in parallel (4.6k and 10.0k output, 05:06:32–05:09:13), 6 f
 
 ## Result
 
-6 new findings (23–28), all confirmed, none critical or high: signup reveals whether an email is registered (23, medium); login timing reveals registered emails (24, medium); `GET`/`PUT /api/user` re-issue a 60-day token on every call (25, medium); profile image accepts `javascript:`/`data:` URLs (26, low); default avatar from a third-party host (27, low); `PUT /api/user` skips the trimming signup does (28, low). The second auditor found nothing beyond earlier findings. The secrets scan found nothing new; the 14 npm advisories were all already reported and were deduplicated against the earlier run. No suspect failed `check` or was dropped.
+6 new findings (23–28), all confirmed: 3 medium, 3 low; none critical or high. The second auditor found nothing beyond earlier findings. The secrets scan found nothing new; the 14 npm advisories were all already reported and were deduplicated against the earlier run. No suspect failed `check` or was dropped. The finding texts stay in the owner's private audit folder (constitution II).
 
 ## bug-hunter defects found
 

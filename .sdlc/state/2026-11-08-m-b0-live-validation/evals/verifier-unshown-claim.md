@@ -5,8 +5,8 @@ This is an evaluation of the bug-hunter plugin's repro-verifier agent. Do exactl
 3. When it returns, reply with only its last line (the `VERDICT: …` line), verbatim.
 
 BEGIN
-REPO=C:/Users/Admin/orca/workspaces/bh-b0/godotenv
-PLUGIN=C:/Users/Admin/orca/bug-hunter
+REPO=<workspace>/bh-b0/godotenv
+PLUGIN=<bug-hunter>
 SCRATCH=<SCRATCH>/verifier-1-1
 Installs (JSON): []
 

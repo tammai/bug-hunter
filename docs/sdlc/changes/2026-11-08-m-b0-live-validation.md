@@ -4,7 +4,7 @@
 
 **Request:** implement [docs/specs/rebuild-upgrade/04-bug-hunter.md](../../specs/rebuild-upgrade/04-bug-hunter.md), part 0 only (§ "B0 Live validation", ships as 0.3.x). bug-hunter has never had a live `/hunt` run; no 0.4 work starts until it has, and every defect found in bug-hunter itself is fixed test first.
 
-The coordinator chose the targets with the user (python-markdown2, json-server, godotenv, flask's `examples/tutorial` as the live HTTP service, node-express-realworld-example-app for `/audit`, all cloned under `C:/Users/Admin/orca/workspaces/bh-b0/`). Each run is recorded in `knowledge/runs/`.
+The coordinator chose the targets with the user (python-markdown2, json-server, godotenv, flask's `examples/tutorial` as the live HTTP service, node-express-realworld-example-app for `/audit`, all cloned under `<workspace>/bh-b0/`). Each run is recorded in `knowledge/runs/`.
 
 ### Defect 1: `/audit --max` spends its auditors on test config, not auth code
 
@@ -20,7 +20,7 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 
 ### Defect 3: `author` counts as `auth`
 
-**Proof:** the `/audit src --max 2` preview on node-express-realworld-example-app keeps `src/app/routes/article` (for `author.mapper.ts`) as an identity part and leaves out `src/app/routes/auth/token.utils.ts`.
+**Proof:** the `/audit src --max 2` preview on node-express-realworld-example-app keeps `src/app/routes/article` (for `author.mapper.ts`) as an identity part and leaves out the second `src/app/routes/auth` part.
 
 **Root cause:** keywords match as word prefixes, so `author` matches `auth`. A prefix is still needed for `authorization`, `authGuard`, `users`, `tokens`.
 
@@ -32,7 +32,7 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 
 ### Defect 5: `/audit` keeps findings whose Where lines don't point into the repo
 
-**Proof:** `/audit src --max 2` on node-express-realworld-example-app (run 5). Finding 05 cites `C:/Users/Admin/orca/workspaces/bh-b0/…/token.utils.ts:4`, so `findings.py dedupe` didn't match it to finding 04 (`src/app/routes/auth/token.utils.ts:4`, same root cause) and both were reported. Finding 18 cites `src/main.ts:85` as the sink; the file has 57 lines (the code is at 43–44, as finding 19 cites). Its verifier noticed and still confirmed it, so 18 and 19 were not merged either.
+**Proof:** `/audit src --max 2` on node-express-realworld-example-app (run 5). Finding 05 cites absolute paths (`<workspace>/…/<file>:<line>`), so `findings.py dedupe` didn't match it to finding 04 (the same root cause, cited relatively) and both were reported. Finding 18 cites `src/main.ts:85` as the sink; the file has 57 lines (the code is at 43–44, as finding 19 cites). Its verifier noticed and still confirmed it, so 18 and 19 were not merged either.
 
 **Root cause:** `findings.py check` only tests that Where has a `path:line`, not that it names a line in the repo. The auditor prompt says `path:line` without saying relative to `REPO`, and nothing checks the line exists.
 
@@ -112,7 +112,7 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 | AC-015 | manual | Agent behaviour, so an eval, not a unit test: `claude -p --plugin-dir <bug-hunter>` from the godotenv clone dispatches one `repro-verifier` with `.sdlc/state/2026-11-08-m-b0-live-validation/evals/verifier-unshown-claim.md` (run 9's draft 04 plus an unshown SIGTERM claim). Before the prompt fix: `VERDICT: REPRODUCES` (red, $0.34). After: `VERDICT: DOES NOT REPRODUCE — unshown claim: a child killed by SIGTERM makes godotenv exit 1 instead of 143 (no step signals the child)` ($0.14). The same draft without the claim (`evals/verifier-honest-draft.md`): `VERDICT: REPRODUCES` ($0.31) |
 | AC-016 | tests/test_isolate.py › test_relative_writes_land_in_the_copy_never_the_repo; tests/test_isolate.py › test_a_hunter_can_replace_its_copy_after_the_prefix | `uv run pytest tests/test_isolate.py::test_relative_writes_land_in_the_copy_never_the_repo tests/test_isolate.py::test_a_hunter_can_replace_its_copy_after_the_prefix` |
 | AC-017 | manual | Agent behaviour, checked by eval after the fix (prompts in `.sdlc/state/2026-11-08-m-b0-live-validation/evals/`): `verifier-unshown-claim.md` → `DOES NOT REPRODUCE — unshown claim: …SIGTERM…`; `verifier-honest-draft.md` (has a "who it hits" sentence and a docs-based Expected) → `REPRODUCES`; `verifier-role-premise.md` ("a normal (non-admin) user", shown by no step) → `REPRODUCES`. About $0.30 each |
-| AC-018 | manual | Agent behaviour, checked by eval: `finding-verifier-wrong-line.md` (run 15's finding 29 as written, `schema.prisma:44`): before the fix `VERDICT: CONFIRMED` (red, $0.36), after `VERDICT: NOT CONFIRMED — wrong citation: src/prisma/schema.prisma:44 holds id Int @id …, the quoted code email String @unique is at line 45`; `finding-verifier-right-line.md` (line 45) → `VERDICT: CONFIRMED` |
+| AC-018 | manual | Agent behaviour, checked by eval (these two prompts embed a private audit finding, so they are kept in the owner's audit folder, `~/.bug-hunter/github.com/gothinkster/node-express-realworld-example-app/evals/`, not in the repo): `finding-verifier-wrong-line.md` (run 15's finding 29 as written): before the fix `VERDICT: CONFIRMED` (red, $0.36), after `VERDICT: NOT CONFIRMED — wrong citation: src/prisma/schema.prisma:44 holds id Int @id …, the quoted code email String @unique is at line 45`; `finding-verifier-right-line.md` (line 45) → `VERDICT: CONFIRMED` |
 | AC-002 | manual | The records come from live runs that need the owner's approval and a running Claude Code session; checked by reading `knowledge/runs/` |
 
 ## Must never break
