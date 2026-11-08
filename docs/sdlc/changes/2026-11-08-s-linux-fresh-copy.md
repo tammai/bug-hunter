@@ -33,3 +33,7 @@ Also: CI `invariants` ([run 42459256892](https://github.com/tammai/bug-hunter/ac
 ## Out of scope
 
 - Publishing: push, PR, merge and `v0.3.3` wait for the user's go-ahead.
+
+## Review
+
+No review ran: S, low risk, no trigger fired. AC-001's test failed on Linux CI (run 42459256915) and passes locally on Windows; Linux green is checked by this PR's CI.

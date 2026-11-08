@@ -1,5 +1,5 @@
 # 2026-11-08-s-linux-fresh-copy
-Status: active
+Status: done
 Process: 3
 Track: S   (footprint: 2 files)
 Risk: low
@@ -7,7 +7,7 @@ Top model: opus
 Base: 7789477
 Owner: tammai.it@gmail.com
 Tool: claude-code
-Current: Stage 2 – Build
+Current: Stage 4 – Ship
 
 ## Tasks
 1. **git runs from a folder that always exists** — AC-001
@@ -20,6 +20,7 @@ Current: Stage 2 – Build
 
 ## Gate log
 - 2026-11-08 Stage 1: pass — S: bug proven by CI (Linux), red can't be recorded locally
+- 2026-11-08 Stage 2: pass — no review: S, low risk, no trigger fired; AC-001 red on Linux CI, green locally
 
 ## Deviations
 - 2026-11-08 AC-001 red step: What: verify.py red not run locally. Why: the test passes on Windows (Git Bash keeps a deleted working folder usable); it failed on Linux CI, run 42459256915 on 7789477. Effect: red evidence is that CI run; green is checked on Windows locally and on Linux by CI after push.
