@@ -49,6 +49,7 @@ inline; target runs as headless child sessions only once the coordinator relays 
 - 2026-11-08 AC-007 added: What: drafts.py check rejects the owner's home path (scripts/drafts.py, tests/test_drafts.py). Why: B0 run 7 draft 05 carried C:\Users\<owner>\... into a draft meant for a public issue. Effect: one more AC.
 - 2026-11-08 AC-008 added: What: new scripts/reap.py (+ tests/test_reap.py), bg.pids rule in agents/bug-hunter.md, agents/repro-verifier.md, agents/security-auditor.md, agents/finding-verifier.md, reap step in commands/hunt.md and commands/audit.md. Why: B0 run 8 hunter left the target's node server running and rm -rf of the scratch failed. Effect: one new script and command step.
 - 2026-11-08 AC-009 added: What: isolate.py's output sets an EXIT trap listing background jobs in bg.pids (scripts/isolate.py, tests/test_isolate.py). Why: B0 run 10 hunter left two unlisted servers running despite the bg.pids rule. Effect: one more AC.
+- 2026-11-08 AC-010 added: What: reap.py stops the process tree under each listed PID (scripts/reap.py, tests/test_reap.py). Why: run 10's transcript shows the hunter listed and killed the PIDs, but one was a subshell whose node child survived. Effect: one more AC; AC-009's trap kept for forgotten jobs.
 
 ## Open questions
 -

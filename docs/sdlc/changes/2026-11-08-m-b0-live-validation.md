@@ -50,6 +50,8 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 
 **Defect 7 again (run 10):** after `e203dbf`, a hunter on json-server `src/adapters` started two servers (ports 3457, 3458) without listing them in `bg.pids`, so `reap.py` couldn't stop them; the first verifier for draft 07 couldn't bind its port and returned `CANNOT RUN`. A rule agents must remember isn't enough: the listing has to happen without them.
 
+**Root cause, from the transcript:** the hunter did list both PIDs and did `kill` them. One server was started as `printf … > db2.json && node src/bin.ts … &`, which backgrounds a subshell, so `$!` is the subshell; killing it leaves `node` running (reproduced: after `kill`, the node with a marker argument was still there; started directly with `node … &`, it ends). `reap.py` killed only the listed PID, not what runs under it. The trap from `9243852` still covers an agent that forgets to list a job.
+
 ## Decisions
 
 | Decision | Ruled out | Why |
@@ -63,6 +65,7 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 | `drafts.py check` fails a draft that contains the home folder of whoever runs the check (as `C:\…`, `C:/…` or Git Bash `/c/…`, any case); the hunter's output is still never rewritten, so such a draft is dropped and listed | Masking the path in place; matching the bare user name | `/hunt` never rewrites a hunter's output (constitution I); a bare name like `Admin` would reject ordinary text |
 | Agents append the PID (`$!`) of every background process they start to `<SCRATCH>/bg.pids`, start the program itself rather than through a wrapper (`npm start`, `pnpm`, `go run`), and stop it before finishing. New `scripts/reap.py <scratch>` stops every PID listed in `bg.pids` at the scratch root or one level down, with `kill` (Git Bash's on Windows), accepting digits only. `/hunt` and `/audit` run it before `rm -rf "$SCRATCH"` and report a folder they couldn't remove | Finding leftovers by command line; `taskkill` | The orphan's command line was relative (`node src/bin.ts`), so it never names the scratch folder; MSYS PIDs aren't Windows PIDs |
 | The isolation prefix every agent Bash call starts with (`isolate.py`'s output) also sets `trap 'jobs -p >> <scratch>/bg.pids' EXIT`, so every background job a call leaves running is listed when the call ends, whether or not the agent remembers | A `trap` that kills jobs at the end of each call | Servers must outlive the call that starts them: agents start one, then send requests from later calls |
+| `reap.py` collects the whole process tree under each listed PID from `ps -ef` (`UID PID PPID …` on Git Bash, Linux and macOS) before stopping anything, then stops the deepest first | `kill -- -<pgid>` | Background jobs of a non-interactive shell share its process group, which can hold more than the agent's jobs |
 | One change file for all of B0's fixes; each later defect adds its AC through a deviation | One feature per defect | B0 ships as one 0.3.x release with its run records |
 
 ## Acceptance criteria
@@ -75,6 +78,7 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 - **AC-007** — 04 §B0 / constitution (no person's data in output): `drafts.py check` rejects a draft containing the checking user's home folder path in Windows, forward-slash or Git Bash form, any case, and passes one without it.
 - **AC-008** — 04 §B0: `reap.py <scratch>` stops every process whose PID an agent listed in `bg.pids`, ignores lines that aren't a bare number (never passing them to a shell) and PIDs that no longer exist, and exits 0 when the folder is missing.
 - **AC-009** — 04 §B0: a background job started after `eval` of `isolate.py`'s output is listed in `<scratch>/bg.pids` when the shell exits, without the agent writing it, and `reap.py` then stops it.
+- **AC-010** — 04 §B0: when a listed PID is a subshell (`( … ) &`, `cmd && prog &`), `reap.py` also stops the processes running under it.
 - **AC-002** — 04 §B0 (record each run): every `/hunt` and `/audit` run in B0 has a record in `knowledge/runs/` with target and commit, cost, kept, dropped and why, and any bug-hunter defect it found.
 
 ## Acceptance tests
@@ -89,6 +93,7 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 | AC-007 | tests/test_drafts.py › test_check_rejects_the_owners_home_path | `uv run pytest tests/test_drafts.py::test_check_rejects_the_owners_home_path` |
 | AC-008 | tests/test_reap.py › test_stops_what_agents_listed_and_ignores_the_rest | `uv run pytest tests/test_reap.py::test_stops_what_agents_listed_and_ignores_the_rest` |
 | AC-009 | tests/test_isolate.py › test_background_jobs_are_listed_so_reap_stops_them | `uv run pytest tests/test_isolate.py::test_background_jobs_are_listed_so_reap_stops_them` |
+| AC-010 | tests/test_reap.py › test_stops_the_processes_under_a_listed_subshell | `uv run pytest tests/test_reap.py::test_stops_the_processes_under_a_listed_subshell` |
 | AC-002 | manual | The records come from live runs that need the owner's approval and a running Claude Code session; checked by reading `knowledge/runs/` |
 
 ## Must never break

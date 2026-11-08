@@ -33,3 +33,27 @@ def test_stops_what_agents_listed_and_ignores_the_rest(tmp_path):
     assert not (scratch / "hacked").exists() and not (agent / "hacked").exists()
 
     assert run_script("reap", tmp_path / "missing").returncode == 0
+
+
+def children(pid: str) -> list[str]:
+    rows = subprocess.run([shutil.which("ps"), "-ef"], capture_output=True, text=True).stdout
+    return [cols[1] for cols in (row.split() for row in rows.splitlines()[1:])
+            if len(cols) > 2 and cols[2] == pid]
+
+
+def test_stops_the_processes_under_a_listed_subshell(tmp_path):
+    # json-server, B0 run 10: `cmd && node src/bin.ts … &` backgrounds a subshell, so `$!` is
+    # the subshell; killing it left node serving on its port.
+    agent = tmp_path / "hunter-1"
+    agent.mkdir()
+    started = subprocess.run(
+        [BASH, "-c", '( sleep 300; true ) > /dev/null 2>&1 & echo $! >> "$1/bg.pids"; echo $!',
+         "_", agent.as_posix()],
+        capture_output=True, text=True, check=True)
+    shell = started.stdout.strip()
+    inner = []
+    while not inner:
+        inner = children(shell)
+
+    assert run_script("reap", tmp_path).returncode == 0
+    assert not alive(shell) and not any(alive(pid) for pid in inner)

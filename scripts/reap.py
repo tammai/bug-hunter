@@ -21,6 +21,26 @@ def _listed(scratch: Path) -> list[int]:
     return sorted(set(pids))
 
 
+def _tree(roots: list[int]) -> list[int]:
+    """The roots and every process under them, deepest first, read before anything is stopped."""
+    # `cmd && prog &` backgrounds a subshell: `$!` is the subshell, and prog outlives its kill.
+    ps = shutil.which("ps")
+    if ps is None:
+        raise FileNotFoundError("ps")
+    rows = subprocess.run([ps, "-ef"], capture_output=True, text=True, errors="replace").stdout
+    children: dict[int, list[int]] = {}
+    for cols in (row.split() for row in rows.splitlines()[1:]):
+        if len(cols) > 2 and cols[1].isdigit() and cols[2].isdigit():
+            children.setdefault(int(cols[2]), []).append(int(cols[1]))
+    order, todo = [], list(roots)
+    while todo:
+        pid = todo.pop()
+        if pid not in order:
+            order.append(pid)
+            todo += children.get(pid, [])
+    return order[::-1]
+
+
 def _stop(pid: int) -> bool:
     if os.name != "nt":
         try:
@@ -40,9 +60,10 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("scratch")
     args = parser.parse_args(argv)
     try:
-        stopped = sum(_stop(pid) for pid in _listed(Path(args.scratch)))
-    except FileNotFoundError:
-        print("error: no kill command on PATH (run from Git Bash)", file=sys.stderr)
+        listed = _listed(Path(args.scratch))
+        stopped = sum(_stop(pid) for pid in (_tree(listed) if listed else []))
+    except FileNotFoundError as exc:
+        print(f"error: no {exc.args[0]} command on PATH (run from Git Bash)", file=sys.stderr)
         return 1
     print(f"stopped {stopped} process(es)")
     return 0
