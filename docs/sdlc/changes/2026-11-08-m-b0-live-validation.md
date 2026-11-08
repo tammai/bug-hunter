@@ -66,6 +66,8 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 | Agents append the PID (`$!`) of every background process they start to `<SCRATCH>/bg.pids`, start the program itself rather than through a wrapper (`npm start`, `pnpm`, `go run`), and stop it before finishing. New `scripts/reap.py <scratch>` stops every PID listed in `bg.pids` at the scratch root or one level down, with `kill` (Git Bash's on Windows), accepting digits only. `/hunt` and `/audit` run it before `rm -rf "$SCRATCH"` and report a folder they couldn't remove | Finding leftovers by command line; `taskkill` | The orphan's command line was relative (`node src/bin.ts`), so it never names the scratch folder; MSYS PIDs aren't Windows PIDs |
 | The isolation prefix every agent Bash call starts with (`isolate.py`'s output) also sets `trap 'jobs -p >> <scratch>/bg.pids' EXIT`, so every background job a call leaves running is listed when the call ends, whether or not the agent remembers | A `trap` that kills jobs at the end of each call | Servers must outlive the call that starts them: agents start one, then send requests from later calls |
 | `reap.py` collects the whole process tree under each listed PID from `ps -ef` (`UID PID PPID …` on Git Bash, Linux and macOS) before stopping anything, then stops the deepest first | `kill -- -<pgid>` | Background jobs of a non-interactive shell share its process group, which can hold more than the agent's jobs |
+| Review r1 H1: the isolation prefix's EXIT trap runs `reap.py <scratch> --record <jobs>`, which writes each job and the whole tree under it to `bg.pids` while the subshell still lives; agents stop their processes with `reap.py`, not `kill`, and `exec` the program after a setup command. PIDs above 2³¹−1 or longer than 10 digits are skipped (H2) | Only telling agents not to `kill` | Run 10 showed agents don't always follow such a rule; the record has to exist before anyone kills the subshell |
+| Security r1: `reap.py` sets `NoDefaultCurrentDirectoryInExePath=1` and refuses a `ps`/`kill` found in the current folder (S1); `findings.py` decides "inside the repo" from the normalised text before any `resolve()` and rejects `\\`/`//` prefixes (S2); its problem lines say `Where line N, citation M` (S3) | Running `reap.py` from another folder in the commands | The script is what the commands and agents call; fixing it covers every caller |
 | One change file for all of B0's fixes; each later defect adds its AC through a deviation | One feature per defect | B0 ships as one 0.3.x release with its run records |
 
 ## Acceptance criteria
@@ -79,6 +81,10 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 - **AC-008** — 04 §B0: `reap.py <scratch>` stops every process whose PID an agent listed in `bg.pids`, ignores lines that aren't a bare number (never passing them to a shell) and PIDs that no longer exist, and exits 0 when the folder is missing.
 - **AC-009** — 04 §B0: a background job started after `eval` of `isolate.py`'s output is listed in `<scratch>/bg.pids` when the shell exits, without the agent writing it, and `reap.py` then stops it.
 - **AC-010** — 04 §B0: when a listed PID is a subshell (`( … ) &`, `cmd && prog &`), `reap.py` also stops the processes running under it.
+- **AC-011** — review r1 H1: when an agent kills a listed subshell itself before `reap.py` runs, the process that ran under it is still stopped, because the isolation prefix records each background job's process tree when the call ends.
+- **AC-012** — review r1 H2: a `bg.pids` line too long to be a PID (`99999999999`, 5,000 digits) is skipped, and `reap.py` exits 0 with no traceback.
+- **AC-013** — security r1 S1: `reap.py` never runs a `ps` or `kill` from the current folder (the target repo's root when `/hunt` runs it), even where Windows' lookup would try it first.
+- **AC-014** — security r1 S2/S3: `findings.py check --repo` never opens a cited path outside the repo (no `resolve()` on a UNC `\\host\share` or `//host/share` path), and its problem lines name a citation by its position, never by its text.
 - **AC-002** — 04 §B0 (record each run): every `/hunt` and `/audit` run in B0 has a record in `knowledge/runs/` with target and commit, cost, kept, dropped and why, and any bug-hunter defect it found.
 
 ## Acceptance tests
@@ -94,6 +100,10 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 | AC-008 | tests/test_reap.py › test_stops_what_agents_listed_and_ignores_the_rest | `uv run pytest tests/test_reap.py::test_stops_what_agents_listed_and_ignores_the_rest` |
 | AC-009 | tests/test_isolate.py › test_background_jobs_are_listed_so_reap_stops_them | `uv run pytest tests/test_isolate.py::test_background_jobs_are_listed_so_reap_stops_them` |
 | AC-010 | tests/test_reap.py › test_stops_the_processes_under_a_listed_subshell | `uv run pytest tests/test_reap.py::test_stops_the_processes_under_a_listed_subshell` |
+| AC-011 | tests/test_reap.py › test_a_subshell_killed_before_reap_still_has_its_child_stopped | `uv run pytest tests/test_reap.py::test_a_subshell_killed_before_reap_still_has_its_child_stopped` |
+| AC-012 | tests/test_reap.py › test_pid_lines_too_long_for_a_pid_are_skipped | `uv run pytest tests/test_reap.py::test_pid_lines_too_long_for_a_pid_are_skipped` |
+| AC-013 | tests/test_reap.py › test_tools_in_the_current_folder_are_never_run | `uv run pytest tests/test_reap.py::test_tools_in_the_current_folder_are_never_run` |
+| AC-014 | tests/test_findings.py › test_citations_outside_the_repo_are_never_opened_or_echoed | `uv run pytest tests/test_findings.py::test_citations_outside_the_repo_are_never_opened_or_echoed` |
 | AC-002 | manual | The records come from live runs that need the owner's approval and a running Claude Code session; checked by reading `knowledge/runs/` |
 
 ## Must never break

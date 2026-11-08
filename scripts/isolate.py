@@ -439,7 +439,10 @@ def _main(argv: list[str] | None = None) -> int:
         return 1
     unset, exports = _plan(scratch, env)
     # Servers outlive the call that starts them; listing them on exit lets reap.py stop them.
-    listing = f"jobs -p >> {shlex.quote((scratch / 'bg.pids').as_posix())}"
+    record = shlex.join([Path(sys.executable).as_posix(), "-I",
+                         Path(__file__).with_name("reap.py").as_posix(), scratch.as_posix(),
+                         "--record"])
+    listing = f'j=$(jobs -p); [ -z "$j" ] || {record} $j > /dev/null 2>&1'
     print("unset " + " ".join(unset) + "; export " + " ".join(
         f"{key}={shlex.quote(value)}" for key, value in exports.items()
     ) + f"; trap {shlex.quote(listing)} EXIT;")

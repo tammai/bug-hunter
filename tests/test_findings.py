@@ -103,6 +103,29 @@ def test_check_with_repo_needs_where_lines_that_exist(tmp_path):
         assert result.returncode == 1 and word in result.stdout, (word, result.stdout)
 
 
+def test_citations_outside_the_repo_are_never_opened_or_echoed(tmp_path, monkeypatch):
+    # Security review r1: resolve() on `\\host\share\x` makes Windows connect to that host
+    # with the owner's credentials (S2), and the problem line echoed the citation, which can
+    # be a secret (S3).
+    import findings
+
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src/a.js").write_text("x\n", encoding="utf-8")
+    resolved = []
+    real_resolve = Path.resolve
+    monkeypatch.setattr(Path, "resolve",
+                        lambda self, *a, **k: resolved.append(str(self)) or real_resolve(self))
+    text = GOOD.replace(
+        "- `src/services/orders.js:30` (findById without owner filter)",
+        "- `\\\\attacker\\share\\x.ts:1`\n- `//attacker/share/y.ts:2`\n"
+        "- `DB_URL=postgres://admin:hunter2@db:5432`")
+    problems = findings._citation_problems(text, repo)
+    assert not any("attacker" in path for path in resolved)
+    assert sum("outside the repo" in p for p in problems) >= 2
+    assert not any("hunter2" in p or "attacker" in p for p in problems)
+
+
 def test_dedupe_with_repo_matches_absolute_and_relative_citations(tmp_path):
     repo, new, audit = tmp_path / "my repo", tmp_path / "new", tmp_path / "audit"
     new.mkdir()

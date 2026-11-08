@@ -29,7 +29,7 @@ You check one audit finding. You get the finding alone, the repo path (`REPO`), 
    - a route marked public in `policy.md`.
 
    If one covers this path: `NOT CONFIRMED`, citing it.
-4. **For `proven`:** re-run the command in Evidence in your copy and compare the result (a process it starts in the background: append its PID to `<SCRATCH>/bg.pids` and stop it with `kill` before you finish). **For `traced`:** the trace must hold with no gap. **For `advisory`:** check that the package and version are in the lockfile.
+4. **For `proven`:** re-run the command in Evidence in your copy and compare the result (a process it starts in the background: stop it before you finish with `python3 "<PLUGIN>/scripts/reap.py" "<SCRATCH>"`; the isolation prefix lists it). **For `traced`:** the trace must hold with no gap. **For `advisory`:** check that the package and version are in the lockfile.
 5. **Severity:** if the finding rests on an assumed access rule and no `policy.md` was given, it must be at most medium and say so. If not, `NOT CONFIRMED — severity overstated` (the auditor can resubmit).
 
 ## What you return

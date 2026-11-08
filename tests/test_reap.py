@@ -1,7 +1,10 @@
+import os
+import shlex
 import shutil
 import subprocess
+import sys
 
-from conftest import run_script
+from conftest import SCRIPTS, run_script
 
 # Resolved, not bare: Windows looks for a bare "bash" in System32 first, which is WSL's.
 BASH = shutil.which("bash")
@@ -57,3 +60,54 @@ def test_stops_the_processes_under_a_listed_subshell(tmp_path):
 
     assert run_script("reap", tmp_path).returncode == 0
     assert not alive(shell) and not any(alive(pid) for pid in inner)
+
+
+def test_a_subshell_killed_before_reap_still_has_its_child_stopped(tmp_path):
+    # An agent that kills the listed subshell itself orphans the child under PID 1, where
+    # reap can no longer find it, unless the tree was recorded while the subshell lived.
+    agent = tmp_path / "hunter-1"
+    command = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(agent)])
+    script = (f'eval "$({command})"; ( sleep 300; true ) > /dev/null 2>&1 & s=$!; '
+              'until ps -ef | awk -v p="$s" \'$3 == p {f = 1} END {exit !f}\'; do :; done; echo $s')
+    shell = subprocess.run([BASH, "-c", script], capture_output=True, text=True,
+                           check=True).stdout.strip()
+    inner = children(shell)
+    assert inner
+    subprocess.run([BASH, "-c", f"kill {shell}"], check=True)
+
+    assert run_script("reap", tmp_path).returncode == 0
+    assert not any(alive(pid) for pid in inner)
+
+
+def test_tools_in_the_current_folder_are_never_run(tmp_path):
+    # Security review r1 S1: /hunt runs reap from the target repo's root, and Windows'
+    # lookup tries the current folder first, so a committed ps.bat would run unisolated.
+    repo = tmp_path / "target"
+    repo.mkdir()
+    marker = tmp_path / "ran"
+    for name in ("ps", "kill"):
+        for ext in (".bat", ".cmd"):
+            (repo / f"{name}{ext}").write_text(f"@echo x > \"{marker}\"\r\n", encoding="utf-8")
+    agent = tmp_path / "hunter-1"
+    agent.mkdir()
+    started = subprocess.run([BASH, "-c", "sleep 300 > /dev/null 2>&1 & echo $!"],
+                             capture_output=True, text=True, check=True)
+    pid = started.stdout.strip()
+    (agent / "bg.pids").write_text(pid + "\n", encoding="utf-8")
+
+    # Claude Code's shell sets this, which hides the lookup; other hosts don't.
+    env = {k: v for k, v in os.environ.items()
+           if k.upper() != "NODEFAULTCURRENTDIRECTORYINEXEPATH"}
+    result = run_script("reap", tmp_path, cwd=repo, env=env)
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+    assert not alive(pid)
+
+
+def test_pid_lines_too_long_for_a_pid_are_skipped(tmp_path):
+    agent = tmp_path / "hunter-1"
+    agent.mkdir()
+    (agent / "bg.pids").write_text("99999999999\n" + "9" * 5000 + "\n", encoding="utf-8")
+    result = run_script("reap", tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "stopped 0" in result.stdout

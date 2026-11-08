@@ -307,25 +307,35 @@ def _spots(line: str) -> list[str]:
 
 def _in_repo(name: str, root: Path) -> Path | None:
     """The cited file's resolved path, or None when it lies outside the repo."""
-    path = (root / name).resolve()  # an absolute name replaces root
+    # Decided from the text before anything touches the disk: resolving `\\host\share\x`
+    # makes Windows connect to that host with the owner's credentials.
+    if name.startswith(("\\\\", "//")):
+        return None
+    normal = Path(os.path.normpath(root / name))  # an absolute name replaces root
+    if not normal.is_relative_to(root):
+        return None
+    path = normal.resolve()
     return path if path.is_relative_to(root) else None
 
 
 def _citation_problems(text: str, repo: Path) -> list[str]:
     """Where lines that don't name a real line of a file in the repo."""
+    # Named by position, never by text: a "citation" can be a secret the auditor quoted.
     found = []
     root = repo.resolve()
-    for spot in (spot for line in _where(text) for spot in _spots(line)):
-        name, number = spot.rsplit(":", 1)
-        path = _in_repo(name, root)
-        if path is None:
-            found.append(f"{spot}: outside the repo")
-        elif not path.is_file():
-            found.append(f"{spot}: no such file in the repo")
-        else:
-            count = len(path.read_text(encoding="utf-8", errors="replace").splitlines())
-            if not 1 <= int(number) <= count:
-                found.append(f"{spot}: past the end of the file ({count} lines)")
+    for row, line in enumerate(_where(text), 1):
+        for number, spot in enumerate(_spots(line), 1):
+            at = f"Where line {row}, citation {number}"
+            name, line_no = spot.rsplit(":", 1)
+            path = _in_repo(name, root)
+            if path is None:
+                found.append(f"{at}: outside the repo")
+            elif not path.is_file():
+                found.append(f"{at}: no such file in the repo")
+            else:
+                count = len(path.read_text(encoding="utf-8", errors="replace").splitlines())
+                if not 1 <= int(line_no) <= count:
+                    found.append(f"{at}: past the end of the file ({count} lines)")
     return found
 
 
