@@ -7,7 +7,7 @@ import re
 import sys
 from pathlib import Path
 
-from drafts import fenced
+from drafts import expected_body, fenced, oracle_problems
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "contracts" / "v1"))
 contracts = importlib.import_module("contracts")  # vendored: importable only after the insert
@@ -127,6 +127,25 @@ def finding(text: str) -> dict:
     }
 
 
+def classify_by_oracle(record: dict, text: str, spec: Path) -> dict:
+    """Set class, criterion, rule and route from what Expected cites (spec §B1, without B2)."""
+    from oracle import CRITERION, BadOracle, cited_rules, domain_headings, is_spec_gap
+
+    try:
+        problems = oracle_problems(text, spec)
+    except BadOracle as exc:
+        raise BadDraft(str(exc)) from None
+    if problems:
+        raise BadDraft(problems[0])
+    if is_spec_gap(text):
+        return {**record, "class": "spec-gap", "route": "rspec"}
+    expected = expected_body(text)
+    ids = CRITERION.findall(expected)
+    rules = cited_rules(expected, domain_headings(spec))
+    return {**record, "criterion": ids[0] if ids else None,
+            "rule": f"domain.md §{rules[0]}" if rules and not ids else None}
+
+
 def _next_number(out: Path) -> int:
     # Compared by value; one too long to be ours counts as "full", so its name is never retried.
     digits = [m[1].lstrip("0") or "0" for p in out.iterdir() if (m := FINDING_NAME.match(p.name))]
@@ -137,10 +156,13 @@ def _next_number(out: Path) -> int:
     return number
 
 
-def write(repo: str, out: Path, draft: Path) -> Path:
+def write(repo: str, out: Path, draft: Path, oracle: Path | None = None) -> Path:
     if out.resolve().is_relative_to(Path(repo).resolve()):
         raise BadDraft("--out is inside the repo; findings are written outside it")
-    record = finding(draft.read_text(encoding="utf-8"))
+    text = draft.read_text(encoding="utf-8")
+    record = finding(text)
+    if oracle is not None:
+        record = classify_by_oracle(record, text, oracle)
     problems = [m for s, m in contracts.check_finding(record) if s != "warning"]
     if problems:
         raise BadDraft(f"not a valid finding-v1: {problems[0]}")
@@ -168,6 +190,7 @@ def _main(argv: list[str] | None = None) -> int:
     w.add_argument("--repo", required=True, help="the hunted repo; --out must be outside it")
     w.add_argument("--out", required=True, type=Path)
     w.add_argument("--draft", required=True, type=Path, help="a draft its verifier reproduced")
+    w.add_argument("--oracle", type=Path, help="the spec folder: class from what Expected cites")
     args = parser.parse_args(argv)
     try:
         if args.command == "render":
@@ -175,7 +198,7 @@ def _main(argv: list[str] | None = None) -> int:
             text = finding(args.draft.read_text(encoding="utf-8"))["draft"]
             args.draft.write_text(text, encoding="utf-8", newline="")
         else:
-            print(write(args.repo, args.out, args.draft))
+            print(write(args.repo, args.out, args.draft, args.oracle))
     except BadDraft as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

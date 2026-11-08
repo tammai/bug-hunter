@@ -147,6 +147,44 @@ def test_verified_draft_becomes_a_c6_finding(make_repo, tmp_path):
     assert (out / "BH-0009.json").read_text(encoding="utf-8") == "{}"
 
 
+def test_oracle_expected_sets_the_class(make_repo, tmp_path):
+    lock = {"criteria": [{"id": "F-TSK-01.AC2", "feature": "F-TSK-01", "file": "f.md",
+                          "level": 2}]}
+    repo = make_repo({"spec/domain.md": "# Domain rules\n\n## Roles and permissions\nx\n",
+                      "spec/criteria.lock.json": json.dumps(lock)})
+    out = tmp_path / "out"
+    cases = [
+        ("", "B2, per F-TSK-01.AC2.", "build-defect", "F-TSK-01.AC2", None, "sdlc"),
+        ("", "Only a member (domain.md §Roles and permissions).", "build-defect", None,
+         "domain.md §Roles and permissions", "sdlc"),
+        ("Oracle: spec-gap\n", "No criterion or rule covers this.", "spec-gap", None, None,
+         "rspec"),
+    ]
+    for header, expected, klass, criterion, rule, route in cases:
+        text = DRAFT.replace("Severity: high\n", "Severity: high\n" + header)
+        draft = tmp_path / "oracle.md"
+        draft.write_text(text.replace("## Expected\nB2.", "## Expected\n" + expected),
+                         encoding="utf-8")
+        result = run_script("finding_v1", "write", "--repo", repo, "--out", out, "--draft", draft,
+                            "--oracle", repo / "spec")
+        assert result.returncode == 0, result.stderr
+        path = Path(result.stdout.strip())
+        finding = json.loads(path.read_text(encoding="utf-8"))
+        assert (finding["class"], finding["criterion"], finding["rule"], finding["route"]) == \
+            (klass, criterion, rule, route), expected
+        assert finding["verified_by"]["result"] == "reproduced"
+        assert routed(path) == (0, f"routed: {finding['id']} → {route}")
+
+    for expected in ("B2, per F-TSK-01.AC9.", "It should be B2."):
+        draft.write_text(DRAFT.replace("## Expected\nB2.", "## Expected\n" + expected),
+                         encoding="utf-8")
+        result = run_script("finding_v1", "write", "--repo", repo, "--out", out, "--draft", draft,
+                            "--oracle", repo / "spec")
+        assert result.returncode == 1 and result.stderr.startswith("error:"), expected
+        assert "Traceback" not in result.stderr
+    assert len(list(out.iterdir())) == 3
+
+
 def test_refuses_without_severity_or_repro_or_outside_out(make_repo, tmp_path):
     repo = make_repo({"a.py": ""})
     out = tmp_path / "out"

@@ -52,6 +52,14 @@ When you're given `PROXY` (the run hunts a running dev or UAT server):
 - **In a draft**, write each request with the placeholders `"$BASE"` and `"$<ACCOUNT>_AUTH"`, never the proxy, the target or the account header: `curl -sS -i "$BASE/api/orders/8" -H "$BOB_AUTH"`, and put this line right under the title: `Set before running: \`BASE\` (the dev or UAT URL), \`BOB_AUTH\` (a header that logs in as bob, a normal user)`. Name every `_AUTH` the steps use. Run your repro the same way first, so the draft's steps are exactly what you ran: in each Bash call, right after the isolation prefix (it unsets every variable with `AUTH` in its name), `export BASE="<PROXY>" BOB_AUTH="X-Bug-Hunter-Account: bob";` then the same commands.
 - **The target's data changes:** IDs, timestamps and counts in the output can differ on a re-run. Make the steps create what they need (when writes are allowed) or read what they printed, rather than relying on a record you saw once.
 
+## Spec oracle
+
+**Only when your prompt says `Oracle: on`:** you are given an oracle brief (the feature's story, its criteria with their verification level, the `domain.md` sections it cites and its operations). The spec, not the code or its docs, says what is right: the code was written by the builder you are checking.
+- Expected cites the criterion ID (`F-TSK-01.AC2`) or `domain.md §<section>` that says what should happen, with that rule's words.
+- A behaviour you can show is wrong (a crash, data loss, wrong state, an output no sensible reading allows) that no criterion or rule covers is still reported, as a spec-gap candidate: put `Oracle: spec-gap` on its own line under the title and write Expected as `No criterion or rule covers this.`, then what you think should happen and why.
+- Criteria at level 0 or 1 have never been checked against a running reference: test them first.
+- The edge-input lists still apply; the brief changes the judgement, not the search.
+
 ## What a repro must be
 
 Someone with only the draft and a fresh copy of the repo must be able to run it, on another machine: every command runs from the repo's root, each dependency install needed is a step of its own, written as that `installs` entry's `step` exactly, every input file is created by the steps themselves (`printf` or a heredoc) under paths relative to the root or a temp dir the steps make themselves (`T=$(mktemp -d)`, in the same block that uses it), no path from your machine (no `<SCRATCH>`, no home dir), and the actual output is pasted verbatim in a fenced block right after the command that printed it.

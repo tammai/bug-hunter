@@ -148,6 +148,43 @@ def _live_problems(text: str, target: dict) -> list[str]:
     return found
 
 
+def expected_body(text: str) -> str:
+    """The text of a draft's `## Expected` section."""
+    expected, current = [], None
+    for line, in_fence in fenced(text.splitlines()):
+        if line.startswith("## ") and not in_fence:
+            current = line[3:].strip().rstrip(":").casefold()
+        elif current == "expected":
+            expected.append(line)
+    return "\n".join(expected)
+
+
+def oracle_problems(text: str, spec: Path) -> list[str]:
+    """Ways a draft's Expected fails to rest on the spec: an unknown criterion or rule, or none."""
+    from oracle import (  # oracle imports scope
+        CRITERION,
+        domain_headings,
+        is_spec_gap,
+        load_lock,
+        rule_citations,
+    )
+
+    known = {c["id"] for c in load_lock(spec)}
+    body = expected_body(text)
+    found = []
+    ids = CRITERION.findall(body)
+    if set(ids) - known:
+        found.append("Expected cites a criterion that isn't in criteria.lock.json: "
+                     + ", ".join(sorted(set(ids) - known)))
+    rules, unknown = rule_citations(body, domain_headings(spec))
+    if unknown:
+        found.append("Expected cites a domain.md § that isn't a section of domain.md")
+    if not is_spec_gap(text) and not (set(ids) & known or rules):
+        found.append("Expected cites no criterion or domain.md rule (if none covers it, put "
+                     "'Oracle: spec-gap' under the title)")
+    return found
+
+
 def _main(argv: list[str] | None = None) -> int:
     # Windows Python before 3.15 writes in the ANSI code page; the commands read UTF-8.
     for stream in (sys.stdout, sys.stderr):
@@ -160,6 +197,7 @@ def _main(argv: list[str] | None = None) -> int:
     check.add_argument("file")
     check.add_argument("--repo", help="with --target: the repo whose targets.json to read")
     check.add_argument("--target", help="a live draft: hide this target's host and logins")
+    check.add_argument("--oracle", type=Path, help="the spec folder Expected must cite")
     args = parser.parse_args(argv)
 
     if args.command == "dir":
@@ -182,6 +220,14 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"error: cannot read {args.file}: {exc}", file=sys.stderr)
         return 1
     found = problems(text) + _home_problems(text)
+    if args.oracle:
+        from oracle import BadOracle
+
+        try:
+            found += oracle_problems(text, args.oracle)
+        except BadOracle as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
     if args.target:
         from live_proxy import BadTarget, load_target  # live_proxy imports this module
 

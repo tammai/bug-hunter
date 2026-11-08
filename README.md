@@ -122,6 +122,14 @@ Run the steps in order, each in a fresh shell started at the repo's root; `stdou
 
 The contracts are vendored, byte-identical, in `contracts/v1/` (version 1.1.0); `python3 contracts/v1/contracts.py finding <file>` checks a finding.
 
+### Hunt against a spec (0.4, unreleased)
+
+```
+/hunt --oracle <spec> [--max N] [--budget <tokens>] [--format finding-v1 --out <dir>]
+```
+
+For a rebuild with an rspec spec: `<spec>` is the folder holding `criteria.lock.json`. Parts are the spec's features, not folders: each gets its story, the `domain.md` sections the story cites, its `openapi.json` operations and its source files, found from the sdlc state files that list its criteria (`## Criteria`, `## Tasks`) or, failing that, the commits naming its change file (at most 8 files per feature). Features with a criterion below verification level 2 come first, then the most changed lines, then the most failure modes; the ranking is shown before the cost question. A bug's Expected must cite a criterion or a `domain.md` rule; a wrong behaviour nothing covers is kept as a spec-gap candidate (`Oracle: spec-gap`), which `--format finding-v1` writes as `class: spec-gap`, routed to rspec. `scripts/oracle.py scope` does the scoping and ranking.
+
 ## File the ones you want
 
 Read the drafts first: `/hunt-post` shows only titles before it files. Then, from the same repo:
@@ -203,7 +211,7 @@ uv run ruff check .
 | `agents/` | `bug-hunter`, `repro-verifier`, `security-auditor` and `finding-verifier` |
 | `edge-inputs/` | the edge-input lists hunters work through |
 | `security/` | the security and PII checklists auditors work through |
-| `scripts/` | standard-library Python the commands call: `scope.py`, `known.py`, `drafts.py`, `post.py`, `throwaway.py`, `isolate.py`, `secrets_scan.py`, `findings.py`, `finding_v1.py`, `cost_log.py` |
+| `scripts/` | standard-library Python the commands call: `scope.py`, `known.py`, `drafts.py`, `post.py`, `throwaway.py`, `isolate.py`, `secrets_scan.py`, `findings.py`, `finding_v1.py`, `cost_log.py`, `oracle.py` |
 | `contracts/v1/` | the shared contracts, vendored byte-identical from tammai/product-rebuild; never edit them here |
 | `tests/` | pytest for the scripts, and checks on the prompt files |
 

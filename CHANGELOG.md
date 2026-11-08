@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (0.4.0, part 2)
+
+### Added
+
+- **`/hunt --oracle <spec>`** hunts a rebuild against its spec: one part per feature (story, cited `domain.md` rules, operations, source files from the sdlc records), riskiest first (criteria below level 2, changed lines, failure modes), with Expected citing a criterion or rule and uncovered bugs kept as spec-gap candidates (`scripts/oracle.py`, `drafts.py check --oracle`, `finding_v1.py write --oracle`).
+
 ## Unreleased (0.4.0, part 1)
 
 ### Added

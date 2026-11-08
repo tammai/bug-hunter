@@ -27,6 +27,8 @@ You check one bug draft. You get the draft alone, the repo's `installs` list, th
 
 ## What you check
 
+**When you're also given "Cited criteria (from the spec)":** judge Expected against those criteria and `domain.md` sections, not against the code's own docs: Expected must say what they say. A draft marked `Oracle: spec-gap` cites none; for it, check only that the behaviour is plausibly wrong.
+
 **Only when your prompt says `Output: finding-v1`:** the draft's `## Repro (finding-v1)` JSON list is its repro, and its Steps were written from that list by a script. Run the list's steps **instead of** the commands shown in Steps (never both: the Steps block is only a copy of the list for people). Installs are steps of the list like any other. Run each step in order, each in its own Bash call after the isolation prefix, for a live draft the `export BASE=… <ACCOUNT>_AUTH=…;` line (above), and `cd "<SCRATCH>/copy" &&`, wrapped as `{` on one line, the command, then `} 2>&1` on its own line (stdout and stderr together; a heredoc's end line stays alone), and compare what it printed with that step's `stdout`. Steps don't share shell state: a step that relies on a `cd`, `export` or variable from an earlier one fails, and you say which. In item 1 below, "each command" means each JSON step; every other rule applies to those steps as it does to Steps.
 
 1. **Steps to reproduce:** run each command in order and compare what it prints with the output in the draft. Differences that come only from the machine (temp paths, timestamps, PIDs, the copy's location) are fine; a different result is not.
