@@ -18,6 +18,12 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 
 **Root cause:** plain `/hunt` orders parts by folder name only, so root-level build and docs tooling (`setup.py`, `noxfile.py`, `*.config.ts`, `docs/conf.py`) sorts before the code it builds and `--max` keeps it first.
 
+### Defect 3: `author` counts as `auth`
+
+**Proof:** the `/audit src --max 2` preview on node-express-realworld-example-app keeps `src/app/routes/article` (for `author.mapper.ts`) as an identity part and leaves out `src/app/routes/auth/token.utils.ts`.
+
+**Root cause:** keywords match as word prefixes, so `author` matches `auth`. A prefix is still needed for `authorization`, `authGuard`, `users`, `tokens`.
+
 ## Decisions
 
 | Decision | Ruled out | Why |
@@ -25,12 +31,14 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 | Rank parts by the strongest keyword they match, in three tiers kept in `stacks.json` (identity and money: `auth` … `webhook`, `middleware`; entry points: `route` … `api`; data and config: `model` … `env`), stable within a tier | Dropping weak keywords | Data and config parts still belong before plain helpers; they just come after auth |
 | Same keywords, only regrouped | Adding words (`password`, `guard`) | Smallest change that fixes the ranking; no new requirement names them |
 | Plain `/hunt` (and `--live`) moves a part to the end when every file in it is build or docs tooling: a name in `stacks.json` `tooling.names` (`setup.py`, `noxfile.py`, `fabfile.py`, Gulp/Grunt files, `jest.preset.js`), a `*.config.<js/ts>` file, or a file under `docs/`; stable otherwise | Ranking by file size; dropping tooling parts | Size would reorder every repo's hunt; dropping would hide code a user asked for by path. `/audit` keeps its own tiers, since config there is relevant |
+| Exact words in `stacks.json` `security.not_keywords` (`author`, `authors`, `authored`, `authorship`) never match a keyword | Whole-word matching only | Would lose `authorization`, `users`, `tokens` |
 | One change file for all of B0's fixes; each later defect adds its AC through a deviation | One feature per defect | B0 ships as one 0.3.x release with its run records |
 
 ## Acceptance criteria
 
 - **AC-001** — 04 §B0 (fix defects test first): with `--focus security`, a part whose names match an identity keyword (`auth`, `session`, `user`, …) ranks before one matching only an entry-point keyword (`route`, `controller`, …), which ranks before one matching only a data/config keyword (`model`, `config`, …), which ranks before the rest; on a realworld-shaped repo `--max 2` keeps the `auth` parts and no jest config.
 - **AC-003** — 04 §B0 (fix defects test first): without `--focus`, a part made only of build or docs tooling ranks after every other part, so `/hunt --max 1` on a repo with a root `setup.py` and `lib/` hunts `lib/`.
+- **AC-004** — 04 §B0: the words `author`, `authors`, `authored`, `authorship` don't match the `auth` keyword, while `authorization` still does.
 - **AC-002** — 04 §B0 (record each run): every `/hunt` and `/audit` run in B0 has a record in `knowledge/runs/` with target and commit, cost, kept, dropped and why, and any bug-hunter defect it found.
 
 ## Acceptance tests
@@ -39,6 +47,7 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 |---|---|---|
 | AC-001 | tests/test_audit_scope.py › test_focus_ranks_identity_then_entry_points_then_data | `uv run pytest tests/test_audit_scope.py::test_focus_ranks_identity_then_entry_points_then_data` |
 | AC-003 | tests/test_scope.py › test_build_and_docs_tooling_parts_come_last | `uv run pytest tests/test_scope.py::test_build_and_docs_tooling_parts_come_last` |
+| AC-004 | tests/test_audit_scope.py › test_author_is_not_auth | `uv run pytest tests/test_audit_scope.py::test_author_is_not_auth` |
 | AC-002 | manual | The records come from live runs that need the owner's approval and a running Claude Code session; checked by reading `knowledge/runs/` |
 
 ## Must never break

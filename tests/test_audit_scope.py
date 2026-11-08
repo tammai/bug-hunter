@@ -96,6 +96,17 @@ def test_focus_ranks_identity_then_entry_points_then_data(make_repo):
     assert [p["dir"] for p in scope(repo)["parts"]][0] == "src/app/models"
 
 
+def test_author_is_not_auth(make_repo):
+    # node-express-realworld-example-app: article/author.mapper.ts outranked auth/token.utils.ts.
+    repo = make_repo({
+        "src/article/author.mapper.ts": "",
+        "src/policy/authorization.ts": "",
+        "src/routes/index.ts": "",
+    })
+    dirs = [p["dir"] for p in scope(repo, "--focus", "security")["parts"]]
+    assert dirs == ["src/policy", "src/routes", "src/article"]
+
+
 def test_lockfiles_give_dependency_audit_steps(make_repo):
     repo = make_repo({
         "src/a.js": "",

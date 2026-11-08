@@ -135,7 +135,7 @@ def _security_file(path: PurePosixPath) -> bool:
 def _security_rank(part: dict) -> int:
     """0 for the strongest keyword tier a part's names match; one past the last tier for none."""
     names = " ".join([part["dir"], *part["files"]]).lower()
-    words = [w for w in re.split(r"[/._\- ]+", names) if w]
+    words = [w for w in re.split(r"[/._\- ]+", names) if w and w not in SECURITY["not_keywords"]]
     tiers = SECURITY["keywords"]
     # Tiers, not a yes/no match: nearly every web-app part matches a weak word such as
     # `config` or `model`, which would leave --max to plain folder order.

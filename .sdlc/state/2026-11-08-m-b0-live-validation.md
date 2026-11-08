@@ -40,6 +40,7 @@ inline; target runs as headless child sessions only once the coordinator relays 
 
 ## Deviations
 - 2026-11-08 AC-003 added: What: tooling-only parts rank last in plain /hunt (scripts/scope.py, scripts/stacks.json, tests/test_scope.py). Why: coordinator relayed the user's decision (msg_283cc6435730) to fix /hunt picking setup.py first as a B0 defect. Effect: one more AC and task in this change.
+- 2026-11-08 AC-004 added: What: 'author' no longer matches the auth keyword (scripts/scope.py, scripts/stacks.json, tests/test_audit_scope.py). Why: found in the B0 /audit preview on the realworld app. Effect: one more AC.
 
 ## Open questions
 -
