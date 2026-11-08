@@ -40,7 +40,7 @@ Background: [BRIEF.md](../BRIEF.md) — where the recipe comes from; [PRD](../do
 - [runs/2026-11-08-b0-12-live-flaskr-rerun.md](runs/2026-11-08-b0-12-live-flaskr-rerun.md) — B0 run 12: live rerun, clean; offline-only bug dropped
 - [runs/2026-11-08-b0-13-json-server-adapters-rerun.md](runs/2026-11-08-b0-13-json-server-adapters-rerun.md) — B0 run 13: Node/TS hunt, verifier wrote into the repo
 - [runs/2026-11-08-b0-14-live-flaskr-exit.md](runs/2026-11-08-b0-14-live-flaskr-exit.md) — B0 run 14: live hunt, clean
-- [runs/2026-11-08-b0-15-audit-realworld-exit.md](runs/2026-11-08-b0-15-audit-realworld-exit.md) — B0 run 15: /audit, off-by-one citation pending ruling
+- [runs/2026-11-08-b0-15-audit-realworld-exit.md](runs/2026-11-08-b0-15-audit-realworld-exit.md) — B0 run 15: /audit, off-by-one citation confirmed (defect 10)
 
 ## Features
 -

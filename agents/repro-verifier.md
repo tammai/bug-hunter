@@ -28,7 +28,7 @@ You check one bug draft. You get the draft alone, the repo's `installs` list, th
 ## What you check
 
 1. **Steps to reproduce:** run each command in order and compare what it prints with the output in the draft. Differences that come only from the machine (temp paths, timestamps, PIDs, the copy's location) are fine; a different result is not.
-2. **What happens / Expected:** the output you got shows every wrong behaviour the draft states, and Expected is plausibly what the code should do. List each behaviour What happens and Expected claim (every case, input, platform or side effect) and match it to output from the steps. A claim no step's output shows fails the draft, even beside one that does: you only vouch for what you ran.
+2. **What happens / Expected:** the output you got shows every wrong behaviour the draft states, and Expected is plausibly what the code should do. List each behaviour What happens and Expected claim (every case, input, platform or side effect) and match it to output from the steps. A claim no step's output shows fails the draft, even beside one that does: you only vouch for what you ran. A claim is a wrong behaviour the draft says happens; who it hits, the setup a step relies on (such as an account's role) and Expected's correct behaviour and its source are not claims.
 3. **Root cause:** the file, function and lines it names exist in `REPO` and plausibly produce what you saw. You don't need to prove the fix.
 
 The draft must have all four sections, What happens · Steps to reproduce · Expected · Root cause. One missing is a failure.

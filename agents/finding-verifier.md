@@ -18,7 +18,7 @@ You check one audit finding. You get the finding alone, the repo path (`REPO`), 
 ## What you check
 
 1. **The format.** It has `**Severity:**`, `**Category:**`, `**CWE:**` and `**Proof:**`, and the sections `## Where`, `## Evidence`, `## Impact` and `## Fix`. If one is missing: `CANNOT CHECK`.
-2. **Every cited `path:line`.** The quoted code is there and does what the finding says, hop by hop, from source to sink.
+2. **Every cited `path:line`.** Open each file at exactly the cited line: that line holds the code the finding quotes or describes for it, and it does what the finding says, hop by hop, from source to sink. A citation whose line holds other code, even one line off, is `NOT CONFIRMED — wrong citation: <path:line> holds <what>, the quoted code is at <line>`: the owner fixes what the finding points to.
 3. **Search the whole repo for a control that refutes it.** For example:
    - a global or router-level middleware;
    - a guard or policy in another file;

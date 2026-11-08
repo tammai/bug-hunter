@@ -26,6 +26,8 @@ Agents: 1 auditor (5.7k output, 06:35:56–06:36:59), 2 finding-verifiers in par
 
 ## bug-hunter defects found
 
-- **Open, awaiting a ruling:** finding 29 cites `src/prisma/schema.prisma:44` for `email @unique`, which is on line 45. Its verifier noticed and confirmed the finding anyway. `check --repo` passes it because line 44 exists; only a line past the end is caught mechanically. Like run 5's finding 18 (whose cited line didn't exist), the verifier accepted a citation that doesn't hold the quoted code, which its prompt asks it to check.
+- **Defect 10** (ruled a defect by the user, 2026-11-08): finding 29 cites `src/prisma/schema.prisma:44` for `email @unique`, which is on line 45. Its verifier noticed and confirmed the finding anyway. `check --repo` passes it because line 44 exists; only a line past the end is caught mechanically. Like run 5's finding 18 (whose cited line didn't exist), the verifier accepted a citation that doesn't hold the quoted code, which its prompt asks it to check.
 
-Run verdict: **pending the ruling** (clean if an off-by-one citation in a non-root hop is not a defect).
+Fixed test-first: the finding-verifier now opens each file at exactly the cited line and returns `NOT CONFIRMED — wrong citation: …` when that line holds other code. Checked by eval on finding 29 itself: `CONFIRMED` before the fix, `NOT CONFIRMED — wrong citation: src/prisma/schema.prisma:44 holds id …, the quoted code … is at line 45` after, and `CONFIRMED` with the line corrected (AC-018).
+
+Run verdict: **not clean**.

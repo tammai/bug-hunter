@@ -10,7 +10,7 @@ Started: 2026-11-08
 Base: cb5683d
 Owner: tammai.it@gmail.com
 Tool: claude-code
-Verified: a95d551 tree c8b7e0ab0e78a73f9bd0c0f31be1066d6a53cd2a
+Verified: 5e45aba tree 70c9d2c4d0a2a77a76b5d7cb4c6a0dcce27bc0ba
 Current: Stage 2 – Build
 
 ## Stages
@@ -46,6 +46,10 @@ inline; target runs as headless child sessions only once the coordinator relays 
 - 2026-11-08 Stage 2: pass — round-1 fixes: H1 H2 S1 S2 S3 (AC-011..AC-014); verify: only baseline-listed test failures
 - 2026-11-08 correction: the stage-3 advance at a95d551 recorded a mistyped tree (c8b7e0ab...); the real HEAD tree is 6031ac40e9f9fc325c6a6c1cb412541171603fb7, now in Verified
 - 2026-11-08 Stage 3: pass — reviews r2 PASS (code-reviewer, security); back to Build for defect 8 (coordinator ruling 3: a draft carried a claim its verifier did not re-run)
+- 2026-11-08 Stage 2: pass — defects 8-9 fixed (AC-015 eval, AC-016); verify: only baseline-listed failures; review round 3 on 069e714 and 5685cae
+- 2026-11-08 correction: the stage-3 advance at 5e45aba recorded a mistyped tree (70c9d2c4...); the real HEAD tree is 02bb2810ac86f43a99f37817298ecd0182574654. ship.py reruns verify when the recorded tree doesn't match.
+- 2026-11-08 review: round 3 runs code-reviewer (high) and security (code-reviewer, security section) on the defect 8-9 fixes only (069e714 prompts, 5685cae isolate.py cd); rows: Code high and Security (Risk high, isolate.py output is eval'd)
+- 2026-11-08 Stage 3: pass — back to Build for defect 10 (user ruling: run 15's off-by-one citation, accepted by its verifier); review round 3 on defects 8-9 still running
 
 ## Deviations
 - 2026-11-08 AC-003 added: What: tooling-only parts rank last in plain /hunt (scripts/scope.py, scripts/stacks.json, tests/test_scope.py). Why: coordinator relayed the user's decision (msg_283cc6435730) to fix /hunt picking setup.py first as a B0 defect. Effect: one more AC and task in this change.
@@ -63,6 +67,7 @@ inline; target runs as headless child sessions only once the coordinator relays 
 - 2026-11-08 AC-013, AC-014 added: What: security r1 S1 (reap.py tool lookup), S2/S3 (findings.py citation resolve and echo) in scripts/reap.py, scripts/findings.py, tests/test_reap.py, tests/test_findings.py. Why: security-r1 FAIL. Effect: two more ACs.
 - 2026-11-08 AC-015 added: What: hunter and repro-verifier prompts: claims only what steps show; verifier fails an unshown claim (agents/bug-hunter.md, agents/repro-verifier.md, eval prompts in .sdlc/state/2026-11-08-m-b0-live-validation/evals/). Why: user ruling 3 (msg_65e8ff5539c6) made run 3's unverified side claim a defect. Effect: one more AC, checked by eval (manual row).
 - 2026-11-08 AC-016 added: What: isolate.py's output also cd's into <scratch>/copy (or <scratch>) (scripts/isolate.py, tests/test_isolate.py). Why: B0 run 13's verifier wrote srv.pid into the target repo: its cd was inside a backgrounded && list. Effect: one more AC; agents start every call inside their copy.
+- 2026-11-08 AC-017, AC-018 added; AC-016 row gains a test: What: R3-1 claim definition in agents/bug-hunter.md and agents/repro-verifier.md; defect 10 wrong-citation rule in agents/finding-verifier.md; tests/test_isolate.py copy-replace guard (R3-2 did not reproduce on Git Bash; kept as a regression test, prompt unchanged). Why: review r3 FAIL R3-1; user ruling on run 15 (msg_cb5344b1be5e); round 4 approved (msg_4e10e4b4f76a). Effect: two more manual (eval) ACs.
 
 ## Open questions
 -
