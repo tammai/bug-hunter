@@ -71,6 +71,21 @@ def symlink_or_skip(target: Path, link: Path) -> None:
         raise
 
 
+def test_background_jobs_are_listed_so_reap_stops_them(tmp_path):
+    # json-server, B0 run 10: a hunter left two servers running without listing them, which
+    # blocked a verifier's port. The isolation prefix every agent call starts with lists them.
+    scratch = tmp_path / "hunter-1"
+    command = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch)])
+    script = f'eval "$({command})"; sleep 300 > /dev/null 2>&1 & echo $!'
+    pid = subprocess.run([BASH, "-c", script], capture_output=True, text=True,
+                         check=True).stdout.strip()
+    assert pid in (scratch / "bg.pids").read_text(encoding="utf-8").split()
+
+    assert run_script("reap", tmp_path).returncode == 0
+    gone = subprocess.run([BASH, "-c", f"kill -0 {pid}"], capture_output=True).returncode
+    assert gone != 0
+
+
 def test_home_caches_and_credentials_move_into_scratch(tmp_path):
     real = tmp_path / "real home"
     scratch = tmp_path / "scratch-1"

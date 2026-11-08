@@ -438,9 +438,11 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"error: can't prepare {scratch / 'home'}: {exc}", file=sys.stderr)
         return 1
     unset, exports = _plan(scratch, env)
+    # Servers outlive the call that starts them; listing them on exit lets reap.py stop them.
+    listing = f"jobs -p >> {shlex.quote((scratch / 'bg.pids').as_posix())}"
     print("unset " + " ".join(unset) + "; export " + " ".join(
         f"{key}={shlex.quote(value)}" for key, value in exports.items()
-    ) + ";")
+    ) + f"; trap {shlex.quote(listing)} EXIT;")
     return 0
 
 
