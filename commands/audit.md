@@ -62,7 +62,7 @@ From each reply:
 
 ## 5. Screen, then verify
 
-1. Run `python3 "$PLUGIN/scripts/findings.py" check <file> --fingerprints "$SCRATCH/fingerprints.json"` on every agent finding in `$SCRATCH/agent` before any verifier sees it. A failing finding is dropped and recorded by its **file name and the problems `check` printed**, never by its title or text: a finding that fails for a secret must not carry that secret anywhere.
+1. Run `python3 "$PLUGIN/scripts/findings.py" check <file> --fingerprints "$SCRATCH/fingerprints.json" --repo "$REPO"` on every agent finding in `$SCRATCH/agent` before any verifier sees it. A failing finding is dropped and recorded by its **file name and the problems `check` printed**, never by its title or text: a finding that fails for a secret must not carry that secret anywhere.
 2. Dispatch one agent per remaining agent finding, all at once, with `subagent_type: bug-hunter:finding-verifier`. Its prompt:
    - the finding's text, inside a fenced block longer than any fence in it;
    - `REPO`, `PLUGIN` and `SCRATCH=<scratch>/verifier-<id>-<n>`;
@@ -74,7 +74,7 @@ From each reply:
 ## 6. Write
 
 1. Move the confirmed agent findings into `$SCRATCH/found`, next to the scripted ones.
-2. Run `python3 "$PLUGIN/scripts/findings.py" dedupe "$SCRATCH/found" "$AUDIT"`. It drops findings already in `$AUDIT` from earlier runs, and repeats within this run, keeping the more severe. Its key is category, CWE and the root-cause Where line: the one marked "(fix here)", else the last.
+2. Run `python3 "$PLUGIN/scripts/findings.py" dedupe "$SCRATCH/found" "$AUDIT" --repo "$REPO"`. It drops findings already in `$AUDIT` from earlier runs, and repeats within this run, keeping the more severe. Its key is category, CWE and the root-cause Where line: the one marked "(fix here)", else the last.
 3. For each remaining finding, in order of severity: `NN=$(python3 "$PLUGIN/scripts/findings.py" next "$AUDIT")`, then copy it to `$AUDIT/$NN.md` with mode 0600. Never rewrite a finding's evidence.
 4. Run `python3 "$PLUGIN/scripts/findings.py" inventory "$SCRATCH/inventory.txt" "$AUDIT" --fingerprints "$SCRATCH/fingerprints.json"`. It merges into the inventory from earlier runs.
 5. Write `$SCRATCH/meta.json`:
@@ -83,7 +83,7 @@ From each reply:
    - `not_audited`: stacks without a dependency audit, and failed audits with their reason;
    - `dropped`: a `title` and `reason` for each finding that wasn't confirmed, and `{"title": "<file name>", "reason": "failed check: <problems>"}` for each that failed `check`.
 6. Run `python3 "$PLUGIN/scripts/findings.py" report "$AUDIT" --meta "$SCRATCH/meta.json" --fingerprints "$SCRATCH/fingerprints.json"`.
-7. `rm -rf "$SCRATCH"`, which removes the fingerprints too.
+7. `python3 "$PLUGIN/scripts/reap.py" "$SCRATCH"` (it stops the background processes agents listed), then `rm -rf "$SCRATCH"`, which removes the fingerprints too. If that fails, say which folder is left and that it still holds the fingerprints.
 
 ## 7. Report
 

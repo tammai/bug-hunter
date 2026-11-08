@@ -58,6 +58,20 @@ def test_max_caps_hunters_and_cost(make_repo):
         assert "Traceback" not in result.stderr
 
 
+def test_build_and_docs_tooling_parts_come_last(make_repo):
+    # trentm/python-markdown2: --max 1 used to spend the only hunter on setup.py.
+    repo = make_repo({
+        "setup.py": "", "noxfile.py": "", "jest.config.ts": "", "vite.config.mjs": "",
+        "docs/conf.py": "",
+        "lib/markdown2.py": "", "src/app.ts": "", "src/setup.py": "",
+    })
+    _, out = scope(repo)
+    assert [p["dir"] for p in out["parts"]] == ["lib", "src", ".", "docs"]
+    _, capped = scope(repo, "--max", "1")
+    assert capped["parts"][0]["files"] == ["lib/markdown2.py"]
+    assert [p["dir"] for p in capped["skipped"]] == ["src", ".", "docs"]
+
+
 def test_paths_restrict_and_errors_are_clean(make_repo, tmp_path):
     repo = make_repo(FILES)
     result, out = scope(repo, "src", "b2/y.py")

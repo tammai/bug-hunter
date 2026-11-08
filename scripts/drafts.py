@@ -53,6 +53,26 @@ def title(path: Path) -> str | None:
     return None
 
 
+FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
+
+
+def fenced(lines: list[str]):
+    """Each line with whether it is part of a code block (its fence lines included)."""
+    # CommonMark's rules: a Python traceback's indented `~~~~^^^^` caret line is plain text.
+    opener = None
+    for line in lines:
+        match = FENCE.match(line)
+        if opener is None:
+            if match and not (match[1][0] == "`" and "`" in match[2]):
+                opener = match[1]
+            yield line, opener is not None
+        else:
+            if (match and match[1][0] == opener[0] and len(match[1]) >= len(opener)
+                    and not match[2].strip()):
+                opener = None
+            yield line, True
+
+
 def problems(text: str) -> list[str]:
     """Every way a draft breaks the fixed format; empty when it's good."""
     lines = text.splitlines()
@@ -65,10 +85,7 @@ def problems(text: str) -> list[str]:
 
     bodies: dict[str, list[str]] = {}
     current = None
-    in_fence = False
-    for line in lines:
-        if line.lstrip().startswith(("```", "~~~")):
-            in_fence = not in_fence
+    for line, in_fence in fenced(lines):
         if line.startswith("## ") and not in_fence:
             current = line[3:].strip().rstrip(":").casefold()
             bodies.setdefault(current, [])
@@ -86,9 +103,21 @@ def problems(text: str) -> list[str]:
         found.append("sections out of order: want " + " · ".join(SECTIONS))
 
     steps = bodies.get("steps to reproduce", [])
-    if steps and not any(line.lstrip().startswith(("```", "~~~")) for line in steps):
+    if steps and not any(in_fence for _, in_fence in fenced(steps)):
         found.append("## Steps to reproduce has no code block with the actual output")
     return found
+
+
+def _home_problems(text: str) -> list[str]:
+    """The owner's home folder in a draft: it names their account in a public issue."""
+    home = Path.home().as_posix().rstrip("/").lower()
+    forms = {home, home.replace("/", "\\"), home.replace("/", "\\\\")}
+    if home[1:2] == ":":
+        forms.add("/" + home[0] + home[2:])  # Git Bash: C:/Users/x -> /c/Users/x
+    lowered = text.lower()
+    if len(home) > 3 and any(form in lowered for form in forms):
+        return ["contains your home folder's path, which names your account"]
+    return []
 
 
 def _live_problems(text: str, target: dict) -> list[str]:
@@ -152,7 +181,7 @@ def _main(argv: list[str] | None = None) -> int:
     except (OSError, UnicodeDecodeError) as exc:
         print(f"error: cannot read {args.file}: {exc}", file=sys.stderr)
         return 1
-    found = problems(text)
+    found = problems(text) + _home_problems(text)
     if args.target:
         from live_proxy import BadTarget, load_target  # live_proxy imports this module
 

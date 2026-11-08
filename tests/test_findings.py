@@ -74,6 +74,69 @@ def test_check_enforces_the_finding_format(tmp_path):
         assert result.returncode == 1 and "secret" in result.stdout, partial
 
 
+def test_check_keeps_sections_after_a_traceback_caret_line(tmp_path):
+    caret = 'router.get("/orders/:id", auth, (req, res) => svc.findById(req.params.id))\n'
+    text = GOOD.replace(caret, caret + "    ~~~~^^^^\n")
+    assert run_script("findings", "check", write(tmp_path, text)).returncode == 0
+
+
+def test_check_with_repo_needs_where_lines_that_exist(tmp_path):
+    # node-express-realworld-example-app (B0 run 5): one finding cited absolute paths, so dedupe
+    # missed its twin; another cited src/main.ts:85 in a 57-line file.
+    repo = tmp_path / "my repo"
+    for name in ("src/routes/orders.js", "src/services/orders.js"):
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text("x\n" * 40, encoding="utf-8")
+    absolute = GOOD.replace("`src/routes/orders.js:12`",
+                            f"`{(repo / 'src/routes/orders.js').as_posix()}:12`")
+    for text in (GOOD, absolute):
+        result = run_script("findings", "check", write(tmp_path, text), "--repo", repo)
+        assert result.returncode == 0, result.stdout
+
+    cases = {
+        "past the end": GOOD.replace("orders.js:30", "orders.js:85"),
+        "no such file": GOOD.replace("src/routes/orders.js:12", "src/routes/order.js:12"),
+        "outside": GOOD.replace("src/routes/orders.js:12", "../outside.js:1"),
+    }
+    for word, text in cases.items():
+        result = run_script("findings", "check", write(tmp_path, text, "bad.md"), "--repo", repo)
+        assert result.returncode == 1 and word in result.stdout, (word, result.stdout)
+
+
+def test_citations_outside_the_repo_are_never_opened_or_echoed(tmp_path, monkeypatch):
+    # resolve() on `\\host\share\x` makes Windows connect to that host with the owner's
+    # credentials, and a citation can be a secret the auditor quoted, so it is never echoed.
+    import findings
+
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src/a.js").write_text("x\n", encoding="utf-8")
+    resolved = []
+    real_resolve = Path.resolve
+    monkeypatch.setattr(Path, "resolve",
+                        lambda self, *a, **k: resolved.append(str(self)) or real_resolve(self))
+    text = GOOD.replace(
+        "- `src/services/orders.js:30` (findById without owner filter)",
+        "- `\\\\attacker\\share\\x.ts:1`\n- `//attacker/share/y.ts:2`\n"
+        "- `DB_URL=postgres://admin:hunter2@db:5432`")
+    problems = findings._citation_problems(text, repo)
+    assert not any("attacker" in path for path in resolved)
+    assert sum("outside the repo" in p for p in problems) >= 2
+    assert not any("hunter2" in p or "attacker" in p for p in problems)
+
+
+def test_dedupe_with_repo_matches_absolute_and_relative_citations(tmp_path):
+    repo, new, audit = tmp_path / "my repo", tmp_path / "new", tmp_path / "audit"
+    new.mkdir()
+    audit.mkdir()
+    absolute = GOOD.replace("`src/services/orders.js:30`",
+                            f"`{(repo / 'src/services/orders.js').as_posix()}:30`")
+    (new / "a.md").write_text(GOOD, encoding="utf-8")
+    (new / "b.md").write_text(absolute, encoding="utf-8")
+    assert run_script("findings", "dedupe", new, audit, "--repo", repo).returncode == 0
+    assert len(list(new.glob("*.md"))) == 1
+
+
 def test_audit_folder_and_numbering(make_repo, fake_gh, tmp_path):
     env, _ = fake_gh
     repo = make_repo({"a.js": ""}, origin="git@github.com:acme/shop.git")

@@ -20,6 +20,7 @@ You check one bug draft. You get the draft alone, the repo's `installs` list, th
 
   It isn't a sandbox: code can still read files by absolute path, which is why the rules below forbid it.
   With no global git config, a step that commits passes its own `git -c user.name=t -c user.email=t@t`. Never run `gh`, never read credentials or dotfiles, never write outside `<SCRATCH>`.
+- **Background processes:** the isolation prefix lists every background job a step starts, and the processes under it, in `<SCRATCH>/bg.pids` when the call ends. Before you finish, even when a step fails, stop them with `python3 "<PLUGIN>/scripts/reap.py" "<SCRATCH>"`.
 - **Stubs stop themselves:** `stub_server.py` exits after ten quiet minutes (`--idle-exit`, 600 s by default), so you never add or change a step to stop one.
 - **A live draft** (you're given `PROXY` and account names): in each Bash call, right after the isolation prefix (it unsets every variable with `AUTH` in its name), `export BASE="<PROXY>"` and, for each account, `<ACCOUNT>_AUTH="X-Bug-Hunter-Account: <account>"` (`export BASE="<PROXY>" BOB_AUTH="X-Bug-Hunter-Account: bob";` for `bob`), then run the `curl` steps, which use `"$BASE"` and `"$<ACCOUNT>_AUTH"`, as written. Send requests to only the proxy, never the target's own URL or any other host. IDs, timestamps and counts the target generates can differ from the draft; a different outcome (status, error, the wrong behaviour gone) can't. A 429 from the proxy is `CANNOT RUN`: the run's budget is used up.
 - **Run the steps exactly as written**, except a step that would touch anything outside the copy and its temp dirs, reach the network for anything but the code under test or the live-target proxy, or read credentials: don't run it, and return `CANNOT RUN` naming it. A step that is exactly the `step` of an `installs` entry, compared as text, is allowed. So is the stub fetch `curl -fsSLo stub_server.py https://raw.githubusercontent.com/tammai/bug-hunter/v<version>/scripts/stub_server.py` exactly as written (any version): don't download it, run `cp "<PLUGIN>/scripts/stub_server.py" stub_server.py` in its place; any other install (`npm install`, `pip install`, `npx`, a different flag or folder, or anything chained to it) is `CANNOT RUN`. Don't fix, extend or guess at a step. A step you'd have to change to run is a failure, and you say which.
@@ -27,7 +28,7 @@ You check one bug draft. You get the draft alone, the repo's `installs` list, th
 ## What you check
 
 1. **Steps to reproduce:** run each command in order and compare what it prints with the output in the draft. Differences that come only from the machine (temp paths, timestamps, PIDs, the copy's location) are fine; a different result is not.
-2. **What happens / Expected:** the output you got shows the wrong behaviour the draft describes, and Expected is plausibly what the code should do.
+2. **What happens / Expected:** the output you got shows every wrong behaviour the draft states, and Expected is plausibly what the code should do. List each behaviour What happens and Expected claim (every case, input, platform or side effect) and match it to output from the steps. A claim no step's output shows fails the draft, even beside one that does: you only vouch for what you ran. A claim is a wrong behaviour the draft says happens; who it hits, the setup a step relies on (such as an account's role) and Expected's correct behaviour and its source are not claims.
 3. **Root cause:** the file, function and lines it names exist in `REPO` and plausibly produce what you saw. You don't need to prove the fix.
 
 The draft must have all four sections, What happens · Steps to reproduce · Expected · Root cause. One missing is a failure.
@@ -37,5 +38,5 @@ The draft must have all four sections, What happens · Steps to reproduce · Exp
 A few lines on what you ran and saw, then exactly one last line:
 
 - `VERDICT: REPRODUCES`
-- `VERDICT: DOES NOT REPRODUCE — <what you got instead>`
+- `VERDICT: DOES NOT REPRODUCE — <what you got instead>`, or `— unshown claim: <the claim no step's output shows>`
 - `VERDICT: CANNOT RUN — <the step and why: missing tool, service, credentials, a step that needs changing>`

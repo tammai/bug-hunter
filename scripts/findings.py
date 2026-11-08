@@ -8,7 +8,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from drafts import drafts_dir, numbered, title
+from drafts import drafts_dir, fenced, numbered, title
 from secrets_scan import (
     PATTERNS,
     SEVERITY_RANK,
@@ -25,6 +25,7 @@ PROOFS = ["proven", "traced", "advisory"]
 SECTIONS = ["Where", "Evidence", "Impact", "Fix"]
 FIELD = re.compile(r"^\*\*(Severity|Category|CWE|Proof):\*\*\s*(.*?)\s*$")
 PATH_LINE = re.compile(r"[^\s`'\"()]+:\d+")
+QUOTED_PATH_LINE = re.compile(r"`([^`]+:\d+)[^`]*`")
 NPM_SEVERITY = {"critical": "critical", "high": "high", "moderate": "medium", "medium": "medium",
                 "low": "low", "info": "low"}
 INVENTORY_COLUMNS = ["field", "defined", "logged", "returned", "sent to", "stored", "deletion"]
@@ -72,10 +73,7 @@ def _parse(text: str) -> tuple[dict[str, str], dict[str, list[str]]]:
     fields: dict[str, str] = {}
     sections: dict[str, list[str]] = {}
     current = None
-    fence = False
-    for line in text.splitlines():
-        if line.lstrip().startswith(("```", "~~~")):
-            fence = not fence
+    for line, fence in fenced(text.splitlines()):
         if not fence and line.startswith("## "):
             current = line[3:].strip()
             sections.setdefault(current, [])
@@ -106,7 +104,7 @@ def _problems(text: str) -> list[str]:
     if "Where" in sections and not any(PATH_LINE.search(line) for line in sections["Where"]):
         found.append("## Where has no path:line")
     evidence = sections.get("Evidence", [])
-    if evidence and not any(line.lstrip().startswith(("```", "~~~")) for line in evidence):
+    if evidence and not any(fence for _, fence in fenced(evidence)):
         found.append("## Evidence has no code block")
     for name in _secret_hits(text):
         found.append(f"contains what looks like a secret ({name}); write <redacted> instead")
@@ -300,13 +298,60 @@ def _where(text: str) -> list[str]:
     return [line.strip() for line in _parse(text)[1].get("Where", []) if line.strip()]
 
 
-def _key(text: str) -> tuple[str, str, str]:
+def _spots(line: str) -> list[str]:
+    """The `path:line` citations in a Where line."""
+    # A backticked citation is read whole, so a folder name with a space stays one path.
+    quoted = [m[1] for m in QUOTED_PATH_LINE.finditer(line)]
+    return quoted or [m[0] for m in PATH_LINE.finditer(line)]
+
+
+def _in_repo(name: str, root: Path) -> Path | None:
+    """The cited file's resolved path, or None when it lies outside the repo."""
+    # Decided from the text before anything touches the disk: resolving `\\host\share\x`
+    # makes Windows connect to that host with the owner's credentials.
+    if name.startswith(("\\\\", "//")):
+        return None
+    normal = Path(os.path.normpath(root / name))  # an absolute name replaces root
+    if not normal.is_relative_to(root):
+        return None
+    path = normal.resolve()
+    return path if path.is_relative_to(root) else None
+
+
+def _citation_problems(text: str, repo: Path) -> list[str]:
+    """Where lines that don't name a real line of a file in the repo."""
+    # Named by position, never by text: a "citation" can be a secret the auditor quoted.
+    found = []
+    root = repo.resolve()
+    for row, line in enumerate(_where(text), 1):
+        for number, spot in enumerate(_spots(line), 1):
+            at = f"Where line {row}, citation {number}"
+            name, line_no = spot.rsplit(":", 1)
+            path = _in_repo(name, root)
+            if path is None:
+                found.append(f"{at}: outside the repo")
+            elif not path.is_file():
+                found.append(f"{at}: no such file in the repo")
+            else:
+                count = len(path.read_text(encoding="utf-8", errors="replace").splitlines())
+                if not 1 <= int(line_no) <= count:
+                    found.append(f"{at}: past the end of the file ({count} lines)")
+    return found
+
+
+def _key(text: str, repo: Path | None = None) -> tuple[str, str, str]:
     """What makes two findings the same: category, CWE and the root cause's path:line."""
     fields = _parse(text)[0]
     where = _where(text)
     root = next((w for w in where if "fix here" in w.lower()), where[-1] if where else "")
-    spot = PATH_LINE.search(root)
-    return fields.get("Category", ""), fields.get("CWE", ""), spot[0] if spot else root
+    spots = _spots(root)
+    spot = spots[0] if spots else root
+    if spots and repo is not None:
+        name, number = spot.rsplit(":", 1)
+        path = _in_repo(name, repo.resolve())
+        if path is not None:
+            spot = f"{path.relative_to(repo.resolve()).as_posix()}:{number}"
+    return fields.get("Category", ""), fields.get("CWE", ""), spot
 
 
 def _merge_where(path: Path, extra: list[str]) -> None:
@@ -315,11 +360,8 @@ def _merge_where(path: Path, extra: list[str]) -> None:
     have = set(_where("\n".join(lines)))
     new = [line for line in extra if line not in have]
     start = end = None
-    fence = False
     # Headings are found the way _parse finds them: outside code blocks, spacing ignored.
-    for i, line in enumerate(lines):
-        if line.lstrip().startswith(("```", "~~~")):
-            fence = not fence
+    for i, (line, fence) in enumerate(fenced(lines)):
         if fence or not line.startswith("## "):
             continue
         if start is None and line[3:].strip() == "Where":
@@ -335,17 +377,17 @@ def _merge_where(path: Path, extra: list[str]) -> None:
     _write_private(path, "\n".join(lines[:end] + new + lines[end:]) + "\n")
 
 
-def _dedupe(new: Path, audit: Path) -> list[str]:
+def _dedupe(new: Path, audit: Path, repo: Path | None = None) -> list[str]:
     """Drop new findings already in the audit folder, or repeated, keeping the most severe."""
     if new.resolve() == audit.resolve():
         raise _Malformed("dedupe needs two folders; given the same folder twice")
-    seen_before = {_key(p.read_text(encoding="utf-8", errors="replace"))
+    seen_before = {_key(p.read_text(encoding="utf-8", errors="replace"), repo)
                    for _, p in numbered(audit)}
     candidates = []
     for path in sorted(new.glob("*.md")):
         text = path.read_text(encoding="utf-8", errors="replace")
         severity = _parse(text)[0].get("Severity", "low")
-        candidates.append((SEVERITY_RANK.get(severity, 3), path.name, path, _key(text)))
+        candidates.append((SEVERITY_RANK.get(severity, 3), path.name, path, _key(text, repo)))
     kept: dict[tuple[str, str, str], Path] = {}
     removed = []
     for _, _, path, key in sorted(candidates):
@@ -427,6 +469,7 @@ def _main(argv: list[str] | None = None) -> int:
     sub.add_parser("dir").add_argument("repo")
     sub.add_parser("next").add_argument("dir")
     sub.choices["check"].add_argument("--fingerprints")
+    sub.choices["check"].add_argument("--repo")
     for name in ("from-secrets-scan", "from-npm-audit", "from-composer-audit"):
         p = sub.add_parser(name)
         p.add_argument("json")
@@ -439,6 +482,7 @@ def _main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("dedupe")
     p.add_argument("new")
     p.add_argument("audit")
+    p.add_argument("--repo")
     p = sub.add_parser("report")
     p.add_argument("dir")
     p.add_argument("--meta")
@@ -454,6 +498,8 @@ def _main(argv: list[str] | None = None) -> int:
         if args.command == "check":
             text = Path(args.file).read_text(encoding="utf-8")
             found = _problems(text)
+            if args.repo:
+                found += _citation_problems(text, Path(args.repo))
             for problem in found:
                 print(problem)
             return 1 if found else 0
@@ -485,7 +531,8 @@ def _main(argv: list[str] | None = None) -> int:
             _write_private(earlier_file, _inventory(text, earlier))
             return 0
         if args.command == "dedupe":
-            for name in _dedupe(Path(args.new), Path(args.audit)):
+            repo = Path(args.repo) if args.repo else None
+            for name in _dedupe(Path(args.new), Path(args.audit), repo):
                 print(f"dropped {name}: already reported")
             return 0
         meta = _check_meta(_load(args.meta) if args.meta else {})

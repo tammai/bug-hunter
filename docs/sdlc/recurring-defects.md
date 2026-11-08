@@ -28,3 +28,9 @@ One line per defect: what it looks like, then the severity.
 - A read-only guard that checks only the request method, so `X-HTTP-Method-Override` or `_method` turns an allowed GET into a write: high
 - A shell step that sets a variable as a command prefix (`BASE=x curl "$BASE"`), which the same command's own expansion never sees, or that a later setup step unsets (`isolate.py` drops `*AUTH*`): high
 - Masking that matches secrets case-insensitively or bare host names inside words, so ordinary response text is mangled and hunters report the proxy's damage as the target's bug: medium
+- Stopping a background job by the PID `$!` gave, when `$!` can be a subshell (`cmd && prog &`, `( … ) &`): killing it leaves `prog` running under PID 1; stop the whole process tree, recorded while the subshell lives: high
+- A `cd` chained into a backgrounded `&&` list (`cd copy && … & echo $! > f`): the `cd` runs only in the background job, so the next relative write lands in the starting folder (the target repo): high
+- `shutil.which` (or any PATH lookup) run from inside a target repo on Windows without `NoDefaultCurrentDirectoryInExePath`: a `ps.bat` the repo commits runs unisolated; a test that removes the variable must match its name case-insensitively: critical
+- `Path.resolve()`, `is_file()` or `open()` on a path an agent or target wrote before checking it lies inside the repo: a `\\host\share` path makes Windows authenticate to that host: high
+- An error or problem line that echoes the input it rejected, when that input can be a secret (a citation, a header, a config line): name the item by position instead: high
+- A numeric field read from an agent- or target-written file with `isdigit()` and `int()` but no length or range bound, so a huge value raises (`OverflowError`, `ValueError`) instead of being skipped: high

@@ -132,9 +132,29 @@ def _security_file(path: PurePosixPath) -> bool:
     )
 
 
-def _security_relevant(part: dict) -> bool:
-    words = re.split(r"[/._\- ]+", " ".join([part["dir"], *part["files"]]).lower())
-    return any(word.startswith(tuple(SECURITY["keywords"])) for word in words if word)
+def _security_rank(part: dict) -> int:
+    """0 for the strongest keyword tier a part's names match; one past the last tier for none."""
+    names = " ".join([part["dir"], *part["files"]]).lower()
+    words = [w for w in re.split(r"[/._\- ]+", names) if w and w not in SECURITY["not_keywords"]]
+    tiers = SECURITY["keywords"]
+    # Tiers, not a yes/no match: nearly every web-app part matches a weak word such as
+    # `config` or `model`, which would leave --max to plain folder order.
+    return next((rank for rank, tier in enumerate(tiers)
+                 if any(word.startswith(tuple(tier)) for word in words)), len(tiers))
+
+
+TOOLING = STACKS["tooling"]
+
+
+def _tooling_only(part: dict) -> bool:
+    """Every file is build or docs tooling, so a hunter there finds little; --max keeps it last."""
+    def tooling(path: PurePosixPath) -> bool:
+        return (
+            path.name in TOOLING["names"]
+            or (".config" in path.suffixes and path.suffix in TOOLING["config_suffixes"])
+            or any(folder in TOOLING["dirs"] for folder in path.parts[:-1])
+        )
+    return all(tooling(PurePosixPath(f)) for f in part["files"])
 
 
 def _build(files: list[str], paths: list[str], cap: int | None, focus: bool = False) -> dict:
@@ -156,11 +176,10 @@ def _build(files: list[str], paths: list[str], cap: int | None, focus: bool = Fa
                 {"id": len(parts) + 1, "dir": directory, "files": names[start : start + PART_SIZE]}
             ))
 
-    if focus:
-        # Stable: within each group the folders keep their natural order.
-        parts.sort(key=lambda part: not _security_relevant(part))
-        for number, part in enumerate(parts, 1):
-            part["id"] = number
+    # Stable sorts: within each group the folders keep their natural order.
+    parts.sort(key=_security_rank if focus else _tooling_only)
+    for number, part in enumerate(parts, 1):
+        part["id"] = number
     kept = parts if cap is None else parts[:cap]
     return {
         "parts": kept,

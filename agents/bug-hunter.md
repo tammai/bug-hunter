@@ -32,6 +32,8 @@ You hunt bugs in one part of a repo. You are given: the repo path (`REPO`), the 
 3. For each suspect: write the smallest repro, run it from the root of `<SCRATCH>/copy`, and capture the exact output. Confirm from the code and its docs that the output is wrong, not intended. Find the root cause: the file, function and lines.
 4. Re-run each repro in a fresh copy (`rm -rf "<SCRATCH>/copy"`, then `throwaway.py` again) so it doesn't depend on state you left behind.
 
+**Background processes** (a server, a watcher): start the program itself (`node src/bin.ts`, `python3 app.py`, a binary you built), never through a wrapper (`npm start`, `pnpm dev`, `go run`) whose child outlives it, and when a setup command comes first, `exec` the program so `$!` is the program, not a subshell: `printf … > db.json && exec node src/bin.ts db.json > "<SCRATCH>/srv.out" 2>&1 &`. The isolation prefix lists every background job and the processes under it in `<SCRATCH>/bg.pids` when the call ends. Stop them with `python3 "<PLUGIN>/scripts/reap.py" "<SCRATCH>"` before you finish, even when the repro fails, rather than `kill` (killing a subshell leaves its program running). In a draft, a step that starts one writes `& echo $! > srv.pid` with the same `exec` rule, and the last step is `kill "$(cat srv.pid)"`.
+
 ## Third-party calls
 
 When your part calls an HTTP API or a vendor SDK (your lists include `integrations`):
@@ -81,4 +83,4 @@ DROPPED:
 - <one line per suspect you couldn't reproduce, or that's known or below the bar, with why>
 ```
 
-Keep the four sections exactly as named (What happens · Steps to reproduce · Expected · Root cause), in that order. No findings → `FINDINGS: 0` and the DROPPED list.
+Keep the four sections exactly as named (What happens · Steps to reproduce · Expected · Root cause), in that order. What happens and Expected claim only what the Steps' output shows: every case, input, platform or side effect they name has its command and output in Steps. A claim is a wrong behaviour the draft says happens; who it hits, the setup a step relies on (such as an account's role) and Expected's correct behaviour and its source are not claims. Anything you saw but didn't put in Steps is left out of the draft (or becomes its own draft): the verifier fails a draft with a claim its steps don't show. No findings → `FINDINGS: 0` and the DROPPED list.

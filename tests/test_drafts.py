@@ -136,6 +136,38 @@ def test_check_rejects_empty_title_and_ignores_headings_in_output(tmp_path):
     assert result.returncode == 0, result.stdout
 
 
+def test_check_reads_fences_as_commonmark_does(tmp_path):
+    # A Python 3.11+ traceback in the pasted output: its indented `~~~~^^^^` caret line used to
+    # toggle the fence, hiding Expected and Root cause (python-markdown2, B0 run 1).
+    traceback = ("Traceback (most recent call last):\n"
+                 "    sys.exit(main(sys.argv))\n"
+                 "             ~~~~^^^^^^^^^^\n"
+                 "~~~ not a closer for a backtick fence\n"
+                 "AttributeError: 'NoneType' object has no attribute 'encode'\n")
+    path = tmp_path / "01.md"
+    path.write_text(GOOD.replace("B10\n```", "B10\n" + traceback + "```"), encoding="utf-8")
+    result = run_script("drafts", "check", path)
+    assert result.returncode == 0, result.stdout
+
+
+def test_check_rejects_the_owners_home_path(tmp_path):
+    # python-markdown2, B0 run 7: a traceback in the output named C:\Users\<name>\AppData\...,
+    # putting the owner's user name in a draft meant for a public issue.
+    home = tmp_path / "Users" / "alice"
+    home.mkdir(parents=True)
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+    path = tmp_path / "01.md"
+    posix = home.as_posix()
+    git_bash = "/" + posix[0].lower() + posix[2:] if posix[1:2] == ":" else posix
+    for leak in (str(home) + os.sep + "tmp" + os.sep + "lib.py", git_bash.upper() + "/tmp/x"):
+        path.write_text(GOOD.replace("B10\n```", f"B10\n  File \"{leak}\"\n```"),
+                        encoding="utf-8")
+        result = run_script("drafts", "check", path, env=env)
+        assert result.returncode == 1 and "home folder" in result.stdout, (leak, result.stdout)
+    path.write_text(GOOD, encoding="utf-8")
+    assert run_script("drafts", "check", path, env=env).returncode == 0
+
+
 LIVE = """# Order total accepts a negative quantity
 
 Set before running: `BASE` (the dev or UAT URL), `ALICE_AUTH` (a normal user's login header).

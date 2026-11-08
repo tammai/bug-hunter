@@ -1,6 +1,6 @@
 {
   "name": "bug-hunter",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Hunts bugs in a repo, proves each with a run repro, and writes an issue draft per bug. Never posts on its own.",
   "license": "MIT",
   "author": {

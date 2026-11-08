@@ -56,7 +56,7 @@ Dispatch one agent per remaining draft, all at once, with `subagent_type: bug-hu
 
 ## 5. Write the drafts
 
-For each kept draft: `mkdir -p "$DRAFTS"`, `NN=$(python3 "$PLUGIN/scripts/drafts.py" next "$DRAFTS")`, copy it to `$DRAFTS/$NN.md`, and run `drafts.py check` on the copy. Then `rm -rf "$SCRATCH"`.
+For each kept draft: `mkdir -p "$DRAFTS"`, `NN=$(python3 "$PLUGIN/scripts/drafts.py" next "$DRAFTS")`, copy it to `$DRAFTS/$NN.md`, and run `drafts.py check` on the copy. Then `python3 "$PLUGIN/scripts/reap.py" "$SCRATCH"` (it stops the background processes agents listed) and `rm -rf "$SCRATCH"`; if that fails, say which folder is left and that a process may still hold it.
 
 ## 6. Report
 
