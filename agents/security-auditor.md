@@ -29,7 +29,7 @@ Read those first.
 1. **Map the part:** its entry points (routes, handlers, jobs, components) and the data they read and return.
 2. **Work through each checklist item that fits this code.** For each suspect, trace it from source (request input, user, stored field) to sink (query, response, log line, outbound call, storage), and write down every hop as `path:line`.
 3. **Look for the control that would make it safe** (middleware, guard, ORM scope, sanitizer, encryption) anywhere in the repo. Found one that covers this path? Drop the suspect.
-4. **Prove it where you cheaply can,** in the copy: a unit-level call, a small script. Otherwise it's `traced`.
+4. **Prove it where you cheaply can,** in the copy: a unit-level call, a small script. Otherwise it's `traced`. A process you start in the background gets its PID appended in the same call (`& echo $! >> "<SCRATCH>/bg.pids"`), and you stop it with `kill` before you finish.
 5. **Fill the PII inventory as you go:** every personal field this part's code handles.
 
 ## Each finding

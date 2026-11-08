@@ -47,6 +47,7 @@ inline; target runs as headless child sessions only once the coordinator relays 
 - 2026-11-08 AC-006 revised: What: absolute paths inside the repo accepted; dedupe gains --repo. Why: rejecting them would have dropped run 5's finding 03. Effect: dedupe has one more optional flag.
 - 2026-11-08 baseline grew: What: tests/test_scope.py::test_live_keeps_only_parts_serving_http added to .sdlc/baseline.md. Why: Windows-only shutil.rmtree PermissionError, fails on main too; owner approved via coordinator (msg_6c5d2db5366a). Effect: Review and ship treat it as a known failure.
 - 2026-11-08 AC-007 added: What: drafts.py check rejects the owner's home path (scripts/drafts.py, tests/test_drafts.py). Why: B0 run 7 draft 05 carried C:\Users\<owner>\... into a draft meant for a public issue. Effect: one more AC.
+- 2026-11-08 AC-008 added: What: new scripts/reap.py (+ tests/test_reap.py), bg.pids rule in agents/bug-hunter.md, agents/repro-verifier.md, agents/security-auditor.md, agents/finding-verifier.md, reap step in commands/hunt.md and commands/audit.md. Why: B0 run 8 hunter left the target's node server running and rm -rf of the scratch failed. Effect: one new script and command step.
 
 ## Open questions
 -

@@ -32,6 +32,8 @@ You hunt bugs in one part of a repo. You are given: the repo path (`REPO`), the 
 3. For each suspect: write the smallest repro, run it from the root of `<SCRATCH>/copy`, and capture the exact output. Confirm from the code and its docs that the output is wrong, not intended. Find the root cause: the file, function and lines.
 4. Re-run each repro in a fresh copy (`rm -rf "<SCRATCH>/copy"`, then `throwaway.py` again) so it doesn't depend on state you left behind.
 
+**Background processes** (a server, a watcher): start the program itself (`node src/bin.ts`, `python3 app.py`, a binary you built), never through a wrapper (`npm start`, `pnpm dev`, `go run`) whose child outlives it, and in the same Bash call append its PID: `… > "<SCRATCH>/srv.out" 2>&1 & echo $! >> "<SCRATCH>/bg.pids"`. Stop each one with `kill <pid>` before you finish, even when the repro fails. In a draft, a step that starts one writes `& echo $! > srv.pid`, and the last step is `kill "$(cat srv.pid)"`.
+
 ## Third-party calls
 
 When your part calls an HTTP API or a vendor SDK (your lists include `integrations`):

@@ -83,7 +83,7 @@ From each reply:
    - `not_audited`: stacks without a dependency audit, and failed audits with their reason;
    - `dropped`: a `title` and `reason` for each finding that wasn't confirmed, and `{"title": "<file name>", "reason": "failed check: <problems>"}` for each that failed `check`.
 6. Run `python3 "$PLUGIN/scripts/findings.py" report "$AUDIT" --meta "$SCRATCH/meta.json" --fingerprints "$SCRATCH/fingerprints.json"`.
-7. `rm -rf "$SCRATCH"`, which removes the fingerprints too.
+7. `python3 "$PLUGIN/scripts/reap.py" "$SCRATCH"` (it stops the background processes agents listed), then `rm -rf "$SCRATCH"`, which removes the fingerprints too. If that fails, say which folder is left and that it still holds the fingerprints.
 
 ## 7. Report
 
