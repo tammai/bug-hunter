@@ -80,7 +80,7 @@ def test_a_subshell_killed_before_reap_still_has_its_child_stopped(tmp_path):
 
 
 def test_tools_in_the_current_folder_are_never_run(tmp_path):
-    # Security review r1 S1: /hunt runs reap from the target repo's root, and Windows'
+    # /hunt runs reap from the target repo's root, and Windows'
     # lookup tries the current folder first, so a committed ps.bat would run unisolated.
     repo = tmp_path / "target"
     repo.mkdir()

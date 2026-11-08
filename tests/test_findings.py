@@ -104,9 +104,8 @@ def test_check_with_repo_needs_where_lines_that_exist(tmp_path):
 
 
 def test_citations_outside_the_repo_are_never_opened_or_echoed(tmp_path, monkeypatch):
-    # Security review r1: resolve() on `\\host\share\x` makes Windows connect to that host
-    # with the owner's credentials (S2), and the problem line echoed the citation, which can
-    # be a secret (S3).
+    # resolve() on `\\host\share\x` makes Windows connect to that host with the owner's
+    # credentials, and a citation can be a secret the auditor quoted, so it is never echoed.
     import findings
 
     repo = tmp_path / "repo"
