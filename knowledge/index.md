@@ -41,6 +41,9 @@ Background: [BRIEF.md](../BRIEF.md) — where the recipe comes from; [PRD](../do
 - [runs/2026-11-08-b0-13-json-server-adapters-rerun.md](runs/2026-11-08-b0-13-json-server-adapters-rerun.md) — B0 run 13: Node/TS hunt, verifier wrote into the repo
 - [runs/2026-11-08-b0-14-live-flaskr-exit.md](runs/2026-11-08-b0-14-live-flaskr-exit.md) — B0 run 14: live hunt, clean
 - [runs/2026-11-08-b0-15-audit-realworld-exit.md](runs/2026-11-08-b0-15-audit-realworld-exit.md) — B0 run 15: /audit, off-by-one citation confirmed (defect 10)
+- [runs/2026-11-08-b0-16-json-server-adapters-exit.md](runs/2026-11-08-b0-16-json-server-adapters-exit.md) — B0 run 16: Node/TS hunt, clean
+- [runs/2026-11-08-b0-17-live-flaskr-exit.md](runs/2026-11-08-b0-17-live-flaskr-exit.md) — B0 run 17: live hunt, clean
+- [runs/2026-11-08-b0-18-audit-realworld-exit.md](runs/2026-11-08-b0-18-audit-realworld-exit.md) — B0 run 18: /audit, clean; B0 exit reached
 
 ## Features
 -
