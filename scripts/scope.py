@@ -9,6 +9,8 @@ from pathlib import Path, PurePosixPath
 
 PART_SIZE = 5
 TOKENS_PER_HUNTER = 100_000
+# A hunter returns at most 5 drafts, each re-run by one ~20k-token verifier.
+WORST_CASE_PER_HUNTER = TOKENS_PER_HUNTER + 5 * 20_000
 STACKS = json.loads((Path(__file__).resolve().parent / "stacks.json").read_text(encoding="utf-8"))
 SOURCE_EXTENSIONS = set(STACKS["other_extensions"]).union(
     *(stack["extensions"] for stack in STACKS["stacks"])
@@ -266,9 +268,15 @@ def _main(argv: list[str] | None = None) -> int:
                         help="security audit: config and schema files too, security parts first")
     parser.add_argument("--live", action="store_true",
                         help="only parts that serve HTTP routes, for hunting a running server")
+    parser.add_argument("--budget", type=int,
+                        help="pre-approved tokens: start hunters only while their worst case fits")
     args = parser.parse_args(argv)
     if args.cap is not None and args.cap < 1:
         parser.error("--max must be 1 or more")
+    if args.budget is not None and args.budget < WORST_CASE_PER_HUNTER:
+        print(f"error: --budget {args.budget} is below one hunter's worst case "
+              f"({WORST_CASE_PER_HUNTER} tokens), so nothing would run", file=sys.stderr)
+        return 1
 
     try:
         tracked = _tracked_files(args.repo)
@@ -307,6 +315,13 @@ def _main(argv: list[str] | None = None) -> int:
         kept = serving if args.cap is None else serving[: args.cap]
         out = {"parts": kept, "skipped": serving[len(kept):], "hunters": len(kept),
                "est_tokens": len(kept) * TOKENS_PER_HUNTER}
+    if args.budget is not None:
+        fits = args.budget // WORST_CASE_PER_HUNTER
+        kept, left_out = out["parts"][:fits], out["parts"][fits:]
+        out = {"parts": kept, "skipped": left_out + out["skipped"], "hunters": len(kept),
+               "est_tokens": len(kept) * TOKENS_PER_HUNTER,
+               "budget": {"tokens": args.budget, "per_hunter": WORST_CASE_PER_HUNTER,
+                          "left_out": len(left_out)}}
     for part in out["parts"]:
         if _calls_third_parties(root, part["files"]):
             part["edge_inputs"].append(INTEGRATIONS["edge_inputs"])

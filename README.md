@@ -97,6 +97,31 @@ Every part also gets `generic`, and parts that call an HTTP API or a vendor SDK 
 
 Dependencies are installed in the throwaway copy only from the repo's tracked lockfiles, with the locked command, and with install scripts off for npm, pnpm, Yarn 1, Bun and Composer: `npm ci --ignore-scripts`, `pnpm install --frozen-lockfile --ignore-scripts`, Yarn, Bun, `uv sync --frozen`, `poetry install --no-root`, `go mod download`, `cargo fetch --locked`, Bundler (frozen), `composer install --no-scripts --no-plugins`, Gradle and Maven (`./gradlew`, `./mvnw` or `mvn`). Lockfiles in test and fixture folders, and folders with shell-special characters in their names, get no install. Nothing else may reach the network. A locked install isn't sandboxed: Yarn 2+, uv, Poetry and Bundler can still build or run code the repo chooses, Cargo runs the toolchain a `rust-toolchain.toml` names (which can be a path in the repo), and Gradle and Maven fetch from URLs the repo sets. That's the same trust as running the repo's code. Agents run with their own home folder and caches under the scratch dir (`scripts/isolate.py`). Variables pointing into your home, JVM and Node option variables, any active virtualenv or conda env, and token, password and key variables are dropped; if isolation can't be set up, the agent's command doesn't run. Your runtime managers (rustup, pyenv, asdf, mise, nvm, SDKMAN), `JAVA_HOME`, the Android SDK and CA bundles keep working, but rustup, mise and the Android Gradle plugin can't install anything. Volta isn't kept: a Volta-pinned Node is fetched into the scratch dir. Proxy host and port flags in your JVM option variables are carried over, but proxy settings in `~/.gradle/gradle.properties` or `~/.m2/settings.xml` aren't, so behind a proxy set only there, Gradle and Maven installs fail. On Windows (Git Bash), `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `HOMEDRIVE`/`HOMEPATH`, `TEMP`, `TMP` and `TMPDIR` also move into the scratch dir, and `gh` gets a placeholder token so it can't fall back to a login stored in Credential Manager. Windows Credential Manager, the Windows OpenSSH agent and programs that find their folders without these variables (.NET and NuGet, PowerShell) are still reachable there. This keeps tools off your home; it isn't a sandbox. Code that needs a running service (a database, a browser, an external API) comes back as "couldn't reproduce" rather than a guess.
 
+### Orchestrated runs (0.4, unreleased)
+
+For a pipeline such as product-rebuild, which runs `/hunt` unattended and routes what it finds:
+
+```
+/hunt [paths…] --yes --budget 600000 --format finding-v1 --out <dir> --cost-log <file>
+```
+
+- **`--budget <tokens>`** starts hunters only while each one's worst case (100k plus 5 verifiers of 20k) fits, and reports the parts left out. The figures are fresh tokens; processed tokens with cache reads ran 3–18× higher in the live validation.
+- **`--yes`** skips the cost question (only with `--budget`); the cost is still shown.
+- **`--cost-log <file>`** appends one line per hunter and verifier in the contracts' `cost.jsonl` format (C7). The host reports one token total, so `tokens_in` and `tokens_out` are `null` and the total is in `tokens_total`.
+- **`--format finding-v1 --out <dir>`** writes one `BH-NNNN.json` per verified bug in the contracts' finding format (C6) instead of drafts, to a folder outside the repo. Each has `class: build-defect`, `route: sdlc`, `verified_by: {agent: repro-verifier, result: reproduced}`, `observed.reference: "not run: no --reference"`, a `severity`, and the extra fields `title` and `draft` (the verified draft). Only drafts the verifier reproduced are written.
+
+`repro` uses bug-hunter's own `cli` shape until the contracts settle one (contracts v1 defines only HTTP replay in detail):
+
+```json
+{"runner": "cli",
+ "env": ["BASE", "BOB_AUTH"],
+ "steps": [{"command": "python3 backlog.py next backlog.md", "stdout": "B10\n"}]}
+```
+
+Run the steps in order, each in a fresh shell started at the repo's root; `stdout` is what each printed, stdout and stderr together, as `2>&1` writes them. Each step stands alone: files an earlier step wrote are still there, but no `cd`, `export` or shell variable carries over (known limit: shell state shared between steps isn't supported yet). `env` (live hunts only) names the variables the steps read, from the draft's `Set before running:` line. In this mode the JSON is the source: the hunter writes the steps as a `## Repro (finding-v1)` section holding one fenced JSON list, `scripts/finding_v1.py render` writes the draft's visible Steps from it, the verifier re-runs the JSON steps (instead of the rendered Steps), and `finding_v1.py write` writes the finding from the list the verifier reproduced. In the rendered Steps each command starts with `$ `; a line inside a heredoc body or an output that happens to start with `$ ` is not a command. The JSON is what runs.
+
+The contracts are vendored, byte-identical, in `contracts/v1/` (version 1.1.0); `python3 contracts/v1/contracts.py finding <file>` checks a finding.
+
 ## File the ones you want
 
 Read the drafts first: `/hunt-post` shows only titles before it files. Then, from the same repo:
@@ -178,7 +203,8 @@ uv run ruff check .
 | `agents/` | `bug-hunter`, `repro-verifier`, `security-auditor` and `finding-verifier` |
 | `edge-inputs/` | the edge-input lists hunters work through |
 | `security/` | the security and PII checklists auditors work through |
-| `scripts/` | standard-library Python the commands call: `scope.py`, `known.py`, `drafts.py`, `post.py`, `throwaway.py`, `isolate.py`, `secrets_scan.py`, `findings.py` |
+| `scripts/` | standard-library Python the commands call: `scope.py`, `known.py`, `drafts.py`, `post.py`, `throwaway.py`, `isolate.py`, `secrets_scan.py`, `findings.py`, `finding_v1.py`, `cost_log.py` |
+| `contracts/v1/` | the shared contracts, vendored byte-identical from tammai/product-rebuild; never edit them here |
 | `tests/` | pytest for the scripts, and checks on the prompt files |
 
 Changes go through sdlc (`/sdlc:start`). Principles: [constitution](docs/sdlc/constitution.md). Background: [BRIEF.md](BRIEF.md) and the [PRD](docs/sdlc/prd.md). Releases: [release runbook](knowledge/runbooks/release.md).

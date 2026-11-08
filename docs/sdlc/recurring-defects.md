@@ -34,3 +34,4 @@ One line per defect: what it looks like, then the severity.
 - `Path.resolve()`, `is_file()` or `open()` on a path an agent or target wrote before checking it lies inside the repo: a `\\host\share` path makes Windows authenticate to that host: high
 - An error or problem line that echoes the input it rejected, when that input can be a secret (a citation, a header, a config line): name the item by position instead: high
 - A numeric field read from an agent- or target-written file with `isdigit()` and `int()` but no length or range bound, so a huge value raises (`OverflowError`, `ValueError`) instead of being skipped: high
+- Commands and outputs recovered by parsing free-form markdown (heredocs, fences, prompts, prose) instead of having the producer write them as structured data and rendering the markdown from it: high

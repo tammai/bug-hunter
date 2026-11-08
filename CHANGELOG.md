@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (0.4.0, part 1)
+
+### Added
+
+- **Shared contracts v1.** Contracts 1.1.0 vendored byte-identical in `contracts/v1/`, with a test that runs `vendor-check`.
+- **`/hunt --format finding-v1 --out <dir>`** writes each verified bug as a contracts C6 finding (`BH-NNNN.json`, `scripts/finding_v1.py`) instead of a draft. Its `repro` uses bug-hunter's own `cli` shape (README) until the contracts settle one.
+- **`/hunt --yes --budget <tokens>`** runs without the cost question when an orchestrator approved a budget, starting hunters only while their worst case fits.
+- **`/hunt --cost-log <file>`** appends one contracts C7 line per hunter and verifier (`scripts/cost_log.py`).
+
 ## 0.3.3 — 2026-11-08
 
 ### Fixed

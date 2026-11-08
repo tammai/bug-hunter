@@ -17,7 +17,7 @@ pythonpath = ["scripts"]
 
 [tool.ruff]
 extend = ".sdlc/lint/ruff.sdlc.toml"
-extend-exclude = [".sdlc"]  # plugin-owned files
+extend-exclude = [".sdlc", "contracts"]  # plugin-owned and vendored files
 target-version = "py312"
 line-length = 100
 
