@@ -25,5 +25,11 @@ Background: [BRIEF.md](../BRIEF.md) — where the recipe comes from; [PRD](../do
 ## Runbooks
 - [runbooks/release.md](runbooks/release.md) — how to cut, smoke-test and roll back a release
 
+## Runs
+- [runs/2026-11-08-b0-1-python-markdown2.md](runs/2026-11-08-b0-1-python-markdown2.md) — B0 run 1: Python CLI hunt, fence defect found
+- [runs/2026-11-08-b0-2-godotenv.md](runs/2026-11-08-b0-2-godotenv.md) — B0 run 2: Go module hunt, clean
+- [runs/2026-11-08-b0-3-json-server.md](runs/2026-11-08-b0-3-json-server.md) — B0 run 3: Node/TS service hunt, clean
+- [runs/2026-11-08-b0-5-audit-realworld.md](runs/2026-11-08-b0-5-audit-realworld.md) — B0 run 5: first /audit, citation defects found
+
 ## Features
 -
