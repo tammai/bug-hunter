@@ -120,8 +120,12 @@ def _home_problems(text: str) -> list[str]:
     return []
 
 
-def _live_problems(text: str, target: dict) -> list[str]:
+def _live_problems(text: str, target: dict, variable: str = "BASE",
+                   replay: bool = False) -> list[str]:
     """Ways a live draft would leak the target's host or a login into a public issue."""
+    # An HTTP-replay draft (a reference run) logs in through ACCEPT_ACCOUNT_<NAME>, not curl.
+    def login(name: str) -> str:
+        return f"ACCEPT_ACCOUNT_{name}" if replay else f'-H "${name}_AUTH"'
     found = []
     lowered = text.lower()
     url = urlsplit(target["url"])
@@ -129,9 +133,10 @@ def _live_problems(text: str, target: dict) -> list[str]:
     if url.hostname not in ("localhost", "127.0.0.1", "::1"):
         hosts.add(url.hostname.lower())  # a bare "localhost" in prose gives nothing away
     if any(host in lowered for host in hosts):
-        found.append("names the target's host: write \"$BASE\" instead")
+        whose = "target's" if variable == "BASE" else "reference's"
+        found.append(f"names the {whose} host: write \"${variable}\" instead")
     if "x-bug-hunter-account" in lowered:
-        found.append('writes the proxy\'s account header: write -H "$<ACCOUNT>_AUTH" instead')
+        found.append(f"writes the proxy's account header: write {login('<ACCOUNT>')} instead")
     for name, headers in target["accounts"].items():
         for value in headers.values():
             pieces = {value, value.partition(" ")[2]}
@@ -139,12 +144,12 @@ def _live_problems(text: str, target: dict) -> list[str]:
             # Short pieces ("1", "en") would match ordinary words.
             if any(len(p.strip()) >= 6 and p.strip() in text for p in pieces):
                 found.append(f"holds a login value of account {name}: "
-                             f'write -H "${name.upper()}_AUTH" instead')
+                             f"write {login(name.upper())} instead")
                 break
     setup = next((line for line in text.splitlines()
                   if line.strip().lower().startswith("set before running:")), None)
-    if setup is None or not re.search(r"\bBASE\b", setup):
-        found.append("missing a 'Set before running:' line naming BASE")
+    if setup is None or not re.search(rf"\b{variable}\b", setup):
+        found.append(f"missing a 'Set before running:' line naming {variable}")
     return found
 
 
@@ -197,8 +202,12 @@ def _main(argv: list[str] | None = None) -> int:
     check.add_argument("file")
     check.add_argument("--repo", help="with --target: the repo whose targets.json to read")
     check.add_argument("--target", help="a live draft: hide this target's host and logins")
+    check.add_argument("--reference", help="also hide this reference's host and logins")
     check.add_argument("--oracle", type=Path, help="the spec folder Expected must cite")
     args = parser.parse_args(argv)
+    if getattr(args, "reference", None) and not args.target:
+        print("error: --reference needs --target", file=sys.stderr)
+        return 1
 
     if args.command == "dir":
         try:
@@ -232,11 +241,16 @@ def _main(argv: list[str] | None = None) -> int:
         from live_proxy import BadTarget, load_target  # live_proxy imports this module
 
         try:
-            found += _live_problems(text, load_target(args.repo or ".", args.target))
+            replay = bool(args.reference)
+            found += _live_problems(text, load_target(args.repo or ".", args.target),
+                                    replay=replay)
+            if args.reference:
+                found += _live_problems(text, load_target(args.repo or ".", args.reference),
+                                        "REF_BASE", replay)
         except BadTarget as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
-    for problem in found:
+    for problem in dict.fromkeys(found):
         print(problem)
     return 1 if found else 0
 

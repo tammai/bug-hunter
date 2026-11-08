@@ -35,3 +35,5 @@ One line per defect: what it looks like, then the severity.
 - An error or problem line that echoes the input it rejected, when that input can be a secret (a citation, a header, a config line): name the item by position instead: high
 - A numeric field read from an agent- or target-written file with `isdigit()` and `int()` but no length or range bound, so a huge value raises (`OverflowError`, `ValueError`) instead of being skipped: high
 - Commands and outputs recovered by parsing free-form markdown (heredocs, fences, prompts, prose) instead of having the producer write them as structured data and rendering the markdown from it: high
+- Masks for several targets (or kinds of secret) applied one after the other, so one pass rewrites part of a value or address that another pass would have matched whole, leaving the rest unmasked; build one pass over all of them, longest first: high
+- A step that re-checks a finding already verified (a re-run, a classifier) treats a refused, unreachable or timed-out run as a verdict and drops the finding; a run that didn't happen is an environment result, kept for a retry: high

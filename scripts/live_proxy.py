@@ -21,10 +21,15 @@ from stub_server import _redact_body, _redact_query
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 WRITES = {"POST", "PUT", "PATCH", "DELETE"}
 ACCOUNT_HEADER = "x-bug-hunter-account"
+# Marks the proxy's own refusals, so a replay can tell "not run" from the target's own error.
+REFUSED_HEADER = "X-Bug-Hunter-Refused"
 # Hop-by-hop headers belong to one connection; Host and Content-Length are set for the target.
 NOT_FORWARDED = {"connection", "keep-alive", "proxy-connection", "proxy-authorization", "te",
                  "trailer", "transfer-encoding", "upgrade", "host", "content-length",
-                 ACCOUNT_HEADER}
+                 ACCOUNT_HEADER, REFUSED_HEADER.lower()}
+ROUTING_HEADERS = {"x-original-url", "x-rewrite-url", "x-forwarded-host", "x-forwarded-prefix",
+                   "x-forwarded-path", "x-forwarded-server", "x-forwarded-uri", "forwarded",
+                   "x-host", "x-original-host", "x-http-host-override"}
 MAX_BODY = 50 * 1024 * 1024
 HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 # Drafts write an account as "$<NAME>_AUTH", so its name must be a shell variable name.
@@ -118,6 +123,14 @@ def load_target(repo: str, target: str) -> dict:
     return {"url": entry["url"].rstrip("/"), "writes": writes, "accounts": accounts}
 
 
+def _place(target: dict) -> tuple:
+    """What two target URLs must share to be one server: scheme, host, port and base path."""
+    url = urlsplit(target["url"])
+    port = url.port or (443 if url.scheme == "https" else 80)
+    host = (url.hostname or "").lower()
+    return url.scheme, "loopback" if host in LOCAL_HOSTS else host, port, url.path.rstrip("/")
+
+
 def _leaves_base(path: str) -> bool:
     """Whether a request path could climb out of the target's base path once decoded."""
     decoded = unquote(path.split("?", 1)[0])
@@ -191,10 +204,11 @@ def _password_warnings(target: dict) -> list[str]:
     return sorted(warnings)
 
 
-def _masker(target: dict, proxy_url: str):
-    """Hide account values and the target's address in what goes back to an agent."""
-    base = urlsplit(target["url"])
-    secrets = _secrets(target)
+def _masker(target: dict, proxy_url: str, others: tuple = ()):
+    """Hide account values and the addresses of this target and `others` (target, url)."""
+    # One pass over all targets, longest first, so one target's patterns never cut another's.
+    pairs = [(target, proxy_url), *others]
+    secrets = sorted({s for t, _ in pairs for s in _secrets(t)}, key=len, reverse=True)
     # One pass per kind, built once per proxy; matched exactly, so "Password" in a form label
     # survives an account whose password is "password".
     # Each value as UTF-8 and, where it fits, as Latin-1 bytes: targets echo either.
@@ -206,35 +220,49 @@ def _masker(target: dict, proxy_url: str):
             pass
     secret = re.compile(b"|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))
                         ) if forms else None
-    address = re.compile(re.escape(f"{base.scheme}://{base.netloc}").encode(), re.I)
-    # A bare host is masked only where it stands alone, and a plain name ("uat") only with
-    # its port: on its own it would mangle words like /actuator.
-    hosts = [base.netloc] if ":" in base.netloc or "." in base.netloc else []
-    if base.hostname not in LOCAL_HOSTS and ("." in base.hostname or ":" in base.hostname):
-        hosts.append(base.hostname)
+    # Each target's address goes to its own listener, so links an agent follows still work;
+    # not where it continues as a longer host name (uat.acme.test.evil).
+    urls: dict[bytes, bytes] = {}
+    hosts: list[str] = []
+    for chosen, url in pairs:
+        base = urlsplit(chosen["url"])
+        urls.setdefault(f"{base.scheme}://{base.netloc}".encode().lower(), url.encode())
+        # A bare host is masked only where it stands alone, and a plain name ("uat") only with
+        # its port: on its own it would mangle words like /actuator.
+        if ":" in base.netloc or "." in base.netloc:
+            hosts.append(base.netloc)
+        if base.hostname not in LOCAL_HOSTS and ("." in base.hostname or ":" in base.hostname):
+            hosts.append(base.hostname)
+    address = re.compile(b"(?:" + b"|".join(re.escape(a) for a in sorted(
+        urls, key=len, reverse=True)) + rb")(?![\w-]|\.\w)", re.I)
     # An IPv6 host must not match inside a longer address, so ":" before it also blocks it;
     # for other hosts ":" is ordinary punctuation ("Host:uat.acme.test").
     alternatives = [(rb"(?<![\w.:-])" if h.count(":") > 1 and not h.startswith("[")
                      else rb"(?<![\w.-])") + re.escape(h).encode() + rb"(?![\w-])"
-                    for h in hosts]
+                    for h in sorted(dict.fromkeys(hosts), key=len, reverse=True)]
     host = re.compile(b"|".join(alternatives), re.I) if hosts else None
 
     def mask(data: bytes) -> bytes:
         if secret:
             data = secret.sub(b"<redacted>", data)
-        data = address.sub(proxy_url.encode(), data)
+        # bytes.lower() folds ASCII only, as re.I on bytes does, so every match has its key.
+        data = address.sub(lambda m: urls[m.group().lower()], data)
         return host.sub(b"<target>", data) if host else data
     return mask
 
 
-def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, proxy_url: list):
+def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, proxy_url: list,
+             label: str | None = None, shared: dict | None = None, others: tuple = ()):
+    """A handler for one listener; `others` are masked too, `shared` holds the joint budget."""
     base = urlsplit(target["url"])
     https = base.scheme == "https"
     connection = http.client.HTTPSConnection if https else http.client.HTTPConnection
     accounts = {name.lower(): headers for name, headers in target["accounts"].items()}
-    lock = threading.Lock()
-    state = {"sent": 0, "next": 0.0}
-    masker: list = [None]  # built on first use, once the proxy's own URL is known
+    state = shared if shared is not None else {"lock": threading.Lock(), "sent": 0, "next": 0.0}
+    lock = state["lock"]
+    # Beside another target, headers a front end may route by could reach the other one.
+    dropped = NOT_FORWARDED | (ROUTING_HEADERS if others else set())
+    masker: list = [None]  # built on first use, once the proxies' own URLs are known
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args: object) -> None:
@@ -246,11 +274,24 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
             except (BrokenPipeError, ConnectionResetError):
                 pass  # the hunter hung up; nothing is left to tell it
 
+        def send_error(self, code: int, message: str | None = None,
+                       explain: str | None = None) -> None:
+            # http.server's own refusals (414, 431, 501) are the proxy's too, not the target's.
+            self.close_connection = True
+            entry = {"time": round(time.time(), 3), "method": self.command or "", "path": "",
+                     "status": code, "note": "refused by http.server"}
+            if label:
+                entry["target"] = label
+            with lock, log.open("a", encoding="utf-8") as out:
+                out.write(json.dumps(entry) + "\n")
+            self._reply(code, message or "the proxy refused this request")
+
         def _reply(self, status: int, error: str) -> None:
             data = json.dumps({"error": error}).encode()
             self.send_response_only(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
+            self.send_header(REFUSED_HEADER, "1")
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(data)
@@ -265,6 +306,8 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
             }
             if note:
                 entry["note"] = note
+            if label:
+                entry["target"] = label
             with lock, log.open("a", encoding="utf-8") as out:
                 out.write(json.dumps(entry) + "\n")
 
@@ -329,7 +372,7 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
                 self._record(account, 429, body, note="request budget used up")
                 return self._reply(429, "the run's request budget is used up")
 
-            headers = {k: v for k, v in self.headers.items() if k.lower() not in NOT_FORWARDED}
+            headers = {k: v for k, v in self.headers.items() if k.lower() not in dropped}
             if account:
                 chosen = accounts[account.lower()]
                 headers = {k: v for k, v in headers.items()
@@ -361,7 +404,8 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
                                         "not to, so it can't be checked for logins")
             self._record(account, response.status, body)
             if masker[0] is None:
-                masker[0] = _masker(target, proxy_url[0])
+                masker[0] = _masker(target, proxy_url[0],
+                                    tuple((other, url[0]) for other, url in others))
             mask = masker[0]
             data = mask(data)
             # send_response_only: no Server or Date of the proxy's own beside the target's.
@@ -410,45 +454,79 @@ def _main(argv: list[str] | None = None) -> int:
                         help="requests a second, at most")
     parser.add_argument("--idle-exit", type=_positive(1, float), default=600,
                         help="exit after this many seconds without a request")
+    parser.add_argument("--reference",
+                        help="a second target, the reference, served on its own listener")
     parser.add_argument("--check", action="store_true",
                         help="only check the target is allowed and well formed, then exit")
     args = parser.parse_args(argv)
     try:
         target = load_target(args.repo, args.target)
+        reference = load_target(args.repo, args.reference) if args.reference else None
     except BadTarget as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    if reference and (args.reference == args.target or _place(reference) == _place(target)):
+        print("error: --reference names the same target as --target; "
+              "the reference must be another server", file=sys.stderr)
+        return 1
+    listeners = [("target", args.target, target)]
+    if reference:
+        listeners.append(("reference", args.reference, reference))
     if args.check:
-        accounts = ", ".join(target["accounts"]) or "none"
-        print(f"target ok: {args.target} (writes: {'yes' if target['writes'] else 'no'}; "
-              f"accounts: {accounts})")
-        for warning in _password_warnings(target):
-            print(f"warning: {warning}")
+        for kind, name, chosen in listeners:
+            accounts = ", ".join(chosen["accounts"]) or "none"
+            print(f"{kind} ok: {name} (writes: {'yes' if chosen['writes'] else 'no'}; "
+                  f"accounts: {accounts})")
+        for _, _, chosen in listeners:
+            for warning in _password_warnings(chosen):
+                print(f"warning: {warning}")
+        if reference:
+            # Replays send one account name to both targets.
+            names = [{n.lower() for n in t["accounts"]} for t in (target, reference)]
+            for kind, mine, theirs in (("target", *names), ("reference", *names[::-1])):
+                for name in sorted(mine - theirs):
+                    print(f"warning: account {name} is on the {kind} only; its steps can't run "
+                          "on both targets")
         return 0
     seen = [time.monotonic(), 0]  # last activity, requests in flight
-    proxy_url: list[str] = [""]
-    handler = _handler(target, Path(args.log), args.max_requests, args.rate, seen, proxy_url)
-    try:
-        # Loopback only: the hunters on this machine are the only clients.
-        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    except OSError as exc:
-        print(f"error: can't listen on 127.0.0.1: {exc.strerror}", file=sys.stderr)
-        return 1
-    proxy_url[0] = f"http://127.0.0.1:{server.server_address[1]}"
-    print(f"listening on {proxy_url[0]}", flush=True)
+    shared = {"lock": threading.Lock(), "sent": 0, "next": 0.0}
+    urls: list[list[str]] = [[""] for _ in listeners]
+    servers = []
+    for i, (kind, _, chosen) in enumerate(listeners):
+        label = None if not reference else ("rebuild" if kind == "target" else "reference")
+        others = tuple((o, urls[j]) for j, (_, _, o) in enumerate(listeners) if j != i)
+        handler = _handler(chosen, Path(args.log), args.max_requests, args.rate, seen, urls[i],
+                           label, shared, others)
+        try:
+            # Loopback only: the hunters on this machine are the only clients.
+            servers.append(ThreadingHTTPServer(("127.0.0.1", 0), handler))
+        except OSError as exc:
+            for server in servers:
+                server.server_close()
+            print(f"error: can't listen on 127.0.0.1: {exc.strerror}", file=sys.stderr)
+            return 1
+        urls[i][0] = f"http://127.0.0.1:{servers[-1].server_address[1]}"
+    print(f"listening on {urls[0][0]}", flush=True)
+    if reference:
+        print(f"reference listening on {urls[1][0]}", flush=True)
 
     def watch() -> None:
         while seen[1] or time.monotonic() - seen[0] < args.idle_exit:
             time.sleep(min(1.0, args.idle_exit / 4))
-        server.shutdown()
+        for server in servers:
+            server.shutdown()
 
+    for server in servers[1:]:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
     threading.Thread(target=watch, daemon=True).start()
     try:
-        server.serve_forever()
+        servers[0].serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        server.server_close()
+        # The reference listener's loop runs in a daemon thread and ends with the process;
+        # closing its socket under that loop, or waiting on a loop not yet started, would not.
+        servers[0].server_close()
     return 0
 
 

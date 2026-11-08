@@ -120,7 +120,7 @@ For a pipeline such as product-rebuild, which runs `/hunt` unattended and routes
 
 Run the steps in order, each in a fresh shell started at the repo's root; `stdout` is what each printed, stdout and stderr together, as `2>&1` writes them. Each step stands alone: files an earlier step wrote are still there, but no `cd`, `export` or shell variable carries over (known limit: shell state shared between steps isn't supported yet). `env` (live hunts only) names the variables the steps read, from the draft's `Set before running:` line. In this mode the JSON is the source: the hunter writes the steps as a `## Repro (finding-v1)` section holding one fenced JSON list, `scripts/finding_v1.py render` writes the draft's visible Steps from it, the verifier re-runs the JSON steps (instead of the rendered Steps), and `finding_v1.py write` writes the finding from the list the verifier reproduced. In the rendered Steps each command starts with `$ `; a line inside a heredoc body or an output that happens to start with `$ ` is not a command. The JSON is what runs.
 
-The contracts are vendored, byte-identical, in `contracts/v1/` (version 1.1.0); `python3 contracts/v1/contracts.py finding <file>` checks a finding.
+The contracts are vendored, byte-identical, in `contracts/v1/` (version 1.1.1); `python3 contracts/v1/contracts.py finding <file>` checks a finding.
 
 ### Hunt against a spec (0.4, unreleased)
 
@@ -129,6 +129,28 @@ The contracts are vendored, byte-identical, in `contracts/v1/` (version 1.1.0); 
 ```
 
 For a rebuild with an rspec spec: `<spec>` is the folder holding `criteria.lock.json`. Parts are the spec's features, not folders: each gets its story, the `domain.md` sections the story cites, its `openapi.json` operations and its source files, found from the sdlc state files that list its criteria (`## Criteria`, `## Tasks`) or, failing that, the commits naming its change file (at most 8 files per feature). Features with a criterion below verification level 2 come first, then the most changed lines, then the most failure modes; the ranking is shown before the cost question. A bug's Expected must cite a criterion or a `domain.md` rule; a wrong behaviour nothing covers is kept as a spec-gap candidate (`Oracle: spec-gap`), which `--format finding-v1` writes as `class: spec-gap`, routed to rspec. `scripts/oracle.py scope` does the scoping and ranking.
+
+### Hunt against a running reference (0.4, unreleased)
+
+```
+/hunt --target <rebuild> --reference <reference> --format finding-v1 --out <dir> [--oracle <spec>]
+```
+
+Both are names in `targets.json` (or localhost URLs), and they must be different servers. The proxy serves each on its own loopback listener: agents get `$BASE` (the rebuild) and `$REF_BASE` (the reference), never a URL or token, and each listener reaches only its own target. A named reference takes writes only when its entry has `"writes": true`; a localhost URL takes them, as for `--target`. Both share one request budget. A replay sends one account name to both targets, so give them the same account names; `--check` warns about any account that only one has.
+
+The repro is a contracts C4 HTTP replay: the draft's `## Repro (finding-v1)` holds a JSON list of `{request, expect}` steps, where `expect` is what the spec says. The draft's `## Observed (finding-v1)` holds what `scripts/finding_v1.py replay` printed against each target: `{"result": "pass"}`, `{"result": "fail", "step": n, "message": …}`, or `{"result": "not run: …"}` when the proxy refused a request. Accounts come from `ACCEPT_ACCOUNT_<NAME>`, as in C4. After the verifier reproduces a draft, `/hunt` replays it against both targets itself, and `finding_v1.py classify` sets the class from those two results by script, not by an agent:
+
+| Rebuild | Reference | Spec covers it | Class |
+|---|---|---|---|
+| wrong | correct, or wrong differently | — | `build-defect` |
+| wrong | same wrong, and `Defect: yes` | yes | `build-defect`, with `propose_departure: reference-defect-not-copied` |
+| wrong | same wrong, and `Defect: yes` | no | `reference-defect` |
+| differs | — | matches a departure (`--departure <ID>`) | `accepted-departure` (dropped, listed) |
+| same as the reference | same | yes, and it says otherwise | `spec-gap` |
+| wrong | not run | — | the class the spec gives alone |
+| not run | — | — | `environment`, routed to the orchestrator for a retry |
+
+"Same wrong" means the same failing step with the same message. A generated value in the message, such as an ID, makes two equal defects look different, so they come out as `build-defect`, which a person always reviews. `Defect: yes` is a line under the draft's title saying the behaviour is wrong by the bug bar whatever the spec says (a crash, data loss, wrong stored state); the verifier must confirm it from the output. A rebuild that passes its own repro, or one that matches the reference when nothing says either is wrong, is not a finding. Reading `departures.yaml` comes in a later part.
 
 ## File the ones you want
 

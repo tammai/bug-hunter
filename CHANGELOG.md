@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased (0.4.0, part 3)
+
+### Added
+
+- **`/hunt --target <rebuild> --reference <reference> --format finding-v1`** checks a rebuild against its running reference. The proxy serves both, each on its own loopback listener (`$BASE`, `$REF_BASE`), masking both targets' logins and addresses on each, with one request budget. Hunters and verifiers run every repro against both. The repro is a contracts C4 HTTP replay that `finding_v1.py replay` runs against one base. `finding_v1.py classify` sets each finding's class from the two results by script: `build-defect`, `reference-defect`, `accepted-departure` (with `--departure <ID>`) or `spec-gap`. A `Defect: yes` line, confirmed by the verifier, marks behaviour that is wrong on its own. `drafts.py check --reference` also hides the reference's host and logins.
+- A rebuild + reference fixture pair in `tests/fixtures/reference-pair/` with a planted build defect, shared reference defect, departure and spec gap.
+
+### Changed
+
+- **The proxy marks its own refusals.** Every refusal `live_proxy.py` answers itself (400, 403, 411, 429, 502, and http.server's own 414, 431 and 501) now carries `X-Bug-Hunter-Refused: 1`, and the same header from a target is dropped, so a replay tells "not run" apart from the target's own error. This is the only change visible without `--reference`.
+- Contracts re-vendored at 1.1.1 (CLI output no longer fails on a non-UTF-8 console).
+
 ## Unreleased (0.4.0, part 2)
 
 ### Added

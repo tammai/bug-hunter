@@ -60,6 +60,24 @@ When you're given `PROXY` (the run hunts a running dev or UAT server):
 - Criteria at level 0 or 1 have never been checked against a running reference: test them first.
 - The edge-input lists still apply; the brief changes the judgement, not the search.
 
+## Running reference
+
+**Only when your prompt says `Reference: on`** (always with `Output: finding-v1` and a live target). You get `PROXY` (the rebuild) and `REF_PROXY` (its running reference), two listeners of the same proxy. Everything under Live target holds for both. Send each request to `<PROXY>` or `<REF_PROXY>`, never to any other host.
+- **Run every suspect against both** before you draft it. A script, not you, decides the class from the two results: whether the reference does the same, and whether the spec covers it. You never write a class.
+- **The repro is an HTTP replay, not commands.** `## Repro (finding-v1)` holds one fenced `json` list of contracts C4 steps:
+  - each step is `{"request": {"method": …, "path": "/…", "account": "BOB", "json": {…}}, "expect": {"status": 400, "json": [{"pointer": "/key", "equals": …}]}}`;
+  - `account` and `json` are optional, and `account` is the account name in upper case;
+  - a check has `equals`, `rule` (`uuid`, `int`, `iso8601`, `same-as:<capture>`, `regex:<pattern>`) or `capture` (a name a later path uses as `{name}`).
+
+  `expect` is what the oracle says should happen: the cited criterion or rule, or, for a spec-gap candidate, what you think should happen. So the rebuild fails it.
+- **Run it against both** by writing the draft to `<SCRATCH>/draft.md` with a quoted heredoc (`cat > "<SCRATCH>/draft.md" <<'BH_DRAFT_END'`, so nothing in it expands, and no line of the draft equal to `BH_DRAFT_END`), then calling `python3 "<PLUGIN>/scripts/finding_v1.py" replay --draft "<SCRATCH>/draft.md" --base "<PROXY>"` and again with `--base "<REF_PROXY>"`. Use one Bash call for each, after the isolation prefix and `export ACCEPT_ACCOUNT_BOB="X-Bug-Hunter-Account: bob";` for each account its steps use. Right after the Repro section, add `## Observed (finding-v1)` holding one fenced `json` object, `{"rebuild": <the first line it printed>, "reference": <the second>}`, verbatim.
+  - A rebuild result of `pass` is no finding.
+  - A `not run:` result against the rebuild means the repro didn't run: fix it or drop the suspect.
+- **`Defect: yes`**, on its own line under the title, only when the behaviour is wrong by the bug bar whatever the spec says: a crash or 5xx, data loss, or wrong stored state, shown by the output. A mere difference from the spec or from the reference is not a defect: leave the line out.
+- **Set before running:** name `BASE` (the rebuild URL), `REF_BASE` (the reference URL) and `ACCEPT_ACCOUNT_<NAME>` for each account (a header that logs in as that account).
+- **What happens** says what each target did, and only what Observed shows.
+- **Steps to reproduce** holds only `Rendered from the Repro section.`
+
 ## What a repro must be
 
 Someone with only the draft and a fresh copy of the repo must be able to run it, on another machine: every command runs from the repo's root, each dependency install needed is a step of its own, written as that `installs` entry's `step` exactly, every input file is created by the steps themselves (`printf` or a heredoc) under paths relative to the root or a temp dir the steps make themselves (`T=$(mktemp -d)`, in the same block that uses it), no path from your machine (no `<SCRATCH>`, no home dir), and the actual output is pasted verbatim in a fenced block right after the command that printed it.
