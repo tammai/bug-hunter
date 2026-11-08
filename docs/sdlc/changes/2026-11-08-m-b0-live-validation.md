@@ -36,6 +36,12 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 
 **Root cause:** `findings.py check` only tests that Where has a `path:line`, not that it names a line in the repo. The auditor prompt says `path:line` without saying relative to `REPO`, and nothing checks the line exists.
 
+### Defect 6: a draft carries the owner's home path (and user name)
+
+**Proof:** `/hunt lib --max 1` rerun on python-markdown2 (run 7): draft 05's traceback reads `C:\Users\<owner>\AppData\Local\Temp\tmp.…\lib\markdown2.py`. It passed `drafts.py check`, and `/hunt` may not rewrite a hunter's output, so a draft meant for a public issue names the owner's Windows account.
+
+**Root cause:** `drafts.py check` looks for the target's host and tokens only in live mode, and never for the owner's own paths. Agents' scratch folders sit under the real temp folder, which on Windows is inside the home folder.
+
 ## Decisions
 
 | Decision | Ruled out | Why |
@@ -46,6 +52,7 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 | Exact words in `stacks.json` `security.not_keywords` (`author`, `authors`, `authored`, `authorship`) never match a keyword | Whole-word matching only | Would lose `authorization`, `users`, `tokens` |
 | One fence reader in `drafts.py` (`fenced`, yields each line with whether it is inside a code block, CommonMark rules), used by `drafts.py` and `findings.py` (which already imports from `drafts`) | Fixing the toggle in three places | One rule, three call sites; `findings.py` already depends on `drafts.py` |
 | `findings.py check --repo <repo>` fails a finding whose Where cites a path outside the repo, a missing file, or a line past the file's end; an absolute path inside the repo is accepted. `findings.py dedupe --repo <repo>` keys on the repo-relative path. `/audit` passes `--repo` to both, and the auditor prompt asks for paths relative to `REPO` | Rejecting absolute paths outright | In run 5 the article auditor wrote absolute paths throughout, including for finding 03, the most serious code finding; rejecting them would have dropped it. A wrong line can't be fixed up, and a citation that names no real line isn't evidence (constitution I) |
+| `drafts.py check` fails a draft that contains the home folder of whoever runs the check (as `C:\…`, `C:/…` or Git Bash `/c/…`, any case); the hunter's output is still never rewritten, so such a draft is dropped and listed | Masking the path in place; matching the bare user name | `/hunt` never rewrites a hunter's output (constitution I); a bare name like `Admin` would reject ordinary text |
 | One change file for all of B0's fixes; each later defect adds its AC through a deviation | One feature per defect | B0 ships as one 0.3.x release with its run records |
 
 ## Acceptance criteria
@@ -55,6 +62,7 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 - **AC-004** — 04 §B0: the words `author`, `authors`, `authored`, `authorship` don't match the `auth` keyword, while `authorization` still does.
 - **AC-005** — 04 §B0: `drafts.py check` and `findings.py check` read code blocks as CommonMark does: a line indented 4+ spaces, or a `~~~` line inside a backtick block, neither opens nor closes a block, so the sections after a pasted traceback still count.
 - **AC-006** — 04 §B0: `findings.py check --repo <repo>` rejects a finding whose Where cites a path outside the repo, a missing file or a line past the file's end, and accepts repo-relative and absolute-inside-the-repo citations; `findings.py dedupe --repo <repo>` treats an absolute and a relative citation of the same line as the same root cause.
+- **AC-007** — 04 §B0 / constitution (no person's data in output): `drafts.py check` rejects a draft containing the checking user's home folder path in Windows, forward-slash or Git Bash form, any case, and passes one without it.
 - **AC-002** — 04 §B0 (record each run): every `/hunt` and `/audit` run in B0 has a record in `knowledge/runs/` with target and commit, cost, kept, dropped and why, and any bug-hunter defect it found.
 
 ## Acceptance tests
@@ -66,6 +74,7 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 | AC-004 | tests/test_audit_scope.py › test_author_is_not_auth | `uv run pytest tests/test_audit_scope.py::test_author_is_not_auth` |
 | AC-005 | tests/test_drafts.py › test_check_reads_fences_as_commonmark_does; tests/test_findings.py › test_check_keeps_sections_after_a_traceback_caret_line | `uv run pytest tests/test_drafts.py::test_check_reads_fences_as_commonmark_does tests/test_findings.py::test_check_keeps_sections_after_a_traceback_caret_line` |
 | AC-006 | tests/test_findings.py › test_check_with_repo_needs_where_lines_that_exist; tests/test_findings.py › test_dedupe_with_repo_matches_absolute_and_relative_citations | `uv run pytest tests/test_findings.py::test_check_with_repo_needs_where_lines_that_exist tests/test_findings.py::test_dedupe_with_repo_matches_absolute_and_relative_citations` |
+| AC-007 | tests/test_drafts.py › test_check_rejects_the_owners_home_path | `uv run pytest tests/test_drafts.py::test_check_rejects_the_owners_home_path` |
 | AC-002 | manual | The records come from live runs that need the owner's approval and a running Claude Code session; checked by reading `knowledge/runs/` |
 
 ## Must never break

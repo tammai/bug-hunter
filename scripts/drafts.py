@@ -108,6 +108,18 @@ def problems(text: str) -> list[str]:
     return found
 
 
+def _home_problems(text: str) -> list[str]:
+    """The owner's home folder in a draft: it names their account in a public issue."""
+    home = Path.home().as_posix().rstrip("/").lower()
+    forms = {home, home.replace("/", "\\"), home.replace("/", "\\\\")}
+    if home[1:2] == ":":
+        forms.add("/" + home[0] + home[2:])  # Git Bash: C:/Users/x -> /c/Users/x
+    lowered = text.lower()
+    if len(home) > 3 and any(form in lowered for form in forms):
+        return ["contains your home folder's path, which names your account"]
+    return []
+
+
 def _live_problems(text: str, target: dict) -> list[str]:
     """Ways a live draft would leak the target's host or a login into a public issue."""
     found = []
@@ -169,7 +181,7 @@ def _main(argv: list[str] | None = None) -> int:
     except (OSError, UnicodeDecodeError) as exc:
         print(f"error: cannot read {args.file}: {exc}", file=sys.stderr)
         return 1
-    found = problems(text)
+    found = problems(text) + _home_problems(text)
     if args.target:
         from live_proxy import BadTarget, load_target  # live_proxy imports this module
 
