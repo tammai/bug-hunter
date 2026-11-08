@@ -45,6 +45,7 @@ inline; target runs as headless child sessions only once the coordinator relays 
 - 2026-11-08 fenced What: new function drafts.fenced (CommonMark code-block reader) imported by findings.py. Why: one rule for the three places that toggled fences by hand (AC-005). Effect: drafts.py gains one module-level function; no CLI change.
 - 2026-11-08 AC-006 added: What: findings.py check --repo validates Where citations; /audit passes it; auditor prompt says repo-relative paths (scripts/findings.py, commands/audit.md, agents/security-auditor.md, tests/test_findings.py). Why: B0 run 5 kept an absolute-path duplicate and a line past EOF. Effect: one more AC, one new optional CLI flag.
 - 2026-11-08 AC-006 revised: What: absolute paths inside the repo accepted; dedupe gains --repo. Why: rejecting them would have dropped run 5's finding 03. Effect: dedupe has one more optional flag.
+- 2026-11-08 baseline grew: What: tests/test_scope.py::test_live_keeps_only_parts_serving_http added to .sdlc/baseline.md. Why: Windows-only shutil.rmtree PermissionError, fails on main too; owner approved via coordinator (msg_6c5d2db5366a). Effect: Review and ship treat it as a known failure.
 
 ## Open questions
 -
