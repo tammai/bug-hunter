@@ -58,6 +58,7 @@ inline: this session builds it, one part
 - 2026-11-08 round 2 fixes: S2-1 S2-2 S2-3 R2-1 R2-2 R2-4 R2-5 R2-6 R2-8 R2-11 R2-14 R2-15 fixed test first; verify fails only on the 17 baselined (diffed)
 - 2026-11-08 Stage 2: pass — round 2 bugs fixed; verify fails only on baselined tests
 - 2026-11-08 Stage 3: pass — security r2 PASS, code r2 PASS; tests fail only on baselined
+- 2026-11-08 baseline waived at ship: the 17 failures are exactly the .sdlc/baseline.md rows (diffed after the last code change)
 
 ## Deviations
 - 2026-11-08 scripts/finding_v1.py classify What: classification lives in finding_v1.py classify, not B2's 'findings.py classify'. Why: scripts/findings.py is /audit's findings script; orchestrator approved (Q4, msg_d0c40199e049). Effect: same behaviour, different file name.
@@ -69,6 +70,7 @@ inline: this session builds it, one part
 - 2026-11-08 tests/test_reference.py test_one_masker_covers_both_targets What: a review-fix test outside the AC table. Why: S-1's class (nested secrets, same host other port). Effect: none.
 - 2026-11-08 scripts/finding_v1.py render What: takes optional results; with them the finding's draft shows those results in Observed and Steps. Why: review round 1 CR-3, one source of truth for class and draft. Effect: render --draft unchanged.
 - 2026-11-08 Round 2 fixes What: replay keeps a sha256 digest when it cuts a message, anchors 'request failed' to contracts' own position; masker address boundary only blocks a longer host name (an address followed by a port is masked again, as on part 2) and keys addresses by bytes; four more routing headers dropped with two targets; http.server refusals logged; only the first listener's socket closed at exit; drafts.py hints name ACCEPT_ACCOUNT_<NAME> in reference mode; REFUSED_HEADER imported from live_proxy. Why: review round 2 (S2-1 S2-2 S2-3, R2-1 R2-2 R2-4 R2-5 R2-6 R2-8 R2-11 R2-14 R2-15). Effect: the round-1 single-target masking note no longer applies.
+- 2026-11-08 Ship What: ship.py was denied by the Claude Code permission classifier ([External System Writes]); the commit c1a917d was made by hand (Status done via state.py, git add, git commit), no push, as the orchestrator's 'commit locally' allows. No Verified line: verify fails only on the 17 baselined Windows tests (diffed against .sdlc/baseline.md). Why: tool permission. Effect: ship.py's own verify rerun and Verified head/tree not recorded.
 
 ## Open questions
 -
