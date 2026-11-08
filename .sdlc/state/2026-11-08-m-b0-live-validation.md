@@ -1,0 +1,45 @@
+# 2026-11-08-m-b0-live-validation
+Status: active
+Process: 3
+Change: docs/sdlc/changes/2026-11-08-m-b0-live-validation.md   (this feature's record for people)
+Track: M   (sized up because: —; footprint: 6 files)
+Risk: low
+Top model: opus   (fable only if the user chose it)
+Commands: test: `uv run pytest`
+Started: 2026-11-08
+Base: cb5683d
+Owner: tammai.it@gmail.com
+Tool: claude-code
+Current: Stage 2 – Build
+
+## Stages
+- [x] 1 Define   — the change file, the plan sections below
+- [ ] 2 Build
+- [ ] 3 Review   — the change file's ## Review
+- [ ] 4 Ship     — PR: (Learn: knowledge, recurring-defects.md)
+
+## How the build runs
+inline; target runs as headless child sessions only once the coordinator relays approval
+
+## Handoff
+- targets cloned under C:/Users/Admin/orca/workspaces/bh-b0/; never answer a /hunt or /audit cost prompt without the coordinator's relayed approval
+- keyword test: scripts/scope.py _security_relevant (line ~135)
+
+## Tasks
+1. **Tiered security ranking** — AC-001
+   - Files: `scripts/scope.py`, `scripts/stacks.json`, `tests/test_audit_scope.py`
+2. **Run records** — AC-002
+   - Files: `knowledge/runs/`, `knowledge/index.md`, `docs/specs/rebuild-upgrade/04-bug-hunter.md`
+
+## Public Surface
+- none
+
+## Gate log
+- 2026-11-08 Stage 1: pass — plan not stopped for approval: low-risk M; coordinator approved fixing defect 1 test-first (msg_97dd215aaf6b)
+- 2026-11-08 pre-existing Windows failure not in baseline: tests/test_scope.py::test_live_keeps_only_parts_serving_http fails on main too (shutil.rmtree PermissionError on git's read-only objects, same cause as baseline's test_dir_names_never_collide_or_escape); needs the owner's OK to add to baseline
+
+## Deviations
+- 2026-11-08 AC-003 added: What: tooling-only parts rank last in plain /hunt (scripts/scope.py, scripts/stacks.json, tests/test_scope.py). Why: coordinator relayed the user's decision (msg_283cc6435730) to fix /hunt picking setup.py first as a B0 defect. Effect: one more AC and task in this change.
+
+## Open questions
+-
