@@ -43,7 +43,7 @@ Read those first.
 **Proof:** proven | traced
 
 ## Where
-- `path:line` (one per hop: source, each step, sink; the root cause marked "fix here")
+- `path:line` (one per hop: source, each step, sink; the root cause marked "fix here"; the path relative to `REPO`, the line one that holds the code you quote)
 
 ## Evidence
 <fenced block: the quoted code for each hop, values as <redacted>; for proven, the command and its output>

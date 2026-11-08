@@ -41,6 +41,10 @@ inline; target runs as headless child sessions only once the coordinator relays 
 ## Deviations
 - 2026-11-08 AC-003 added: What: tooling-only parts rank last in plain /hunt (scripts/scope.py, scripts/stacks.json, tests/test_scope.py). Why: coordinator relayed the user's decision (msg_283cc6435730) to fix /hunt picking setup.py first as a B0 defect. Effect: one more AC and task in this change.
 - 2026-11-08 AC-004 added: What: 'author' no longer matches the auth keyword (scripts/scope.py, scripts/stacks.json, tests/test_audit_scope.py). Why: found in the B0 /audit preview on the realworld app. Effect: one more AC.
+- 2026-11-08 AC-005 added: What: CommonMark fence reading in drafts.py/findings.py (scripts/drafts.py, scripts/findings.py, tests/test_drafts.py, tests/test_findings.py). Why: B0 run 1 dropped a proven draft whose traceback caret line toggled the fence. Effect: one more AC.
+- 2026-11-08 fenced What: new function drafts.fenced (CommonMark code-block reader) imported by findings.py. Why: one rule for the three places that toggled fences by hand (AC-005). Effect: drafts.py gains one module-level function; no CLI change.
+- 2026-11-08 AC-006 added: What: findings.py check --repo validates Where citations; /audit passes it; auditor prompt says repo-relative paths (scripts/findings.py, commands/audit.md, agents/security-auditor.md, tests/test_findings.py). Why: B0 run 5 kept an absolute-path duplicate and a line past EOF. Effect: one more AC, one new optional CLI flag.
+- 2026-11-08 AC-006 revised: What: absolute paths inside the repo accepted; dedupe gains --repo. Why: rejecting them would have dropped run 5's finding 03. Effect: dedupe has one more optional flag.
 
 ## Open questions
 -

@@ -136,6 +136,20 @@ def test_check_rejects_empty_title_and_ignores_headings_in_output(tmp_path):
     assert result.returncode == 0, result.stdout
 
 
+def test_check_reads_fences_as_commonmark_does(tmp_path):
+    # A Python 3.11+ traceback in the pasted output: its indented `~~~~^^^^` caret line used to
+    # toggle the fence, hiding Expected and Root cause (python-markdown2, B0 run 1).
+    traceback = ("Traceback (most recent call last):\n"
+                 "    sys.exit(main(sys.argv))\n"
+                 "             ~~~~^^^^^^^^^^\n"
+                 "~~~ not a closer for a backtick fence\n"
+                 "AttributeError: 'NoneType' object has no attribute 'encode'\n")
+    path = tmp_path / "01.md"
+    path.write_text(GOOD.replace("B10\n```", "B10\n" + traceback + "```"), encoding="utf-8")
+    result = run_script("drafts", "check", path)
+    assert result.returncode == 0, result.stdout
+
+
 LIVE = """# Order total accepts a negative quantity
 
 Set before running: `BASE` (the dev or UAT URL), `ALICE_AUTH` (a normal user's login header).
