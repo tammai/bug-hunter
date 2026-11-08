@@ -130,6 +130,28 @@ The contracts are vendored, byte-identical, in `contracts/v1/` (version 1.1.1); 
 
 For a rebuild with an rspec spec: `<spec>` is the folder holding `criteria.lock.json`. Parts are the spec's features, not folders: each gets its story, the `domain.md` sections the story cites, its `openapi.json` operations and its source files, found from the sdlc state files that list its criteria (`## Criteria`, `## Tasks`) or, failing that, the commits naming its change file (at most 8 files per feature). Features with a criterion below verification level 2 come first, then the most changed lines, then the most failure modes; the ranking is shown before the cost question. A bug's Expected must cite a criterion or a `domain.md` rule; a wrong behaviour nothing covers is kept as a spec-gap candidate (`Oracle: spec-gap`), which `--format finding-v1` writes as `class: spec-gap`, routed to rspec. `scripts/oracle.py scope` does the scoping and ranking.
 
+### Hunt a web UI in a browser (0.4, unreleased)
+
+```
+/hunt --target <name> --browser [--max N]
+```
+
+Browser mode is available when three things hold, and `scope.py` says which one is missing when it isn't:
+- a `package.json` lists `@playwright/test` in `devDependencies`;
+- a tracked lockfile beside it holds that package;
+- a chromium build is already installed in Playwright's browsers folder (`PLAYWRIGHT_BROWSERS_PATH`, or the platform default).
+
+UI parts (components and templates) are then hunted beside the route parts, with the `web-ui` edge inputs.
+- **The test:** each bug is proven as one Playwright test file, `bh-repro.spec.ts`. It reads the base URL from `ACCEPT_BASE_URL` and logins from `ACCEPT_ACCOUNT_<NAME>`, the contracts' names.
+- **The run:** `scripts/browser.py run` writes its own Playwright config: chromium only, one worker, no retries, and the proxy as the browser's only origin, so a link or redirect to anywhere else fails. It runs the repo's locked Playwright with `node`, never `npx`.
+- **Not used:**
+  - the repo's own Playwright config, which could start a server against the target;
+  - other browsers.
+- **Downloads:** the browsers already installed on this machine are used read-only. A browser download fails: the download host points at a closed port. When the locked version needs a chromium build that isn't installed, the run says so instead of fetching it.
+- **Not run, not a bug:** a test the proxy refused a request for (budget, writes, another origin), a browser that won't launch, a network error or a timeout reports "not run", never a failure.
+
+Known limit: "never `playwright install`" is a rule in the agents' prompts; no guard enforces it.
+
 ### Hunt against a running reference (0.4, unreleased)
 
 ```
@@ -234,7 +256,7 @@ uv run ruff check .
 | `agents/` | `bug-hunter`, `repro-verifier`, `security-auditor` and `finding-verifier` |
 | `edge-inputs/` | the edge-input lists hunters work through |
 | `security/` | the security and PII checklists auditors work through |
-| `scripts/` | standard-library Python the commands call: `scope.py`, `known.py`, `drafts.py`, `post.py`, `throwaway.py`, `isolate.py`, `secrets_scan.py`, `findings.py`, `finding_v1.py`, `cost_log.py`, `oracle.py` |
+| `scripts/` | standard-library Python the commands call: `scope.py`, `known.py`, `drafts.py`, `post.py`, `throwaway.py`, `isolate.py`, `secrets_scan.py`, `findings.py`, `finding_v1.py`, `cost_log.py`, `oracle.py`, `browser.py` |
 | `contracts/v1/` | the shared contracts, vendored byte-identical from tammai/product-rebuild; never edit them here |
 | `tests/` | pytest for the scripts, and checks on the prompt files |
 

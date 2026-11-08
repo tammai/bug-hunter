@@ -2,10 +2,13 @@
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
+
+import browser
 
 PART_SIZE = 5
 TOKENS_PER_HUNTER = 100_000
@@ -219,6 +222,18 @@ CALLS_OUT_JS = re.compile("|".join(INTEGRATIONS["markers"] + INTEGRATIONS["js_ma
 
 ROUTES = STACKS["routes"]
 SERVES_HTTP = re.compile("|".join(ROUTES["markers"]), re.M)
+WEB_UI = STACKS["web_ui"]
+
+
+def _has_ui(part: dict, tracked: list[str]) -> bool:
+    """Whether a part holds UI files (components, templates) a browser hunt can reach."""
+    # Templates aren't source files, so they're never in a part's files: a server-rendered
+    # app's templates sit beside or under the part's folder instead.
+    folder = PurePosixPath(part["dir"])
+    near = (f for f in tracked if folder == PurePosixPath(".")
+            or PurePosixPath(f).is_relative_to(folder))
+    return any(PurePosixPath(f).suffix in WEB_UI["extensions"]
+               for f in (*part["files"], *near))
 
 
 def _calls_third_parties(root: Path, files: list[str]) -> bool:
@@ -270,7 +285,11 @@ def _main(argv: list[str] | None = None) -> int:
                         help="only parts that serve HTTP routes, for hunting a running server")
     parser.add_argument("--budget", type=int,
                         help="pre-approved tokens: start hunters only while their worst case fits")
+    parser.add_argument("--browser", action="store_true",
+                        help="with --live: also hunt UI parts in a browser, if Playwright is here")
     args = parser.parse_args(argv)
+    if args.browser and not args.live:
+        parser.error("--browser needs --live: a browser hunt reaches a running server")
     if args.cap is not None and args.cap < 1:
         parser.error("--max must be 1 or more")
     if args.budget is not None and args.budget < WORST_CASE_PER_HUNTER:
@@ -303,9 +322,20 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"error: no tracked source files under: {where}", file=sys.stderr)
         return 1
     out = _build(files, paths, None if args.live else args.cap, focus)
+    browser_info = None
     if args.live:
         serving = [p for p in out["parts"] if _any_matches(root, p["files"], SERVES_HTTP,
                                                             SERVES_HTTP)]
+        if args.browser:
+            browser_info = browser.detect(args.repo, dict(os.environ))
+            installed = {i["dir"] for i in _installs(files)}
+            if browser_info["available"] and browser_info["dir"] not in installed:
+                browser_info = {**browser_info, "available": False, "reason": (
+                    f"{browser_info['dir']} gets no locked install (test and fixture folders "
+                    "get none), so a copy can't install Playwright there")}
+            if browser_info["available"]:
+                # UI parts are hunted in the browser beside the route parts, in scope order.
+                serving = [p for p in out["parts"] if p in serving or _has_ui(p, files)]
         if not serving:
             print("error: no part defines HTTP routes, so there is nothing to hunt live",
                   file=sys.stderr)
@@ -327,6 +357,10 @@ def _main(argv: list[str] | None = None) -> int:
             part["edge_inputs"].append(INTEGRATIONS["edge_inputs"])
         if args.live:
             part["edge_inputs"].append(ROUTES["edge_inputs"])
+        if browser_info and browser_info["available"] and _has_ui(part, files):
+            part["edge_inputs"].append(WEB_UI["edge_inputs"])
+    if browser_info is not None:
+        out["browser"] = browser_info
     if focus:
         tracked_set = set(files)
         for part in out["parts"] + out["skipped"]:

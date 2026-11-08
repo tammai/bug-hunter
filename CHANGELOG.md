@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased (0.4.0, part 4)
+
+### Added
+
+- **`/hunt --target <name> --browser`** hunts UI parts in a real browser. Each bug is proven as one Playwright test, run with the repo's own locked `@playwright/test` through the proxy (`scripts/browser.py run`, never `npx`).
+  - `scope.py --live --browser` reports whether browser mode is available and why not (`browser.py detect`), and gives UI parts the new `edge-inputs/web-ui.md` list.
+  - `isolate.py --browser` keeps the installed browsers readable and turns off downloads.
+  - finding-v1 takes a `{"runner": "playwright", "test": …}` repro, classified like an HTTP one under `--reference`.
+- A fixture app with a planted double-submit bug in `tests/fixtures/browser-app/`.
+
+### Changed
+
+- **The proxy serves an absolute-form request to its own listener**, which is how a browser talks to its proxy, and logs a refused one to another origin.
+
 ## Unreleased (0.4.0, review follow-ups)
 
 ### Changed

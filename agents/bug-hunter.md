@@ -52,6 +52,30 @@ When you're given `PROXY` (the run hunts a running dev or UAT server):
 - **In a draft**, write each request with the placeholders `"$BASE"` and `"$<ACCOUNT>_AUTH"`, never the proxy, the target or the account header: `curl -sS -i "$BASE/api/orders/8" -H "$BOB_AUTH"`, and put this line right under the title: `Set before running: \`BASE\` (the dev or UAT URL), \`BOB_AUTH\` (a header that logs in as bob, a normal user)`. Name every `_AUTH` the steps use. Run your repro the same way first, so the draft's steps are exactly what you ran: in each Bash call, right after the isolation prefix (it unsets every variable with `AUTH` in its name), `export BASE="<PROXY>" BOB_AUTH="X-Bug-Hunter-Account: bob";` then the same commands.
 - **The target's data changes:** IDs, timestamps and counts in the output can differ on a re-run. Make the steps create what they need (when writes are allowed) or read what they printed, rather than relying on a record you saw once.
 
+## Browser
+
+**Only when your prompt says `Browser: on`** (a live hunt of a part with UI files). You prove a UI bug with one Playwright test that a real browser runs against the proxy.
+- **Isolation:** start every Bash call with `ISO="$(python3 -I "<PLUGIN>/scripts/isolate.py" "<SCRATCH>" --browser)" && eval "$ISO" || exit 1;`. It keeps Playwright pointed at the browsers already installed on this machine, and makes a download fail.
+- **Installs:** make the copy with `throwaway.py` and run the `installs` step for the package folder your prompt names (`.` is the copy's root). Never `npx`, `playwright install`, or another package or browser.
+- **The test:**
+  - write `bh-repro.spec.ts` in that package folder of the copy with a quoted heredoc (`cat > bh-repro.spec.ts <<'BH_TEST_END'`, and no line of the test equal to `BH_TEST_END`);
+  - import `test` and `expect` from `@playwright/test` and open pages with `page.goto('/<path>')`, since the base comes from the proxy;
+  - log in by reading `process.env.ACCEPT_ACCOUNT_<NAME>`, a header line such as `X-Bug-Hunter-Account: bob`, split at `: ` and passed to `page.setExtraHTTPHeaders`;
+  - in the same Bash call, export that variable (`export ACCEPT_ACCOUNT_BOB="X-Bug-Hunter-Account: bob";`);
+  - assert what a user sees.
+- **Run it:** `python3 "<PLUGIN>/scripts/browser.py" run --copy "<SCRATCH>/copy/<package folder>" --test bh-repro.spec.ts --base "<PROXY>"`, and with `<REF_PROXY>` when `Reference: on` too. It writes its own Playwright config (chromium only, through the proxy) and prints one JSON line:
+  - `{"result": "fail", …}` is your evidence;
+  - `pass` is no bug;
+  - `not run: …` means the suspect couldn't be reproduced: list it under DROPPED with that reason.
+- **In a draft (default format)**, these are the steps, each followed by its output:
+  1. the install step;
+  2. `curl -fsSLo browser.py https://raw.githubusercontent.com/tammai/bug-hunter/v<version>/scripts/browser.py` (`<version>` from `<PLUGIN>/.claude-plugin/plugin.json`);
+  3. the heredoc writing `bh-repro.spec.ts` (`<package folder>/bh-repro.spec.ts` when the folder isn't `.`);
+  4. `python3 browser.py run --test bh-repro.spec.ts --base "$BASE"`, with `--copy '<package folder>'` when the folder isn't `.`.
+
+  Put `Set before running: \`BASE\` (the dev or UAT URL), \`ACCEPT_ACCOUNT_BOB\` (a header that logs in as bob)` under the title.
+- **With `Output: finding-v1`**, `## Repro (finding-v1)` holds one fenced `json` object, `{"runner": "playwright", "test": "<the whole test file>"}`. `## Observed (finding-v1)` holds `{"rebuild": <the line browser.py printed>}`, plus `"reference"` when `Reference: on`. Steps holds only `Rendered from the Repro section.`
+
 ## Spec oracle
 
 **Only when your prompt says `Oracle: on`:** you are given an oracle brief (the feature's story, its criteria with their verification level, the `domain.md` sections it cites and its operations). The spec, not the code or its docs, says what is right: the code was written by the builder you are checking.

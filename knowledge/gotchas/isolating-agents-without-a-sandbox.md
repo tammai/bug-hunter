@@ -33,6 +33,15 @@ On Windows (Git Bash running native Windows Python):
 
 What it still can't stop: code running with the owner's rights reading files by absolute path. Only a container fixes that.
 
+**Browser mode (`isolate.py --browser`):**
+- **Browsers:** Playwright's browsers stay where they are installed. `PLAYWRIGHT_BROWSERS_PATH` is set to the owner's real browsers folder, resolved before `HOME` and `LOCALAPPDATA` move, so the copy finds them.
+- **No download:** `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` covers only install hooks; an explicit `playwright install` ignores it. So `PLAYWRIGHT_DOWNLOAD_HOST` points at a closed port (`127.0.0.1:9`), and any download fails instead of writing into the owner's folder.
+- **The test is code:** the proxy confines the browser, not the test, which can open sockets itself. Only isolation contains it, which is why `/hunt` runs even its own Classify replays under `isolate.py --browser`.
+- **Read-only, by rule only:** this is a read-only use of an owner folder by design, the same class as the runtime managers above. Nothing enforces it beyond the prompt rule "never `playwright install`": the CLI is run by path, so no shell function can intercept it.
+- **No repo config:** `browser.py` writes its own Playwright config rather than using the repo's, because a repo config can start servers or a global setup.
+
+From [2026-11-08-m-browser-mode](../../docs/sdlc/changes/2026-11-08-m-browser-mode.md).
+
 The Windows section is from [2026-11-06-m-windows-isolation](../../docs/sdlc/changes/2026-11-06-m-windows-isolation.md).
 
 From [2026-11-06-m-more-stacks](../../docs/sdlc/changes/2026-11-06-m-more-stacks.md).

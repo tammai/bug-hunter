@@ -23,6 +23,7 @@ WRITES = {"POST", "PUT", "PATCH", "DELETE"}
 ACCOUNT_HEADER = "x-bug-hunter-account"
 # Marks the proxy's own refusals, so a replay can tell "not run" from the target's own error.
 REFUSED_HEADER = "X-Bug-Hunter-Refused"
+REFUSALS = "/.bug-hunter/refusals"  # the proxy's own path: how many requests it refused
 # Hop-by-hop headers belong to one connection; Host and Content-Length are set for the target.
 NOT_FORWARDED = {"connection", "keep-alive", "proxy-connection", "proxy-authorization", "te",
                  "trailer", "transfer-encoding", "upgrade", "host", "content-length",
@@ -259,7 +260,8 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
     https = base.scheme == "https"
     connection = http.client.HTTPSConnection if https else http.client.HTTPConnection
     accounts = {name.lower(): headers for name, headers in target["accounts"].items()}
-    state = shared if shared is not None else {"lock": threading.Lock(), "sent": 0, "next": 0.0}
+    state = shared if shared is not None else {"lock": threading.Lock(), "sent": 0, "next": 0.0,
+                                               "refused": 0}
     lock = state["lock"]
     # Beside another target, headers a front end may route by could reach the other one.
     dropped = NOT_FORWARDED | (ROUTING_HEADERS if others else set())
@@ -287,7 +289,21 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
                 out.write(json.dumps(entry) + "\n")
             self._reply(code, message or "the proxy refused this request")
 
+        def _refusal_count(self) -> None:
+            # The proxy's own answer, never forwarded or counted: browser.py reads it before
+            # and after a test, so a refused request makes the run "not run", not a bug.
+            with lock:
+                data = json.dumps({"refused": state["refused"]}).encode()
+            self.send_response_only(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("X-Bug-Hunter-Proxy", "1")
+            self.end_headers()
+            self.wfile.write(data)
+
         def _reply(self, status: int, error: str) -> None:
+            with lock:
+                state["refused"] += 1
             data = json.dumps({"error": error}).encode()
             self.send_response_only(status)
             self.send_header("Content-Type", "application/json")
@@ -339,10 +355,26 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
             self._reply(status, error)
 
         def _forward(self) -> None:
+            if self.path == REFUSALS and self.command == "GET":
+                return self._refusal_count()
             if not self.path.isascii():
                 self.close_connection = True
                 return self._refuse(400, "path isn't ASCII",
                                     "percent-encode non-ASCII characters in the path")
+            if not self.path.startswith("/"):
+                # A browser sends every request to its proxy in absolute form; only this
+                # listener's own URL is served, so the browser can reach no other origin.
+                try:
+                    url = urlsplit(self.path)
+                except ValueError:
+                    url = None
+                own = urlsplit(proxy_url[0])
+                if url is None or (url.scheme, url.netloc.lower()) != (own.scheme, own.netloc):
+                    self.close_connection = True
+                    return self._refuse(400, "absolute URL to another origin",
+                                        "only paths on the target, like /api/orders, are "
+                                        "allowed")
+                self.path = (url.path or "/") + (f"?{url.query}" if url.query else "")
             if _leaves_base(self.path):
                 self.close_connection = True
                 return self._reply(400, "only paths on the target, like /api/orders, are allowed")
@@ -490,7 +522,7 @@ def _main(argv: list[str] | None = None) -> int:
                           "on both targets")
         return 0
     seen = [time.monotonic(), 0]  # last activity, requests in flight
-    shared = {"lock": threading.Lock(), "sent": 0, "next": 0.0}
+    shared = {"lock": threading.Lock(), "sent": 0, "next": 0.0, "refused": 0}
     urls: list[list[str]] = [[""] for _ in listeners]
     servers = []
     for i, (kind, _, chosen) in enumerate(listeners):

@@ -27,6 +27,8 @@ LEADING_BACKTICKS = re.compile(r" {0,3}(`+)")
 STEPS_HEADING = "## Steps to reproduce"
 WHERE = "## Repro (finding-v1)"
 OBSERVED = "## Observed (finding-v1)"
+PLAYWRIGHT_FILE = "bh-repro.spec.ts"
+PLAYWRIGHT_END = "BH_TEST_END"
 DEFECT = re.compile(r"^Defect:[ \t]*yes[ \t]*$", re.M | re.I)
 DEPARTURE_ID = re.compile(r"D-[0-9]{3,12}")  # C5's D-<3+ digits>, bounded
 LABEL = "repro"
@@ -65,11 +67,24 @@ def is_http(steps: list) -> bool:
     return any(isinstance(step, dict) and "request" in step for step in steps)
 
 
-def repro_steps(sections: dict[str, str]) -> list[dict]:
-    """The hunter's JSON steps: the source of the repro and of the draft's visible Steps."""
+def is_playwright(repro) -> bool:
+    """A browser repro: one Playwright test file, `{"runner": "playwright", "test": …}`."""
+    return isinstance(repro, dict)
+
+
+def repro_steps(sections: dict[str, str]) -> list[dict] | dict:
+    """The hunter's JSON repro: the source of the repro and of the draft's visible Steps."""
     if WHERE[3:].casefold() not in sections:
         raise BadDraft(f"missing {WHERE} (a fenced JSON list of steps)")
     steps = _fenced_json(sections, WHERE)
+    if isinstance(steps, dict):
+        if (set(steps) != {"runner", "test"} or steps["runner"] != "playwright"
+                or not isinstance(steps["test"], str) or not steps["test"].strip()):
+            raise BadDraft(f'{WHERE} is not {{"runner": "playwright", "test": <the test file>}}')
+        if any(line.strip() == PLAYWRIGHT_END for line in steps["test"].split("\n")):
+            raise BadDraft(f"{WHERE}: the test has a line {PLAYWRIGHT_END}, which ends its "
+                           "heredoc in Steps")
+        return steps
     if not isinstance(steps, list) or not steps:
         raise BadDraft(f"{WHERE} is not one fenced JSON list of steps")
     if is_http(steps):
@@ -104,14 +119,18 @@ def result_problem(result) -> str | None:
             '{"result": "not run: …"}')
 
 
-def observed(sections: dict[str, str]) -> dict:
-    """The hunter's captured `replay` results against the rebuild and the reference."""
+def observed(sections: dict[str, str], reference_optional: bool = False) -> dict:
+    """The hunter's captured results against the rebuild and the reference."""
+    # A browser repro is also hunted without a reference: then only the rebuild ran.
     if OBSERVED[3:].casefold() not in sections:
         raise BadDraft(f"missing {OBSERVED} (the replay results against both targets)")
     found = _fenced_json(sections, OBSERVED)
-    if not isinstance(found, dict) or set(found) != set(SIDES):
-        raise BadDraft(f"{OBSERVED} is not one fenced JSON object with rebuild and reference")
-    for side in SIDES:
+    allowed = ({"rebuild"}, set(SIDES)) if reference_optional else (set(SIDES),)
+    if not isinstance(found, dict) or set(found) not in allowed:
+        wanted = "rebuild, and reference when one ran" if reference_optional \
+            else "rebuild and reference"
+        raise BadDraft(f"{OBSERVED} is not one fenced JSON object with {wanted}")
+    for side in found:
         if result_problem(found[side]):
             raise BadDraft(f"{OBSERVED} {side}: {result_problem(found[side])}")
     return found
@@ -144,6 +163,16 @@ def _http_block(steps: list[dict], results: dict) -> list[str]:
     return _fenced_block(body)
 
 
+def _playwright_block(test: str, results: dict) -> list[str]:
+    body = [f"$ cat > {PLAYWRIGHT_FILE} <<'{PLAYWRIGHT_END}'",
+            *test.removesuffix("\n").split("\n"), PLAYWRIGHT_END]
+    for side, variable in zip(SIDES, ("BASE", "REF_BASE"), strict=True):
+        if side in results:
+            body += [f'$ python3 browser.py run --test {PLAYWRIGHT_FILE} --base "${variable}"',
+                     json.dumps(results[side])]
+    return _fenced_block(body)
+
+
 def _fenced_block(body: list[str]) -> list[str]:
     # Longer than any backtick run that opens a line of output, so the output can't close it.
     # splitlines: a lone `\r` in output becomes a line break when the draft is read back.
@@ -168,9 +197,12 @@ def render(text: str, results: dict | None = None) -> str:
     """The draft with its Steps section replaced by one block written from its JSON steps."""
     sections = _sections(text)
     steps = repro_steps(sections)
-    if is_http(steps):
-        if results is not None:
-            text = _replace_section(text, OBSERVED, ["```json", json.dumps(results), "```", ""])
+    if results is not None and (is_http(steps) or is_playwright(steps)):
+        text = _replace_section(text, OBSERVED, ["```json", json.dumps(results), "```", ""])
+    if is_playwright(steps):
+        block = _playwright_block(steps["test"],
+                                  results or observed(sections, reference_optional=True))
+    elif is_http(steps):
         block = _http_block(steps, results or observed(sections))
     else:
         block = _steps_block(steps)
@@ -202,7 +234,11 @@ def finding(text: str) -> dict:
     if not sections.get("what happens"):
         raise BadDraft("missing ## What happens")
     steps = repro_steps(sections)
-    if is_http(steps):
+    if is_playwright(steps):
+        accounts = re.findall(r"\bACCEPT_ACCOUNT_[A-Z][A-Z0-9_]*\b", steps["test"])
+        repro = {"runner": "playwright", "test": steps["test"],
+                 "env": ["ACCEPT_BASE_URL", *dict.fromkeys(accounts)]}
+    elif is_http(steps):
         accounts = [f"ACCEPT_ACCOUNT_{s['request']['account']}" for s in steps
                     if "account" in s["request"]]
         repro = {"runner": "http", "steps": steps,
@@ -362,8 +398,9 @@ def with_reference(record: dict, text: str, oracle: Path | None, results: tuple[
     """The record classified from its replay results against the rebuild and the reference."""
     from oracle import is_spec_gap
 
-    if record["repro"]["runner"] != "http":
-        raise BadDraft("--rebuild and --reference need an HTTP repro (a list of C4 steps)")
+    if record["repro"]["runner"] not in ("http", "playwright"):
+        raise BadDraft("--rebuild and --reference need an HTTP repro (a list of C4 steps) or "
+                       "a playwright one")
     if departure is not None and not DEPARTURE_ID.fullmatch(departure):
         raise BadDraft("--departure must be a departure ID like D-004")
     header = text.split("\n## ", 1)[0]
@@ -493,7 +530,7 @@ def _main(argv: list[str] | None = None) -> int:
             steps = repro_steps(_sections(args.draft.read_text(encoding="utf-8")))
             if not is_http(steps):
                 raise BadDraft("replay runs an HTTP repro (a list of C4 steps); "
-                               "this draft's is a cli list")
+                               "this draft's is not")
             # ASCII: the target's text must not reach a terminal as control characters.
             print(json.dumps(replay(steps, args.base, os.environ)))
         elif args.command == "classify":

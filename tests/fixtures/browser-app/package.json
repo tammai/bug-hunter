@@ -1,0 +1,11 @@
+{
+  "name": "bh-browser-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.60.0"
+  }
+}

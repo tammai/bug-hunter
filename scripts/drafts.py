@@ -114,6 +114,12 @@ def problems(text: str) -> list[str]:
     steps = bodies.get("steps to reproduce", [])
     if steps and not any(in_fence for _, in_fence in fenced(steps)):
         found.append("## Steps to reproduce has no code block with the actual output")
+    # A browser draft writes its test with a heredoc the verifier's shell runs: a second end
+    # line inside the test would end it early and run the rest as commands.
+    if any("<<'BH_TEST_END'" in line for line in steps) and \
+            sum(line.strip() == "BH_TEST_END" for line in steps) != 1:
+        found.append("## Steps to reproduce: the test's heredoc needs exactly one BH_TEST_END "
+                     "line, its last")
     return found
 
 

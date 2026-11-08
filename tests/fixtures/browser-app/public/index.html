@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Notes</title></head>
+<body>
+  <h1>Notes</h1>
+  <form id="add">
+    <label>Note <input name="text" required></label>
+    <button type="submit">Save</button>
+  </form>
+  <ul id="notes"></ul>
+  <script>
+    async function load() {
+      const list = await (await fetch('/api/notes')).json();
+      document.getElementById('notes').replaceChildren(...list.map((n) => {
+        const item = document.createElement('li');
+        item.textContent = n.text;
+        return item;
+      }));
+    }
+    // Planted defect: the button stays enabled while the save is in flight.
+    document.getElementById('add').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const text = new FormData(event.target).get('text');
+      await new Promise((done) => setTimeout(done, 300));  // a slow network
+      await fetch('/api/notes', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                 body: JSON.stringify({text})});
+      await load();
+    });
+    load();
+  </script>
+</body>
+</html>

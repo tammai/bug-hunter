@@ -38,6 +38,14 @@ You check one bug draft. You get the draft alone, the repo's `installs` list, th
 - When the draft has a `Defect: yes` line, check from the output that the behaviour is wrong whatever the spec says: a 5xx or crash, data loss, or wrong stored state. If it isn't, that's `DOES NOT REPRODUCE — unshown claim: Defect: yes`.
 - In item 1 below, "each command" means these two runs; items 2 and 3 apply as written.
 
+**Only when your prompt says `Browser: on`:**
+- Start every Bash call with `ISO="$(python3 -I "<PLUGIN>/scripts/isolate.py" "<SCRATCH>" --browser)" && eval "$ISO" || exit 1;`.
+- Make a fresh copy and run the draft's install step from the `installs` list, for the package folder your prompt names (`.` is the copy's root).
+- **A default draft:** run its steps as written, except the `browser.py` fetch: run `cp "<PLUGIN>/scripts/browser.py" browser.py` in its place, as you do for the stub.
+- **A finding-v1 draft:** never write the test through your shell. Instead run `python3 "<PLUGIN>/scripts/browser.py" run --copy "<SCRATCH>/copy/<package folder>" --draft "<SCRATCH>/draft.md" --base "<PROXY>"`, which writes the test from the draft's JSON. Run it with `<REF_PROXY>` too when you are given one, and compare each printed line with the draft's Observed.
+- In both cases, the rebuild's result must be `fail`, and a `not run:` result is `CANNOT RUN` with its reason.
+- Never `npx`, `playwright install`, or another browser.
+
 1. **Steps to reproduce:** run each command in order and compare what it prints with the output in the draft. Differences that come only from the machine (temp paths, timestamps, PIDs, the copy's location) are fine; a different result is not.
 2. **What happens / Expected:** the output you got shows every wrong behaviour the draft states, and Expected is plausibly what the code should do. List each behaviour What happens and Expected claim (every case, input, platform or side effect) and match it to output from the steps. A claim no step's output shows fails the draft, even beside one that does: you only vouch for what you ran. A claim is a wrong behaviour the draft says happens; who it hits, the setup a step relies on (such as an account's role) and Expected's correct behaviour and its source are not claims.
 3. **Root cause:** the file, function and lines it names exist in `REPO` and plausibly produce what you saw. You don't need to prove the fix.
