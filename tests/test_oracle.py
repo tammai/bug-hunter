@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from conftest import git, run_script
 
 LOCK = {
@@ -160,6 +161,81 @@ def test_a_story_path_outside_the_spec_is_not_read(make_repo):
         create = next(p for p in out["parts"] if p["feature"] == "F-TSK-01")
         assert create["story"] is None, bad
         assert (create["failure_modes"], create["domain_rules"]) == (0, [])
+
+
+def test_live_keeps_only_parts_serving_http(make_repo):
+    repo = hunted_repo(make_repo)
+    result, _ = scope(repo, "--live")
+    assert result.returncode == 1 and result.stderr.startswith("error:"), result.stdout
+    assert result.stderr.count("\n") == 1 and "Traceback" not in result.stderr
+    commit(repo, {"src/create.py": '@app.post("/api/tasks")\ndef create():\n    pass\n'},
+           "Route")
+    result, out = scope(repo, "--live")
+    assert result.returncode == 0, result.stderr
+    assert [(p["id"], p["feature"]) for p in out["parts"]] == [(1, "F-TSK-01")]
+    assert "live-http" in out["parts"][0]["edge_inputs"]
+    assert out["hunters"] == 1
+    assert {"feature": "F-TSK-02", "reason": "its files define no HTTP routes"} \
+        in out["not_hunted"]
+    # A route file ranked past the 8 kept files still counts.
+    grown = {f"stats/f{i}.py": "".join(f"v{n} = {n}\n" for n in range(10)) for i in range(1, 9)}
+    commit(repo, {**grown, "stats/f9.py": '@app.get("/api/stats")\n'}, "Stats route")
+    result, out = scope(repo, "--live")
+    stats = next(p for p in out["parts"] if p["feature"] == "F-TSK-03")
+    # The hunter gets the route file: it takes the place of the lowest-ranked kept file.
+    assert "stats/f9.py" in stats["files"] and len(stats["files"]) == 8, stats
+    assert stats["files_left_out"] == ["stats/f8.py"], stats
+    # Its lines are counted for the files the hunter gets: f1-f7 at 14 each, f9 at 3.
+    assert stats["changed_lines"] == 7 * 14 + 3, stats
+
+
+def test_live_with_no_source_files_is_an_empty_plan(make_repo):
+    repo = make_repo({})
+    commit(repo, SPEC, "spec only")
+    result, out = scope(repo, "--live")
+    assert result.returncode == 0, result.stderr
+    assert (out["parts"], out["hunters"]) == ([], 0)
+
+
+def test_spec_files_are_not_read_through_symlinks(make_repo, monkeypatch):
+    import os
+
+    import oracle
+
+    repo = hunted_repo(make_repo)
+    linked = {"F-TSK-01.md", "domain.md", "openapi.json"}
+    # This Windows account can't make symlinks, so the OS's answer is stood in for.
+    real = os.path.islink
+    monkeypatch.setattr(oracle.os.path, "islink",
+                        lambda p: os.path.basename(str(p)) in linked or real(p))
+    out = oracle.build(str(repo), repo / "spec")
+    create = next(p for p in out["parts"] if p["feature"] == "F-TSK-01")
+    assert create["story"] is None
+    assert (create["domain_rules"], create["operations"], create["failure_modes"]) == ([], [], 0)
+
+    linked.clear()
+    linked.add("features")  # a folder between the spec root and the story
+    create = next(p for p in oracle.build(str(repo), repo / "spec")["parts"]
+                  if p["feature"] == "F-TSK-01")
+    assert create["story"] is None
+
+    linked.add("criteria.lock.json")
+    with pytest.raises(oracle.BadOracle):
+        oracle.build(str(repo), repo / "spec")
+
+    linked.clear()
+    linked.add("spec")  # the spec folder itself, inside the hunted repo
+    for spelled in (repo / "spec", repo / ".." / repo.name / "spec"):
+        with pytest.raises(oracle.BadOracle):
+            oracle.build(str(repo), spelled)
+
+    # A Windows junction is a link too.
+    linked.clear()
+    monkeypatch.setattr(oracle.os.path, "isjunction",
+                        lambda p: os.path.basename(str(p)) == "features")
+    create = next(p for p in oracle.build(str(repo), repo / "spec")["parts"]
+                  if p["feature"] == "F-TSK-01")
+    assert create["story"] is None
 
 
 def test_docs_dir_written_with_dot_slash_still_finds_change_files(make_repo):

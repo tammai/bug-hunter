@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -15,6 +16,7 @@ STORY_LINE = re.compile(
     r"\*\*(F-[A-Z][A-Z0-9]*-[0-9]+\.AC[0-9]+)\*\*\s*(.*?)\s*(?:`\[[^\]]*\]`\s*)*$")
 BACKTICKED = re.compile(r"`([^`\n]+)`")
 NO_FILES = "no source files: no sdlc state or commit names its criteria"
+NO_ROUTES = "its files define no HTTP routes"
 
 
 class BadOracle(ValueError):
@@ -41,7 +43,21 @@ def _section(text: str, heading: str) -> list[str]:
     return lines
 
 
-def _read(path: Path) -> str:
+def _linked(root: Path, path: Path) -> bool:
+    """Whether `path`, or a folder between `root` and it, is a symlink (or it is outside root)."""
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        return True
+    # Junctions too: Windows' directory links, which islink doesn't report.
+    return any(os.path.islink(p) or os.path.isjunction(p)
+               for p in (root.joinpath(*parts[:i]) for i in range(1, len(parts) + 1)))
+
+
+def _read(path: Path, root: Path) -> str:
+    # Never through a link: the hunted repo could point one at a file outside it.
+    if _linked(root, path):
+        return ""
     try:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -51,7 +67,7 @@ def _read(path: Path) -> str:
 def load_lock(spec: Path) -> list[dict]:
     """The lock's criteria: {id, feature, file, level}; a bad lock is one BadOracle."""
     lock = spec / "criteria.lock.json"
-    if not lock.is_file():
+    if _linked(spec, lock) or not lock.is_file():
         raise BadOracle(f"no criteria.lock.json in {spec}")
     try:
         data = json.loads(lock.read_text(encoding="utf-8"))
@@ -64,7 +80,7 @@ def load_lock(spec: Path) -> list[dict]:
 
 
 def domain_headings(spec: Path) -> list[str]:
-    return [line[3:].strip() for line in _read(spec / "domain.md").splitlines()
+    return [line[3:].strip() for line in _read(spec / "domain.md", spec).splitlines()
             if line.startswith("## ") and line[3:].strip()]
 
 
@@ -109,7 +125,7 @@ def _inside(spec: Path, rel: str) -> Path | None:
 
 def _operations(spec: Path) -> dict[str, list[str]]:
     try:
-        paths = json.loads(_read(spec / "openapi.json") or "{}").get("paths", {})
+        paths = json.loads(_read(spec / "openapi.json", spec) or "{}").get("paths", {})
     except (ValueError, AttributeError):
         return {}
     found: dict[str, list[str]] = {}
@@ -123,7 +139,7 @@ def _operations(spec: Path) -> dict[str, list[str]]:
 
 def _docs_dir(repo: Path) -> str:
     try:
-        docs = json.loads(_read(repo / ".sdlc" / "config.json") or "{}").get("docs_dir")
+        docs = json.loads(_read(repo / ".sdlc" / "config.json", repo) or "{}").get("docs_dir")
     except (ValueError, AttributeError):
         docs = None
     docs = _repo_path(docs).strip("/") if isinstance(docs, str) else ""
@@ -148,7 +164,7 @@ def _sdlc_records(repo: Path, tracked: list[str]) -> list[dict]:
         is_change = path.parent.as_posix() == changes_dir and path.suffix == ".md"
         if not (is_state or is_change):
             continue
-        text = _read(repo / name)
+        text = _read(repo / name, repo)
         if is_state:
             criteria = set(CRITERION.findall("\n".join(_section(text, "Criteria"))))
             files = [_repo_path(f) for f in BACKTICKED.findall("\n".join(_section(text, "Tasks")))]
@@ -197,7 +213,15 @@ def _hunted(name: str, tracked: set[str]) -> bool:
     return name in tracked and path.suffix in scope.SOURCE_EXTENSIONS and not scope._is_test(path)
 
 
-def build(repo: str, spec: Path) -> dict:
+def build(repo: str, spec: Path, live: bool = False) -> dict:
+    """The spec's features as parts; with `live`, only those whose files define routes."""
+    # Normalised but unresolved, so a link is seen rather than followed: a spec folder inside
+    # the repo (or a folder above it there) committed as a link would read files from outside.
+    spec_abs = Path(os.path.abspath(spec))
+    for repo_abs in {Path(os.path.abspath(repo)), Path(repo).resolve()}:
+        if spec_abs.is_relative_to(repo_abs) and spec_abs != repo_abs \
+                and _linked(repo_abs, spec_abs):
+            raise BadOracle(f"{spec} is a link inside the repo; name the folder it points to")
     criteria = load_lock(spec)
     listed = scope._tracked_files(repo)
     if listed is None:
@@ -230,12 +254,21 @@ def build(repo: str, spec: Path) -> dict:
             continue
         lines = _numstat(repo, commits if commits else None, files)
         ranked = sorted(files, key=lambda f: (-lines[f], scope._natural_key(f)))
-        kept = ranked[:MAX_FILES]
+        kept, left_out = ranked[:MAX_FILES], ranked[MAX_FILES:]
+        if live and not _serves_http(root, kept):
+            # A route file ranked past the kept ones takes the lowest-ranked kept file's
+            # place, so the hunter has a route to hit.
+            route = next((f for f in left_out if _serves_http(root, [f])), None)
+            if route is None:
+                not_hunted.append({"feature": feature, "reason": NO_ROUTES})
+                continue
+            kept, left_out = [*kept[:-1], route], [kept[-1]] + [f for f in left_out
+                                                                if f != route]
         story_rel = crits[0]["file"]
         story_path = _inside(spec, story_rel)
-        if story_path is not None and not story_path.is_file():
+        if story_path is not None and (_linked(spec, story_path) or not story_path.is_file()):
             story_path = None
-        story_text = _read(story_path) if story_path else ""
+        story_text = _read(story_path, spec) if story_path else ""
         texts = {m[1]: m[2] for line in story_text.splitlines() if (m := STORY_LINE.search(line))}
         failure_modes = [line for line in _section(story_text, "Failure modes")
                          if line.strip().startswith("- ") and line.strip()[2:].strip().casefold()
@@ -244,7 +277,7 @@ def build(repo: str, spec: Path) -> dict:
             "feature": feature,
             "dir": str(PurePosixPath(kept[0]).parent),
             "files": kept,
-            "files_left_out": ranked[MAX_FILES:],
+            "files_left_out": left_out,
             "story": (f"{spec_rel}/{story_path.relative_to(spec).as_posix()}"
                       if story_path else None),
             "criteria": [{"id": c["id"], "level": c["level"], "text": texts.get(c["id"], "")}
@@ -263,6 +296,10 @@ def build(repo: str, spec: Path) -> dict:
         if scope._calls_third_parties(root, part["files"]):
             part["edge_inputs"].append(scope.INTEGRATIONS["edge_inputs"])
     return {"parts": parts, "not_hunted": not_hunted, "installs": scope._installs(tracked_list)}
+
+
+def _serves_http(root: Path, files: list[str]) -> bool:
+    return scope._any_matches(root, files, scope.SERVES_HTTP, scope.SERVES_HTTP)
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -285,7 +322,7 @@ def _main(argv: list[str] | None = None) -> int:
               f"({scope.WORST_CASE_PER_HUNTER} tokens), so nothing would run", file=sys.stderr)
         return 1
     try:
-        out = build(args.repo, args.oracle)
+        out = build(args.repo, args.oracle, args.live)
     except BadOracle as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -293,6 +330,12 @@ def _main(argv: list[str] | None = None) -> int:
         print("error: git is not installed", file=sys.stderr)
         return 1
     parts = out["parts"]
+    # As scope.py --live, but only when routes were the reason: no files at all is an
+    # empty plan, as without --live.
+    if args.live and not parts and any(n["reason"] == NO_ROUTES for n in out["not_hunted"]):
+        print("error: no feature's files define HTTP routes, so there is nothing to hunt live",
+              file=sys.stderr)
+        return 1
     keep = len(parts) if args.cap is None else min(args.cap, len(parts))
     if args.budget is not None:
         after_max = keep

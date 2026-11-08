@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased (0.4.0, review follow-ups)
+
+### Changed
+
+- **A verified finding whose fresh replay passes is `flaky`** (routed to the orchestrator), never dropped.
+- **`--reference` must be another origin.** The same scheme, host and port as `--target` is refused even with a different base path.
+- **`finding_v1.py write --target <name> --ref-target <name>`** refuses a finding whose results or draft show either target's host or a login, the same check drafts get.
+
+### Fixed
+
+- **`oracle.py scope --live`** keeps only features whose files define HTTP routes, and exits 1 when none do, as `scope.py --live` does.
+- **`oracle.py` reads no spec or repo file through a symlink**, so a hunted repo can't bring a file from outside it into a hunter's brief.
+
 ## Unreleased (0.4.0, part 3)
 
 ### Added

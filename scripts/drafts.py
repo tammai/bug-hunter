@@ -1,11 +1,20 @@
 """Where a repo's drafts live, the next draft number, and the fixed draft format check."""
 
 import argparse
+import html
 import re
 import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
+
+JSON_LETTERS = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r",
+                "t": "\t"}
+JSON_ESCAPE = re.compile(r'\\(u[0-9a-fA-F]{4}|["\\/bfnrt])')
+HEX_ESCAPE = re.compile(r"\\x([0-9a-fA-F]{2})")
+ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")  # terminal colour and cursor codes
+MAX_DECODE_ROUNDS = 8
+MAX_SPELLINGS = 256
 
 SECTIONS = ["What happens", "Steps to reproduce", "Expected", "Root cause"]
 DRAFT_NAME = re.compile(r"^(\d+)\.md$")
@@ -123,33 +132,87 @@ def _home_problems(text: str) -> list[str]:
 def _live_problems(text: str, target: dict, variable: str = "BASE",
                    replay: bool = False) -> list[str]:
     """Ways a live draft would leak the target's host or a login into a public issue."""
-    # An HTTP-replay draft (a reference run) logs in through ACCEPT_ACCOUNT_<NAME>, not curl.
-    def login(name: str) -> str:
-        return f"ACCEPT_ACCOUNT_{name}" if replay else f'-H "${name}_AUTH"'
-    found = []
-    lowered = text.lower()
-    url = urlsplit(target["url"])
-    hosts = {url.netloc.lower()}
-    if url.hostname not in ("localhost", "127.0.0.1", "::1"):
-        hosts.add(url.hostname.lower())  # a bare "localhost" in prose gives nothing away
-    if any(host in lowered for host in hosts):
-        whose = "target's" if variable == "BASE" else "reference's"
-        found.append(f"names the {whose} host: write \"${variable}\" instead")
-    if "x-bug-hunter-account" in lowered:
-        found.append(f"writes the proxy's account header: write {login('<ACCOUNT>')} instead")
-    for name, headers in target["accounts"].items():
-        for value in headers.values():
-            pieces = {value, value.partition(" ")[2]}
-            pieces |= {cookie.partition("=")[2] for cookie in value.split(";")}
-            # Short pieces ("1", "en") would match ordinary words.
-            if any(len(p.strip()) >= 6 and p.strip() in text for p in pieces):
-                found.append(f"holds a login value of account {name}: "
-                             f"write {login(name.upper())} instead")
-                break
+    found = leaks(text, target, variable, replay)
     setup = next((line for line in text.splitlines()
                   if line.strip().lower().startswith("set before running:")), None)
     if setup is None or not re.search(rf"\b{variable}\b", setup):
         found.append(f"missing a 'Set before running:' line naming {variable}")
+    return found
+
+
+def leaks(text: str, target: dict, variable: str = "BASE", replay: bool = False) -> list[str]:
+    """The target's host, the proxy's account header or a login in `text`, never echoed."""
+    # An HTTP-replay draft (a reference run) logs in through ACCEPT_ACCOUNT_<NAME>, not curl.
+    def login(name: str) -> str:
+        return f"ACCEPT_ACCOUNT_{name}" if replay else f'-H "${name}_AUTH"'
+    from live_proxy import LOCAL_HOSTS, _secrets  # live_proxy imports this module
+
+    found = []
+    # Every check runs on every decoded spelling, so no encoding layer hides a value.
+    spellings = _spellings(text)
+    patterns = _host_patterns(urlsplit(target["url"]), LOCAL_HOSTS)
+    if any(re.search(p, t, re.I) for p in patterns for t in spellings):
+        whose = "target's" if variable == "BASE" else "reference's"
+        found.append(f"names the {whose} host: write \"${variable}\" instead")
+    if any("x-bug-hunter-account" in t.lower() for t in spellings):
+        found.append(f"writes the proxy's account header: write {login('<ACCOUNT>')} instead")
+    for name, headers in target["accounts"].items():
+        # Every form the proxy masks: as sent, JSON-escaped, percent-encoded, HTML entities and
+        # a Basic login decoded; pieces under 6 characters would match ordinary words.
+        forms = _secrets({"url": target["url"], "accounts": {name: headers}})
+        if any(form in t for form in forms for t in spellings):
+            found.append(f"holds a login value of account {name}: "
+                         f"write {login(name.upper())} instead")
+    return found
+
+
+def _spellings(text: str) -> set[str]:
+    """`text` and what it decodes to (JSON escapes, HTML entities, %xx), to any depth."""
+    found = frontier = {text}
+    # Each decoding is applied again to what it gave until nothing new comes out; bounded,
+    # since every round can triple the set.
+    for _ in range(MAX_DECODE_ROUNDS):
+        frontier = {d for t in frontier
+                    for d in (unquote(t), html.unescape(t), _json_unescaped(t),
+                              HEX_ESCAPE.sub(lambda m: chr(int(m[1], 16)), t),
+                              ANSI.sub("", t))} - found
+        if not frontier or len(found) > MAX_SPELLINGS:
+            break
+        found = found | frontier
+    return found
+
+
+def _json_unescaped(text: str) -> str:
+    # One left-to-right pass, as a JSON parser reads a string: `\\n` is a backslash then n.
+    return JSON_ESCAPE.sub(lambda m: chr(int(m[1][1:], 16)) if m[1][0] == "u"
+                           else JSON_LETTERS[m[1]], text)
+
+
+def _host_patterns(url, local_hosts: set[str]) -> list[str]:
+    """Where `url`'s host names the target in decoded text."""
+    # No left boundary anywhere: whatever stands before a host (an undecoded escape, `_`, a
+    # letter of another script) must never hide it; over-refusing is the safe side. A right
+    # boundary only after a digit, so a longer port or address (the proxy's own listener at
+    # 127.0.0.1:50003, 10.0.0.12) isn't the target.
+    host, port = (url.hostname or "").lower(), url.port
+    scheme = r"[a-z][a-z0-9+.-]*://(?:[^\s/@]*@)?"  # a URL's host position, with any user@
+    if host in local_hosts:
+        # Any loopback spelling with exactly the target's port; a bare "localhost" gives
+        # nothing away.
+        alias = r"(?:localhost|127\.0\.0\.1|\[::1\]|::1)"
+        if port:
+            return [rf"{alias}:{port}(?!\d)"]
+        return [rf"{scheme}{alias}(?![\w.-]|:\d)"]
+    if "." in host or ":" in host:  # a domain, IPv4 or IPv6: anywhere, subdomains included
+        tail = r"(?![0-9a-f])" if ":" in host else r"(?!\d)" if host[-1].isdigit() else ""
+        return [re.escape(host) + tail]
+    # A plain name ("ref") only after a scheme (and any user@) or with its port: elsewhere
+    # every draft's own words ($REF_BASE, "reference", a /ref or //ref path, an @ref
+    # decorator, qa@ref.com) would match. Known limit: a protocol-relative //ref is missed.
+    name = re.escape(host)
+    found = [rf"{scheme}{name}(?![\w-]|\.\w)"]
+    if port:
+        found.append(rf"{name}:{port}(?!\d)")
     return found
 
 

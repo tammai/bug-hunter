@@ -124,11 +124,12 @@ def load_target(repo: str, target: str) -> dict:
 
 
 def _place(target: dict) -> tuple:
-    """What two target URLs must share to be one server: scheme, host, port and base path."""
+    """The origin two targets must not share: scheme, host (loopback names as one) and port."""
+    # Base paths don't count: two apps on one origin share an address key in the masking.
     url = urlsplit(target["url"])
     port = url.port or (443 if url.scheme == "https" else 80)
     host = (url.hostname or "").lower()
-    return url.scheme, "loopback" if host in LOCAL_HOSTS else host, port, url.path.rstrip("/")
+    return url.scheme, "loopback" if host in LOCAL_HOSTS else host, port
 
 
 def _leaves_base(path: str) -> bool:
@@ -466,7 +467,7 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     if reference and (args.reference == args.target or _place(reference) == _place(target)):
-        print("error: --reference names the same target as --target; "
+        print("error: --reference is on the same origin (scheme, host and port) as --target; "
               "the reference must be another server", file=sys.stderr)
         return 1
     listeners = [("target", args.target, target)]

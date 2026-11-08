@@ -149,8 +149,9 @@ The repro is a contracts C4 HTTP replay: the draft's `## Repro (finding-v1)` hol
 | same as the reference | same | yes, and it says otherwise | `spec-gap` |
 | wrong | not run | — | the class the spec gives alone |
 | not run | — | — | `environment`, routed to the orchestrator for a retry |
+| passes now, though the verifier reproduced it | — | — | `flaky`, routed to the orchestrator |
 
-"Same wrong" means the same failing step with the same message. A generated value in the message, such as an ID, makes two equal defects look different, so they come out as `build-defect`, which a person always reviews. `Defect: yes` is a line under the draft's title saying the behaviour is wrong by the bug bar whatever the spec says (a crash, data loss, wrong stored state); the verifier must confirm it from the output. A rebuild that passes its own repro, or one that matches the reference when nothing says either is wrong, is not a finding. Reading `departures.yaml` comes in a later part.
+"Same wrong" means the same failing step with the same message. A generated value in the message, such as an ID, makes two equal defects look different, so they come out as `build-defect`, which a person always reviews. `Defect: yes` is a line under the draft's title saying the behaviour is wrong by the bug bar whatever the spec says (a crash, data loss, wrong stored state); the verifier must confirm it from the output. A rebuild that matches the reference when nothing says either is wrong is not a finding. Given `--target` and `--ref-target`, `write` refuses a finding whose results or draft show either target's host or a login. It decodes JSON, `\x`, HTML and percent escapes, and strips terminal colour codes, first. Known limit: a target with a plain host name (no dot, such as `http://uat`) is recognised only after a scheme (`https://uat`, `http://user@uat`) or with its port (`uat:4000`). A protocol-relative `//uat` with no scheme is not counted. Two targets must be two origins: the same scheme, host and port with different paths is refused. Reading `departures.yaml` comes in a later part.
 
 ## File the ones you want
 

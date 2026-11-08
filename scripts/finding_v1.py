@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from drafts import expected_body, fenced, oracle_problems
+from drafts import expected_body, fenced, leaks, oracle_problems
 from live_proxy import REFUSED_HEADER
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "contracts" / "v1"))
@@ -326,7 +326,8 @@ def classify(rebuild: dict, reference: dict, *, covered: bool, defect: bool,
     # the bug bar whatever the spec says; it tells a shared defect from a shared behaviour the
     # spec words differently. alone: the spec's class, for a reference that didn't run.
     if rebuild["result"] == "pass":
-        raise BadDraft("the rebuild passes the repro's expect: not a finding")
+        # Only verified drafts get here, so a pass now means the runs disagree.
+        return _verdict("flaky")
     if rebuild["result"] != "fail":
         # A refused or unreachable rebuild says nothing about the bug: the run's to retry.
         return _verdict("environment")
@@ -413,11 +414,26 @@ def _next_number(out: Path) -> int:
 
 
 def write(repo: str, out: Path, draft: Path, oracle: Path | None = None,
-          results: tuple[dict, dict] | None = None, departure: str | None = None) -> Path:
+          results: tuple[dict, dict] | None = None, departure: str | None = None,
+          targets: tuple[tuple[dict, str], ...] = ()) -> Path:
+    """`targets`: (target, its variable) whose hosts and logins the finding must not hold."""
     if out.resolve().is_relative_to(Path(repo).resolve()):
         raise BadDraft("--out is inside the repo; findings are written outside it")
     text = draft.read_text(encoding="utf-8")
     record = classified(text, oracle, results, departure)
+    # The fresh results passed only the proxy's masking; this is the drafts' second check.
+    # Only an HTTP repro's observed text comes from the targets; a cli draft's is the
+    # hunter's own What happens, which the draft scan below covers.
+    echoed = "\n".join(record["observed"].values()) if results is not None else ""
+    for target, variable in targets:
+        found = leaks(echoed, target, variable, replay=True)
+        if found:
+            # A target's own text, so nothing to rewrite: say what slipped through.
+            raise BadDraft(f"the finding {found[0].split(':')[0]}: a target echoed it past "
+                           "the proxy's masking")
+        found = leaks(record["draft"], target, variable, replay=True)
+        if found:
+            raise BadDraft(f"the finding's draft {found[0]}")
     problems = [m for s, m in contracts.check_finding(record) if s != "warning"]
     if problems:
         raise BadDraft(f"not a valid finding-v1: {problems[0]}")
@@ -446,6 +462,8 @@ def _main(argv: list[str] | None = None) -> int:
     w.add_argument("--out", required=True, type=Path)
     w.add_argument("--draft", required=True, type=Path, help="a draft its verifier reproduced")
     w.add_argument("--oracle", type=Path, help="the spec folder: class from what Expected cites")
+    w.add_argument("--target", help="the rebuild's target name: the finding may not show it")
+    w.add_argument("--ref-target", help="the reference's target name: likewise")
     c = sub.add_parser("classify", help="print the class and route from both replay results")
     c.add_argument("--draft", required=True, type=Path)
     c.add_argument("--oracle", type=Path, help="the spec folder Expected cites")
@@ -484,8 +502,15 @@ def _main(argv: list[str] | None = None) -> int:
             print(json.dumps({k: record[k] for k in ("class", "route", "departure",
                                                       "propose_departure") if k in record}))
         else:
+            from live_proxy import BadTarget, load_target
+
+            try:
+                targets = tuple((load_target(args.repo, name), variable) for name, variable in (
+                    (args.target, "BASE"), (args.ref_target, "REF_BASE")) if name)
+            except BadTarget as exc:
+                raise BadDraft(str(exc)) from None
             print(write(args.repo, args.out, args.draft, args.oracle, results,
-                        args.departure))
+                        args.departure, targets))
     except BadDraft as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

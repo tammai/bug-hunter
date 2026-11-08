@@ -153,15 +153,19 @@ def test_reference_flags_are_checked(make_repo, tmp_path):
     env, targets = home_env(tmp_path)
     write_targets(targets, {"uat": {"url": "https://uat.example.test"},
                             "same": {"url": "https://uat.example.test/"},
+                            "v1": {"url": "https://uat.example.test/v1"},
                             "ref": {"url": "https://ref.example.test", "writes": False,
                                     "accounts": {"bob": {"Authorization": TOKEN_B}}}})
     log = tmp_path / "l.jsonl"
-    for target, reference in (("uat", "uat"), ("uat", "same"), ("uat", "nope"),
+    for target, reference in (("uat", "uat"), ("uat", "same"), ("uat", "v1"), ("uat", "nope"),
                               ("http://localhost:3999", "http://127.0.0.1:3999")):
+        # --check: a pair that is wrongly accepted exits 0 instead of serving forever.
         result = run_script("live_proxy", "--repo", repo, "--target", target, "--reference",
-                            reference, "--log", log, env=env)
+                            reference, "--log", log, "--check", env=env)
         assert result.returncode == 1, reference
         assert result.stderr.startswith("error:") and "Traceback" not in result.stderr
+        if reference == "v1":
+            assert "origin" in result.stderr, result.stderr
         assert result.stderr.count("\n") == 1, result.stderr
     result = run_script("live_proxy", "--repo", repo, "--target", "uat", "--reference", "ref",
                         "--log", log, "--check", env=env)
@@ -320,9 +324,10 @@ NOT_RUN = {"result": "not run: the proxy refused step 1: request budget used up"
     (FAIL, NOT_RUN, True, False, None, "build-defect", ("build-defect", "sdlc", None)),
     (FAIL, FAIL, True, True, "D-001", "build-defect",
      ("build-defect", "sdlc", "reference-defect-not-copied")),
-    # Not a finding: the rebuild is right, didn't run, or matches a reference nothing faults.
-    (PASS, PASS, True, False, None, "build-defect", None),
-    (PASS, FAIL, True, True, None, "build-defect", None),
+    # A verified draft whose fresh replay passes: the runs disagree, never dropped.
+    (PASS, PASS, True, False, None, "build-defect", ("flaky", "orchestrator", None)),
+    (PASS, FAIL, True, True, None, "build-defect", ("flaky", "orchestrator", None)),
+    # Not a finding: the rebuild matches a reference nothing faults.
     (FAIL, FAIL, False, False, None, "build-defect", None),
     # The rebuild didn't run: the run's environment, for the orchestrator, never a drop.
     (NOT_RUN, PASS, True, False, None, "build-defect", ("environment", "orchestrator", None)),
@@ -393,6 +398,123 @@ def test_write_takes_class_from_both_results(make_repo, tmp_path):
         assert names in result.stderr, result.stderr
         assert result.stderr.count("\n") == 1 and "Traceback" not in result.stderr
     assert sorted(p.name for p in out.iterdir()) == ["BH-0001.json", "BH-0002.json"]
+
+
+def test_write_refuses_target_hosts_and_logins(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    write_targets(targets, {
+        "uat": {"url": "https://uat.example.test", "accounts": {
+            "alice": {"Authorization": TOKEN_A}}},
+        "ref": {"url": "https://ref.example.test", "accounts": {
+            "bob": {"Authorization": TOKEN_B},
+            "carol": {"Authorization": "Basic Y2Fyb2w6UzNjcmV0IXBhc3MveA=="}}},  # S3cret!pass/x
+        # A plain service name, which the draft's own words ($REF_BASE, "reference") contain.
+        "short": {"url": "http://ref:4000"}})
+    out = tmp_path / "out"
+    draft = tmp_path / "d.md"
+    draft.write_text(http_draft(CREATE_AND_READ), encoding="utf-8")
+    reference = tmp_path / "ref.json"
+    reference.write_text(json.dumps(PASS), encoding="utf-8")
+    found = {}
+    for name, ref_target, message in (
+            ("host", "ref", 'step 1 /next: got "https://ref.example.test/x"'),
+            ("login", "ref", 'step 1 /who: got "Rf3Kw9PzJd14"'),
+            ("encoded", "ref", 'step 1 /next: got "/login?p=S3cret%21pass%2Fx"'),
+            ("short host", "short", 'step 1 /next: got "http://ref:4000/x"'),
+            ("clean", "ref", "step 1: status 500, expected 400"),
+            ("clean short", "short", "step 1: status 500, expected 400")):
+        rebuild = tmp_path / f"{name}.json"
+        rebuild.write_text(json.dumps({**FAIL, "message": message}), encoding="utf-8")
+        found[name] = run_script("finding_v1", "write", "--repo", repo, "--out", out, "--draft",
+                                 draft, "--rebuild", rebuild, "--reference", reference,
+                                 "--target", "uat", "--ref-target", ref_target, env=env)
+    for name, words in (("host", "reference's host"), ("login", "account bob"),
+                        ("encoded", "account carol"), ("short host", "reference's host")):
+        result = found[name]
+        assert result.returncode == 1 and result.stderr.startswith("error:"), name
+        assert words in result.stderr and "masking" in result.stderr, result.stderr
+        assert "Rf3Kw9PzJd14" not in result.stderr and "S3cret" not in result.stderr
+        assert result.stderr.count("\n") == 1
+    for name in ("clean", "clean short"):
+        assert found[name].returncode == 0, (name, found[name].stderr)
+    assert sorted(p.name for p in out.iterdir()) == ["BH-0001.json", "BH-0002.json"]
+    # A leak in the hunter's own text is the draft's, not the masking's.
+    hunter_text = http_draft(CREATE_AND_READ).replace("It crashes.", "ref.example.test crashes.")
+    draft.write_text(hunter_text, encoding="utf-8")
+    result = run_script("finding_v1", "write", "--repo", repo, "--out", out, "--draft", draft,
+                        "--rebuild", tmp_path / "clean.json", "--reference", reference,
+                        "--target", "uat", "--ref-target", "ref", env=env)
+    assert result.returncode == 1 and "draft" in result.stderr, result.stderr
+    assert "masking" not in result.stderr
+    # A cli draft's observed text is the hunter's own What happens, never a target's echo.
+    cli = tmp_path / "cli.md"
+    cli.write_text("# Crash\nSeverity: high\n\n## What happens\nref.example.test crashes.\n\n"
+                   "## Steps to reproduce\nRendered from the Repro section.\n\n"
+                   '## Repro (finding-v1)\n```json\n[{"command": "true", "stdout": ""}]\n```\n\n'
+                   "## Expected\nNo crash.\n\n## Root cause\n`a.py`, `f`, line 1: x.\n",
+                   encoding="utf-8")
+    result = run_script("finding_v1", "write", "--repo", repo, "--out", out, "--draft", cli,
+                        "--target", "uat", "--ref-target", "ref", env=env)
+    assert result.returncode == 1 and "draft" in result.stderr, result.stderr
+    assert "masking" not in result.stderr
+
+
+def _encodings(text):
+    """The spellings a target or a JSON/HTML/URL layer may give the same text."""
+    from urllib.parse import quote
+
+    once = quote(text, safe="")
+    # As json.dumps writes a target's string into a fail message: a newline or tab right
+    # before the host, slashes escaped, and the whole thing JSON-encoded again (and again).
+    json_once = text.replace("/", "\\/").replace(" ", "\\n")
+    json_twice = json.dumps(json_once)[1:-1]
+    return {"raw": text, "json": text.replace("/", "\\/"), "unicode": text.replace("/", "\\u002F"),
+            "percent": once, "percent twice": quote(once, safe=""),
+            "entity": text.replace("/", "&#x2F;"), "upper": text.upper(),
+            "newline": text.replace(" ", "\\n"), "tab": text.replace(" ", "\\t"),
+            "json twice": json_twice, "json three times": json.dumps(json_twice)[1:-1],
+            "hex": text.replace("/", "\\x2F").replace(" ", "\\x20"),
+            "ansi": text.replace(" ", "\x1b[31m"), "ansi escaped": text.replace(" ", "\\u001b[31m"),
+            "underscore": text.replace(" ", "_"), "cjk": text.replace(" ", "连接")}
+
+
+TARGETS = {
+    # target URL: (a leaking text, texts that must not count as the target)
+    "https://ref.example.test": (["see https://ref.example.test/x", "at sso.ref.example.test",
+                                  "at ref.example.test"],
+                                 ["ref.example.org is another site"]),
+    # Known limit: a protocol-relative //uat with no scheme is not counted.
+    "http://uat": (["curl http://uat/x", "https://bob@uat/x"],
+                   ["a uat-like name, the /api/uat path, $REF_BASE and the reference",
+                    "the @uat.get('/x') decorator, qa@uat.com and //uat.example.org",
+                    "Cannot GET //uat/users, and $BASE//uat/x"]),
+    "http://ref:4000": (["got http://ref:4000/x", "at ref:4000"],
+                        ["$REF_BASE, the reference, ref:40001"]),
+    "http://127.0.0.1:5000": (["got http://127.0.0.1:5000/x", "got http://localhost:5000/x",
+                               "got http://[::1]:5000/x", "at 127.0.0.1:5000"],
+                              ["the proxy at http://127.0.0.1:50003/x"]),
+    "https://10.0.0.1": (["at https://10.0.0.1/x", "at 10.0.0.1"], ["at 10.0.0.12"]),
+    "https://[2001:db8::1]:8443": (["at https://[2001:db8::1]:8443/x", "at 2001:db8::1"],
+                                   ["at fe80:2001:db8::12"]),
+}
+
+
+@pytest.mark.parametrize("url", TARGETS)
+def test_leak_scan_catches_every_host_form(url):
+    from drafts import leaks
+
+    target = {"url": url, "accounts": {}}
+    leaking, clean = TARGETS[url]
+    for text in leaking:
+        for name, spelled in _encodings(text).items():
+            assert leaks(spelled, target, "REF_BASE", replay=True), (url, name, spelled)
+    for text in clean:
+        assert not leaks(text, target, "REF_BASE", replay=True), (url, text)
+    # Logins are checked on the same decoded spellings.
+    account = {"url": url, "accounts": {"carol": {
+        "Authorization": "Basic Y2Fyb2w6UzNjcmV0IXBhc3MveA=="}}}  # carol:S3cret!pass/x
+    assert leaks("next=%2Flogin%3Fp%3DS3cret%2521pass%252Fx", account, "REF_BASE", replay=True)
 
 
 def test_draft_check_hides_the_reference_too(make_repo, tmp_path):
