@@ -5,10 +5,14 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
 def _git(*args: str, **kwargs) -> subprocess.CompletedProcess:
+    # A hunter replacing its copy calls this from inside the folder it just deleted; git and
+    # the shell it starts fail without a current folder, and every call names its repo anyway.
+    kwargs.setdefault("cwd", tempfile.gettempdir())
     return subprocess.run(["git", "--no-optional-locks", *args], capture_output=True, **kwargs)
 
 
@@ -78,7 +82,8 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("dest")
     args = parser.parse_args(argv)
     try:
-        why = _make(Path(args.repo), Path(args.dest))
+        # Absolute before git runs elsewhere (_git); an absolute path never reads the cwd.
+        why = _make(Path(args.repo).absolute(), Path(args.dest).absolute())
     except FileNotFoundError:
         why = "git is not installed"
     if why:

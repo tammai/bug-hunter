@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.3 — unreleased
+
+### Fixed
+
+- **0.3.2: a hunter's fresh-copy re-run fails on Linux.** Since 0.3.2 every agent call starts inside its copy, so the step that deletes and rebuilds the copy ran from a folder that no longer existed, and `throwaway.py`'s `git clone` failed (`getcwd() failed`). `throwaway.py` now runs git from the system temp folder, and takes relative paths as before. Windows (Git Bash) was not affected.
+
 ## 0.3.2 — 2026-11-08
 
 First live validation. bug-hunter ran 18 times (`/hunt` on a Python CLI, a Node/TS service and a Go module, `/hunt --target` on a running HTTP service, `/audit` on an Express API), and every defect those runs found in bug-hunter itself is fixed here, each test first. The runs are recorded in [knowledge/runs/](knowledge/runs/); the change record is [docs/sdlc/changes/2026-11-08-m-b0-live-validation.md](docs/sdlc/changes/2026-11-08-m-b0-live-validation.md).
