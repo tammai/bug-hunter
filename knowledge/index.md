@@ -29,7 +29,10 @@ Background: [BRIEF.md](../BRIEF.md) — where the recipe comes from; [PRD](../do
 - [runs/2026-11-08-b0-1-python-markdown2.md](runs/2026-11-08-b0-1-python-markdown2.md) — B0 run 1: Python CLI hunt, fence defect found
 - [runs/2026-11-08-b0-2-godotenv.md](runs/2026-11-08-b0-2-godotenv.md) — B0 run 2: Go module hunt, clean
 - [runs/2026-11-08-b0-3-json-server.md](runs/2026-11-08-b0-3-json-server.md) — B0 run 3: Node/TS service hunt, clean
+- [runs/2026-11-08-b0-4-live-flaskr.md](runs/2026-11-08-b0-4-live-flaskr.md) — B0 run 4: first live --target hunt, clean
 - [runs/2026-11-08-b0-5-audit-realworld.md](runs/2026-11-08-b0-5-audit-realworld.md) — B0 run 5: first /audit, citation defects found
+- [runs/2026-11-08-b0-6-audit-realworld-rerun.md](runs/2026-11-08-b0-6-audit-realworld-rerun.md) — B0 run 6: /audit rerun on both auth parts, clean
+- [runs/2026-11-08-b0-7-python-markdown2-rerun.md](runs/2026-11-08-b0-7-python-markdown2-rerun.md) — B0 run 7: Python CLI rerun, home-path defect found
 
 ## Features
 -
