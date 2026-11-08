@@ -87,6 +87,7 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 - **AC-013** — security r1 S1: `reap.py` never runs a `ps` or `kill` from the current folder (the target repo's root when `/hunt` runs it), even where Windows' lookup would try it first.
 - **AC-014** — security r1 S2/S3: `findings.py check --repo` never opens a cited path outside the repo (no `resolve()` on a UNC `\\host\share` or `//host/share` path), and its problem lines name a citation by its position, never by its text.
 - **AC-015** — 04 §B0, coordinator ruling 3 (2026-11-08): `repro-verifier` fails a draft whose What happens or Expected states a behaviour no step's output shows (`DOES NOT REPRODUCE — unshown claim: …`), and still passes the same draft without that claim; the hunter prompt tells hunters to claim only what their steps show.
+- **AC-016** — 04 §B0, constitution III: after `eval` of `isolate.py`'s output, the shell's folder is the agent's copy (`<scratch>/copy`), or the scratch folder before a copy exists, so a relative write never lands in the folder the agent started in (the target repo).
 - **AC-002** — 04 §B0 (record each run): every `/hunt` and `/audit` run in B0 has a record in `knowledge/runs/` with target and commit, cost, kept, dropped and why, and any bug-hunter defect it found.
 
 ## Acceptance tests
@@ -107,6 +108,7 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 | AC-013 | tests/test_reap.py › test_tools_in_the_current_folder_are_never_run | `uv run pytest tests/test_reap.py::test_tools_in_the_current_folder_are_never_run` |
 | AC-014 | tests/test_findings.py › test_citations_outside_the_repo_are_never_opened_or_echoed | `uv run pytest tests/test_findings.py::test_citations_outside_the_repo_are_never_opened_or_echoed` |
 | AC-015 | manual | Agent behaviour, so an eval, not a unit test: `claude -p --plugin-dir <bug-hunter>` from the godotenv clone dispatches one `repro-verifier` with `.sdlc/state/2026-11-08-m-b0-live-validation/evals/verifier-unshown-claim.md` (run 9's draft 04 plus an unshown SIGTERM claim). Before the prompt fix: `VERDICT: REPRODUCES` (red, $0.34). After: `VERDICT: DOES NOT REPRODUCE — unshown claim: a child killed by SIGTERM makes godotenv exit 1 instead of 143 (no step signals the child)` ($0.14). The same draft without the claim (`evals/verifier-honest-draft.md`): `VERDICT: REPRODUCES` ($0.31) |
+| AC-016 | tests/test_isolate.py › test_relative_writes_land_in_the_copy_never_the_repo | `uv run pytest tests/test_isolate.py::test_relative_writes_land_in_the_copy_never_the_repo` |
 | AC-002 | manual | The records come from live runs that need the owner's approval and a running Claude Code session; checked by reading `knowledge/runs/` |
 
 ## Must never break

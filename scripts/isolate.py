@@ -443,9 +443,13 @@ def _main(argv: list[str] | None = None) -> int:
                          Path(__file__).with_name("reap.py").as_posix(), scratch.as_posix(),
                          "--record"])
     listing = f'j=$(jobs -p); [ -z "$j" ] || {record} $j > /dev/null 2>&1'
+    # Agents start in the target repo; a cd chained into a backgrounded `&&` list never
+    # reaches their own shell, so a relative write would land in the repo.
+    home_dir = " || ".join(f"cd {shlex.quote(p.as_posix())}"
+                           for p in (scratch / "copy", scratch))
     print("unset " + " ".join(unset) + "; export " + " ".join(
         f"{key}={shlex.quote(value)}" for key, value in exports.items()
-    ) + f"; trap {shlex.quote(listing)} EXIT;")
+    ) + f"; trap {shlex.quote(listing)} EXIT; {{ {home_dir}; }} 2> /dev/null;")
     return 0
 
 

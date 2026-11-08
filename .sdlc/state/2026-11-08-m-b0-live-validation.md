@@ -62,6 +62,7 @@ inline; target runs as headless child sessions only once the coordinator relays 
 - 2026-11-08 AC-011, AC-012 added: What: review r1 H1/H2 fixes in scripts/reap.py, scripts/isolate.py, agents/*.md (tests/test_reap.py). Why: code-reviewer r1 FAIL. Effect: two more ACs.
 - 2026-11-08 AC-013, AC-014 added: What: security r1 S1 (reap.py tool lookup), S2/S3 (findings.py citation resolve and echo) in scripts/reap.py, scripts/findings.py, tests/test_reap.py, tests/test_findings.py. Why: security-r1 FAIL. Effect: two more ACs.
 - 2026-11-08 AC-015 added: What: hunter and repro-verifier prompts: claims only what steps show; verifier fails an unshown claim (agents/bug-hunter.md, agents/repro-verifier.md, eval prompts in .sdlc/state/2026-11-08-m-b0-live-validation/evals/). Why: user ruling 3 (msg_65e8ff5539c6) made run 3's unverified side claim a defect. Effect: one more AC, checked by eval (manual row).
+- 2026-11-08 AC-016 added: What: isolate.py's output also cd's into <scratch>/copy (or <scratch>) (scripts/isolate.py, tests/test_isolate.py). Why: B0 run 13's verifier wrote srv.pid into the target repo: its cd was inside a backgrounded && list. Effect: one more AC; agents start every call inside their copy.
 
 ## Open questions
 -

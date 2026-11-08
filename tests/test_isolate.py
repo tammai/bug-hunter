@@ -86,6 +86,22 @@ def test_background_jobs_are_listed_so_reap_stops_them(tmp_path):
     assert gone != 0
 
 
+def test_relative_writes_land_in_the_copy_never_the_repo(tmp_path):
+    # json-server, B0 run 13: `cd copy && … & echo $! > srv.pid` put the cd in the background
+    # job, so srv.pid was written to the shell's starting folder, the target repo.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    scratch = tmp_path / "verifier-1-1"
+    command = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch)])
+    write = 'eval "$({command})"; echo x > stray.txt'
+    subprocess.run([BASH, "-c", write.format(command=command)], cwd=repo, check=True)
+    assert not (repo / "stray.txt").exists() and (scratch / "stray.txt").exists()
+
+    (scratch / "copy").mkdir()
+    subprocess.run([BASH, "-c", write.format(command=command)], cwd=repo, check=True)
+    assert not (repo / "stray.txt").exists() and (scratch / "copy" / "stray.txt").exists()
+
+
 def test_home_caches_and_credentials_move_into_scratch(tmp_path):
     real = tmp_path / "real home"
     scratch = tmp_path / "scratch-1"
