@@ -10,13 +10,13 @@ Started: 2026-11-08
 Base: cb5683d
 Owner: tammai.it@gmail.com
 Tool: claude-code
-Verified: 2e2f627 tree 5aa1827236057019dd5e0461b793b8dd006875d6
+Verified: a95d551 tree c8b7e0ab0e78a73f9bd0c0f31be1066d6a53cd2a
 Current: Stage 2 – Build
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
 - [x] 2 Build
-- [ ] 3 Review   — the change file's ## Review
+- [x] 3 Review   — the change file's ## Review
 - [ ] 4 Ship     — PR: (Learn: knowledge, recurring-defects.md)
 
 ## How the build runs
@@ -43,6 +43,9 @@ inline; target runs as headless child sessions only once the coordinator relays 
 - 2026-11-08 Stage 2: pass — baseline-only test failures (17 listed); lint green; ACs red then green
 - 2026-11-08 review: ran code-reviewer (high) and security (code-reviewer, security section) (rows: Code high — Risk high; Code default — L-size diff, new CLI flags and reap.py; Security — Risk high, isolate.py output is eval'd), self-chosen: high risk, coordinator approved reviewers
 - 2026-11-08 Stage 3: fail — code-reviewer r1 FAIL: H1 (killed subshell orphans its child before reap), H2 (long PID line crashes reap)
+- 2026-11-08 Stage 2: pass — round-1 fixes: H1 H2 S1 S2 S3 (AC-011..AC-014); verify: only baseline-listed test failures
+- 2026-11-08 correction: the stage-3 advance at a95d551 recorded a mistyped tree (c8b7e0ab...); the real HEAD tree is 6031ac40e9f9fc325c6a6c1cb412541171603fb7, now in Verified
+- 2026-11-08 Stage 3: pass — reviews r2 PASS (code-reviewer, security); back to Build for defect 8 (coordinator ruling 3: a draft carried a claim its verifier did not re-run)
 
 ## Deviations
 - 2026-11-08 AC-003 added: What: tooling-only parts rank last in plain /hunt (scripts/scope.py, scripts/stacks.json, tests/test_scope.py). Why: coordinator relayed the user's decision (msg_283cc6435730) to fix /hunt picking setup.py first as a B0 defect. Effect: one more AC and task in this change.
@@ -58,6 +61,7 @@ inline; target runs as headless child sessions only once the coordinator relays 
 - 2026-11-08 AC-010 added: What: reap.py stops the process tree under each listed PID (scripts/reap.py, tests/test_reap.py). Why: run 10's transcript shows the hunter listed and killed the PIDs, but one was a subshell whose node child survived. Effect: one more AC; AC-009's trap kept for forgotten jobs.
 - 2026-11-08 AC-011, AC-012 added: What: review r1 H1/H2 fixes in scripts/reap.py, scripts/isolate.py, agents/*.md (tests/test_reap.py). Why: code-reviewer r1 FAIL. Effect: two more ACs.
 - 2026-11-08 AC-013, AC-014 added: What: security r1 S1 (reap.py tool lookup), S2/S3 (findings.py citation resolve and echo) in scripts/reap.py, scripts/findings.py, tests/test_reap.py, tests/test_findings.py. Why: security-r1 FAIL. Effect: two more ACs.
+- 2026-11-08 AC-015 added: What: hunter and repro-verifier prompts: claims only what steps show; verifier fails an unshown claim (agents/bug-hunter.md, agents/repro-verifier.md, eval prompts in .sdlc/state/2026-11-08-m-b0-live-validation/evals/). Why: user ruling 3 (msg_65e8ff5539c6) made run 3's unverified side claim a defect. Effect: one more AC, checked by eval (manual row).
 
 ## Open questions
 -

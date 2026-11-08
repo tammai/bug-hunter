@@ -33,6 +33,6 @@ Dropped by the hunter: known open issues (#1731, #1757, #1549, #1721, #909); low
 
 ## bug-hunter defects found
 
-None in bug-hunter's code. Observation for later (not fixed in B0): a draft can carry a side claim beyond its reproduced steps, and the verifier only re-runs the steps.
+- **Defect 8** (ruled a defect by the user on 2026-11-08, after this record was first written as an observation): draft 04 carried a side claim (`[::1]` answering under `--host 127.0.0.1`) that only the hunter saw; its verifier re-ran the steps and passed it. Fixed after `2e2f627`: a draft may claim only what its steps' output shows, and the verifier fails an unshown claim (AC-015, checked by eval).
 
-Run verdict: **clean**.
+Run verdict: **not clean** (by the later ruling).

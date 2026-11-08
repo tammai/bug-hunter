@@ -83,4 +83,4 @@ DROPPED:
 - <one line per suspect you couldn't reproduce, or that's known or below the bar, with why>
 ```
 
-Keep the four sections exactly as named (What happens · Steps to reproduce · Expected · Root cause), in that order. No findings → `FINDINGS: 0` and the DROPPED list.
+Keep the four sections exactly as named (What happens · Steps to reproduce · Expected · Root cause), in that order. What happens and Expected claim only what the Steps' output shows: every case, input, platform or side effect they name has its command and output in Steps. Anything you saw but didn't put in Steps is left out of the draft (or becomes its own draft): the verifier fails a draft with a claim its steps don't show. No findings → `FINDINGS: 0` and the DROPPED list.

@@ -68,6 +68,7 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 | `reap.py` collects the whole process tree under each listed PID from `ps -ef` (`UID PID PPID …` on Git Bash, Linux and macOS) before stopping anything, then stops the deepest first | `kill -- -<pgid>` | Background jobs of a non-interactive shell share its process group, which can hold more than the agent's jobs |
 | Review r1 H1: the isolation prefix's EXIT trap runs `reap.py <scratch> --record <jobs>`, which writes each job and the whole tree under it to `bg.pids` while the subshell still lives; agents stop their processes with `reap.py`, not `kill`, and `exec` the program after a setup command. PIDs above 2³¹−1 or longer than 10 digits are skipped (H2) | Only telling agents not to `kill` | Run 10 showed agents don't always follow such a rule; the record has to exist before anyone kills the subshell |
 | Security r1: `reap.py` sets `NoDefaultCurrentDirectoryInExePath=1` and refuses a `ps`/`kill` found in the current folder (S1); `findings.py` decides "inside the repo" from the normalised text before any `resolve()` and rejects `\\`/`//` prefixes (S2); its problem lines say `Where line N, citation M` (S3) | Running `reap.py` from another folder in the commands | The script is what the commands and agents call; fixing it covers every caller |
+| Defect 8 (run 3, ruled a defect by the user): a draft may claim only what its steps' output shows. The verifier lists each claimed behaviour, matches it to output, and fails the draft on an unshown one; the hunter is told to leave such claims out or draft them separately | Letting the verifier keep the draft and mark the claim | `/hunt` never rewrites a hunter's output, and a verdict line can't mark part of a draft; dropping with the claim named shows the owner what was lost |
 | One change file for all of B0's fixes; each later defect adds its AC through a deviation | One feature per defect | B0 ships as one 0.3.x release with its run records |
 
 ## Acceptance criteria
@@ -85,6 +86,7 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 - **AC-012** — review r1 H2: a `bg.pids` line too long to be a PID (`99999999999`, 5,000 digits) is skipped, and `reap.py` exits 0 with no traceback.
 - **AC-013** — security r1 S1: `reap.py` never runs a `ps` or `kill` from the current folder (the target repo's root when `/hunt` runs it), even where Windows' lookup would try it first.
 - **AC-014** — security r1 S2/S3: `findings.py check --repo` never opens a cited path outside the repo (no `resolve()` on a UNC `\\host\share` or `//host/share` path), and its problem lines name a citation by its position, never by its text.
+- **AC-015** — 04 §B0, coordinator ruling 3 (2026-11-08): `repro-verifier` fails a draft whose What happens or Expected states a behaviour no step's output shows (`DOES NOT REPRODUCE — unshown claim: …`), and still passes the same draft without that claim; the hunter prompt tells hunters to claim only what their steps show.
 - **AC-002** — 04 §B0 (record each run): every `/hunt` and `/audit` run in B0 has a record in `knowledge/runs/` with target and commit, cost, kept, dropped and why, and any bug-hunter defect it found.
 
 ## Acceptance tests
@@ -104,6 +106,7 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 | AC-012 | tests/test_reap.py › test_pid_lines_too_long_for_a_pid_are_skipped | `uv run pytest tests/test_reap.py::test_pid_lines_too_long_for_a_pid_are_skipped` |
 | AC-013 | tests/test_reap.py › test_tools_in_the_current_folder_are_never_run | `uv run pytest tests/test_reap.py::test_tools_in_the_current_folder_are_never_run` |
 | AC-014 | tests/test_findings.py › test_citations_outside_the_repo_are_never_opened_or_echoed | `uv run pytest tests/test_findings.py::test_citations_outside_the_repo_are_never_opened_or_echoed` |
+| AC-015 | manual | Agent behaviour, so an eval, not a unit test: `claude -p --plugin-dir <bug-hunter>` from the godotenv clone dispatches one `repro-verifier` with `.sdlc/state/2026-11-08-m-b0-live-validation/evals/verifier-unshown-claim.md` (run 9's draft 04 plus an unshown SIGTERM claim). Before the prompt fix: `VERDICT: REPRODUCES` (red, $0.34). After: `VERDICT: DOES NOT REPRODUCE — unshown claim: a child killed by SIGTERM makes godotenv exit 1 instead of 143 (no step signals the child)` ($0.14). The same draft without the claim (`evals/verifier-honest-draft.md`): `VERDICT: REPRODUCES` ($0.31) |
 | AC-002 | manual | The records come from live runs that need the owner's approval and a running Claude Code session; checked by reading `knowledge/runs/` |
 
 ## Must never break
@@ -119,4 +122,6 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 ## Out of scope
 
 - B1–B6 (0.4 features).
+- The cost preview's "about 100k tokens per hunter" matches fresh tokens but not processed tokens (3–18× with cache reads): a known issue for 0.4 (B6, `cost.jsonl`), per the user's ruling 1 (2026-11-08).
+- A live hunt drops a bug the hunter can prove only offline (run 12): an observation, per ruling 2.
 - Publishing a release: the 0.3.x version bump and tag need a separate approval.
