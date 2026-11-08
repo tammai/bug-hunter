@@ -103,8 +103,8 @@ def test_relative_writes_land_in_the_copy_never_the_repo(tmp_path):
 
 
 def test_a_hunter_can_replace_its_copy_after_the_prefix(tmp_path):
-    # The prefix now starts each call inside <scratch>/copy, and Windows can't delete a
-    # folder a running shell sits in: the hunter's fresh-copy step must leave it first.
+    # The prefix starts each call inside <scratch>/copy, so the hunter's fresh-copy step
+    # deletes the folder its own shell sits in; that must still work and rebuild the copy.
     # An ASCII repo path: argv passed through `bash -c` on Windows loses non-ASCII names.
     repo = tmp_path / "repo"
     repo.mkdir()
