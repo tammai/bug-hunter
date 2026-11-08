@@ -131,3 +131,41 @@ The coordinator chose the targets with the user (python-markdown2, json-server, 
 - The cost preview's "about 100k tokens per hunter" matches fresh tokens but not processed tokens (3–18× with cache reads): a known issue for 0.4 (B6, `cost.jsonl`), per the user's ruling 1 (2026-11-08).
 - A live hunt drops a bug the hunter can prove only offline (run 12): an observation, per ruling 2.
 - Publishing a release: the 0.3.x version bump and tag need a separate approval.
+
+## Review
+
+**What fired:** Code at high depth (Risk high: `isolate.py`'s output is `eval`'d by every agent call and `reap.py` turns agent-written PID files into `kill` calls; new public surface `reap.py`, `check --repo`, `dedupe --repo`, `drafts.fenced`; 30+ files) and Security (Risk high). Risk was raised from low to high when the leftover-process fixes reached `isolate.py`; reviewers were approved by the coordinator (msg_274536ef2a74). Each review ran in a fresh `sdlc:code-reviewer` on opus; reports in `.sdlc/.work/findings/2026-11-08-m-b0-live-validation/`.
+
+**Rounds and verdicts**
+
+| Round | Code | Security | Dependency audit |
+|---|---|---|---|
+| 1 (whole change at `2e2f627`) | FAIL — H1, H2 | FAIL — S1, S2, S3 | PASS (`uvx pip-audit` on the locked dev deps: no known vulnerabilities) |
+| 2 (fixes, `a95d551`) | PASS | PASS | — |
+| 3 (defects 8–9, `069e714`, `5685cae`) | FAIL — R3-1 | PASS | — |
+| 4 (R3-1, defect 10, `e5c7cdb`; past the round cap with the user's go-ahead, msg_4e10e4b4f76a) | PASS | — | — |
+
+**High findings and what fixed them** (each test first)
+- H1: an agent that killed a backgrounded subshell itself orphaned its program before `reap.py` ran → the isolation prefix's EXIT trap records each job's whole process tree (`reap.py --record`); prompts say to stop processes with `reap.py` and `exec` after a setup command (AC-011).
+- H2: a `bg.pids` line too long for a PID crashed `reap.py` → PIDs bounded, `OverflowError` caught (AC-012).
+- S1 (critical): on Windows, `shutil.which` searches the current folder (the target repo) first unless `NoDefaultCurrentDirectoryInExePath` is set → `reap.py` sets it and refuses a tool in the current folder (AC-013). Claude Code's own shell sets the variable, which hid the bug until the test removed it case-insensitively.
+- S2: `resolve()` on an agent-cited `\\host\share` path would send the owner's NTLM credentials → containment is decided from the normalised text before any `resolve()` (AC-014).
+- S3: `check --repo` echoed citation text, which can be a secret → problems are named by position (AC-014).
+- R3-1 (medium bug): the unshown-claim rule contradicted the draft template ("who it hits", Expected's source) → a claim is defined as a wrong behaviour the draft says happens (AC-017, by eval).
+
+**Tickets (not fixed here)**
+- S4 / L4 / T2 (medium): a PID in `bg.pids` can be reused by an unrelated owner process before `reap.py` runs; store a start time with each PID or check the process's folder.
+- Round 2 security T1/T2: a relative or repo-pointing PATH entry could still find a planted `ps`; a symlink committed in the repo pointing at a UNC share is still followed by `resolve()`.
+- Round 3 security T-1: target code could swap `<scratch>/copy` for a junction so later calls `cd` into the real repo (no worse than before the fix); T-3: if both `cd`s fail the call carries on silently.
+- Round 1 code L1–L3: camelCase `AuthorController.ts` still counts as `auth`; a Git Bash `/c/…` citation counts as outside the repo; a `path:line:col` citation reads as a missing file.
+- Round 2 code T1: a call that ends right after `cmd && prog &` without `exec` may record only the subshell.
+- Round 4 T4-1–T4-3: range citations (`:10-13`) and the wrong-citation verdict wording for described (not quoted) code; whether "who it hits" can hide an unshown platform.
+- Windows 8.3 short home paths (`C:\Users\JOHNSM~1`) aren't caught by the home-path check.
+
+**Drift:** every change from the plan is a `## Deviations` line in the state file (AC-003…AC-018 added one by one as live runs and reviews found defects; the baseline row for `test_live_keeps_only_parts_serving_http`, added with the owner's OK). Two stage-3 advances recorded a mistyped tree hash; corrections are in the state log.
+
+**Manual checks:** AC-002 (run records 1–18 in `knowledge/runs/`, each with target and commit, cost, kept, dropped and why, defects) read by the round-1 and round-4 reviewers. AC-015, AC-017, AC-018 are agent behaviour, checked by evals whose prompts are in `.sdlc/state/2026-11-08-m-b0-live-validation/evals/` and whose verdicts are in the Acceptance tests rows.
+
+**Lessons filed:** [knowledge/gotchas/stopping-agent-processes-on-windows.md](../../../knowledge/gotchas/stopping-agent-processes-on-windows.md); six lines added to [recurring-defects.md](../recurring-defects.md) (subshell PIDs, `cd` in a backgrounded list, Windows current-folder lookup, resolving untrusted paths, echoing rejected input, unbounded numeric fields).
+
+**B0 exit:** runs 16, 17 and 18 (json-server `src/adapters`, flaskr live, `/audit src --max 1`) are three consecutive runs with no bug-hunter defect, after the last fix `e5c7cdb`. Ten defects were found and fixed across 18 runs; the user ruled on the borderline ones (rulings 1–3 and run 15).

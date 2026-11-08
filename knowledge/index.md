@@ -21,6 +21,7 @@ Background: [BRIEF.md](../BRIEF.md) — where the recipe comes from; [PRD](../do
 - [gotchas/isolating-agents-without-a-sandbox.md](gotchas/isolating-agents-without-a-sandbox.md) — why isolate.py drops, keeps and refuses what it does
 - [gotchas/detecting-secrets-in-free-text.md](gotchas/detecting-secrets-in-free-text.md) — why findings are checked against found secrets, not shapes
 - [gotchas/redacting-logged-requests.md](gotchas/redacting-logged-requests.md) — why the stub parses, decodes and withholds before logging
+- [gotchas/stopping-agent-processes-on-windows.md](gotchas/stopping-agent-processes-on-windows.md) — why agents' servers are listed by the prefix and stopped with reap.py
 
 ## Runbooks
 - [runbooks/release.md](runbooks/release.md) — how to cut, smoke-test and roll back a release
