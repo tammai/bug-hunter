@@ -47,6 +47,12 @@
   - `replay` depends on contracts' private `_run_steps`, `_Fail` and their wording, plus a process-global opener (S2-7, R2-10);
   - dedupe the target-independent draft checks (CR-12);
   - render repeats a heading scan and renders twice (R2-12, R2-13).
+- [ ] Part 5 review tickets, in docs/sdlc/changes/2026-11-08-m-departures.md's Review: 2026-11-08-m-departures (2026-11-08)
+  - departure matching parses contracts' failure wording; a structured value from `replay` would remove it (CR-4, with S2-7);
+  - `classify` and `write` print no warning for a skipped proposed entry (CR-6);
+  - registry IDs have no upper digit bound (CR-9);
+  - `matching_departure` infers the runner from the steps' shape (R2-10);
+  - classify's departure rows sit in two test tables, and the registry test covers several cases (R2-11, R2-12).
 
 - [ ] Make the test suite pass on Windows: the 16 Windows-only failures in `.sdlc/baseline.md` (fake `gh` that Windows can run without passing titles through `cmd.exe`, `USERPROFILE` in the drafts and findings fixtures, POSIX-mode asserts, read-only git objects, CRLF and forbidden names in fixtures, symlink privilege), then add a `windows-latest` CI runner — left out of the Windows isolation change on purpose; 2026-11-06-m-windows-isolation (2026-11-06)
 - [ ] Small `isolate.py` follow-ups from the Windows isolation review:

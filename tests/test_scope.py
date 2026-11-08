@@ -191,8 +191,14 @@ def test_live_route_markers_across_frameworks(make_repo):
         "actix/main.rs": '#[get("/orders")]\nasync fn orders() {}\n',
         "axum/main.rs": 'let app = Router::new().route("/orders", get(list));\n',
         "echo/main.go": 'e := echo.New()\ne.GET("/orders", list)\n',
+        "stdlib/server.py": "from http.server import BaseHTTPRequestHandler\n\n\n"
+                            "class Handler(BaseHTTPRequestHandler):\n"
+                            "    def log_message(self, *a):\n        pass\n\n"
+                            "    def do_GET(self):\n        self.send_response(200)\n",
     }
     clients = {
+        # A do_ method alone is not a server: the BaseHTTPRequestHandler subclass is the signal.
+        "jobs/steps.py": "class Step:\n    def do_GET(self):\n        return 1\n",
         "front/api.js": "const api = axios.create()\n"
                         "export const list = () => api.get('/orders')\n",
         "lib/util.py": "def total(items):\n    return sum(items)\n",
