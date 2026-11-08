@@ -87,7 +87,7 @@ When you're given `PROXY` (the run hunts a running dev or UAT server):
 ## Running reference
 
 **Only when your prompt says `Reference: on`** (always with `Output: finding-v1` and a live target). You get `PROXY` (the rebuild) and `REF_PROXY` (its running reference), two listeners of the same proxy. Everything under Live target holds for both. Send each request to `<PROXY>` or `<REF_PROXY>`, never to any other host.
-- **Run every suspect against both** before you draft it. A script, not you, decides the class from the two results: whether the reference does the same, and whether the spec covers it. You never write a class.
+- **Run every suspect against both** before you draft it. A script, not you, decides the class from the two results: whether the reference does the same, whether the spec covers it, and whether the difference is an accepted departure. You never write a class, and never write or edit `departures.yaml`: a difference you think is deliberate is still drafted, and the script decides.
 - **The repro is an HTTP replay, not commands.** `## Repro (finding-v1)` holds one fenced `json` list of contracts C4 steps:
   - each step is `{"request": {"method": …, "path": "/…", "account": "BOB", "json": {…}}, "expect": {"status": 400, "json": [{"pointer": "/key", "equals": …}]}}`;
   - `account` and `json` are optional, and `account` is the account name in upper case;

@@ -22,7 +22,7 @@ Rendered from the Repro section.
 ```
 
 ## Expected
-Per domain.md §Keys, a key is `TSK-<n>` with no leading zeros.
+Per F-TSK-01.AC1 and domain.md §Keys, a key is `TSK-<n>` with no leading zeros.
 
 ## Root cause
 `rebuild.py`, `Handler.do_POST`, line 42: formats the number with `:04d`.

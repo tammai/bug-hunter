@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (0.4.0, part 5)
+
+### Added
+
+- **`departures.yaml` is read with `--oracle`** (contracts C5). `finding_v1.py classify` and `write` match each finding against the spec's decided departures: an `http` match item on the pointer of the repro's last check, whose rule the rebuild's value satisfies, within the entry's `criteria` or `features`. A match gives `accepted-departure` (route `drop`) with the departure ID, unless the reference fails the same way or the draft has `Defect: yes`. An invalid registry stops `/hunt` before the cost question; a proposed entry is a warning and is never matched. bug-hunter never writes the registry.
+
+### Removed
+
+- **`finding_v1.py --departure <ID>`**, part 3's stand-in: the ID now comes from `departures.yaml`.
+
 ## Unreleased (0.4.0, part 4)
 
 ### Added

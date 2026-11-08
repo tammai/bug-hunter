@@ -30,7 +30,7 @@ OBSERVED = "## Observed (finding-v1)"
 PLAYWRIGHT_FILE = "bh-repro.spec.ts"
 PLAYWRIGHT_END = "BH_TEST_END"
 DEFECT = re.compile(r"^Defect:[ \t]*yes[ \t]*$", re.M | re.I)
-DEPARTURE_ID = re.compile(r"D-[0-9]{3,12}")  # C5's D-<3+ digits>, bounded
+REGISTRY = "departures.yaml"
 LABEL = "repro"
 MAX_MESSAGE = 500
 SIDES = ("rebuild", "reference")
@@ -367,16 +367,19 @@ def classify(rebuild: dict, reference: dict, *, covered: bool, defect: bool,
     if rebuild["result"] != "fail":
         # A refused or unreachable rebuild says nothing about the bug: the run's to retry.
         return _verdict("environment")
-    if reference["result"] not in ("pass", "fail"):
-        return _verdict(alone)
     # Same wrong: the same failing step with the same message. A generated value (an ID, a
     # time) in the message makes two equal defects differ and land on build-defect, the safe
-    # side: a person looks at every build defect.
+    # side: a person looks at every build defect, unless a decided departure accepts the
+    # rebuild's value.
     same = reference["result"] == "fail" and \
         (reference["step"], reference["message"]) == (rebuild["step"], rebuild["message"])
+    if departure and not same and not defect:
+        # Row 4's reference column is "—": a reference that didn't run doesn't undo a match.
+        # A verified bug-bar defect is never dropped, whatever difference it also shows.
+        return {**_verdict("accepted-departure"), "departure": departure}
+    if reference["result"] not in ("pass", "fail"):
+        return _verdict(alone)
     if not same:
-        if departure:
-            return {**_verdict("accepted-departure"), "departure": departure}
         return _verdict("build-defect")
     if covered and defect:
         # Proposed only: a person decides what goes into departures.yaml.
@@ -393,16 +396,103 @@ def _observed_text(result: dict) -> str:
     return {"pass": "as expected"}.get(result["result"], result.get("message", result["result"]))
 
 
-def with_reference(record: dict, text: str, oracle: Path | None, results: tuple[dict, dict],
-                   departure: str | None = None) -> dict:
+def load_departures(spec: Path) -> list[dict]:
+    """The spec's departures registry (C5), checked; none when the spec has no file."""
+    from oracle import _linked
+
+    path = spec / REGISTRY
+    # Never through a link: a spec inside the hunted repo could point one outside it.
+    if os.path.lexists(path) and _linked(spec, path):
+        raise BadDraft(f"{REGISTRY} is a link; give the spec's own file")
+    if not path.is_file():
+        return []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise BadDraft(f"{REGISTRY} can't be read ({type(exc).__name__})") from None
+    try:
+        data = contracts.parse_yaml(text)
+    except ValueError as exc:  # YamlError
+        raise BadDraft(f"{REGISTRY}: {exc}") from None
+    errors = [m for s, m in contracts.check_departures(data) if s == "error"]
+    if errors:
+        raise BadDraft(f"{REGISTRY}: {errors[0]}")
+    return data
+
+
+def _failed_value(message: str, step: int, check: dict):
+    """The rebuild's value at the check's pointer, if contracts' message is that check's failure."""
+    # contracts writes `step N <ptr>: got <json>, expected <json>` or
+    # `step N <ptr>: <json> does not satisfy rule <rule>`. A message cut by _bounded doesn't parse.
+    rest = message.removeprefix(f"step {step} {check.get('pointer')}: ")
+    if rest == message:
+        raise KeyError(message)
+    got = rest.startswith("got ")
+    if ("equals" if got else "rule") not in check:
+        raise KeyError(message)
+    rest = rest.removeprefix("got ")
+    try:
+        value, end = json.JSONDecoder().raw_decode(rest)
+    except ValueError:
+        raise KeyError(message) from None
+    tail = (f", expected {json.dumps(check.get('equals'))}" if got
+            else f" does not satisfy rule {check.get('rule')}")
+    if rest[end:] != tail:
+        raise KeyError(message)
+    return value
+
+
+def _in_scope(entry: dict, criterion: str | None) -> bool:
+    """C5 scope: the entry's criteria when it lists any, else its features, else everything."""
+    if entry.get("criteria"):
+        return criterion in entry["criteria"]
+    if entry.get("features"):
+        feature = criterion.split(".AC", 1)[0] if criterion and "." in criterion else None
+        return feature in entry["features"]
+    return True
+
+
+def matching_departure(departures: list[dict], steps, rebuild: dict,
+                       criterion: str | None = None) -> str | None:
+    """The first accepted, in-scope departure whose HTTP match holds for the failing check."""
+    if not isinstance(steps, list) or not is_http(steps) or rebuild.get("result") != "fail":
+        return None
+    n = rebuild["step"]
+    # The failing check must be the repro's last: a check or step after it never ran, and
+    # dropping the finding would hide whatever it would have shown.
+    if n != len(steps):
+        return None
+    checks = steps[n - 1]["expect"].get("json") or []
+    # An earlier check on the same pointer could have written the same message.
+    if not checks or any(c.get("pointer") == checks[-1]["pointer"] for c in checks[:-1]):
+        return None
+    try:
+        value = _failed_value(rebuild["message"], n, checks[-1])
+    except KeyError:
+        return None
+    for entry in departures:
+        # C5: a proposed entry blocks its gate until a person decides it; it never matches.
+        if entry.get("status") == "proposed" or not _in_scope(entry, criterion):
+            continue
+        for item in entry.get("match") or []:
+            if (item.get("runner") == "http" and item.get("pointer") == checks[-1]["pointer"]
+                    and contracts._rule_ok(str(item["rule"]), value, {})):
+                return entry["id"]
+    return None
+
+
+def with_reference(record: dict, text: str, oracle: Path | None,
+                   results: tuple[dict, dict]) -> dict:
     """The record classified from its replay results against the rebuild and the reference."""
     from oracle import is_spec_gap
 
     if record["repro"]["runner"] not in ("http", "playwright"):
         raise BadDraft("--rebuild and --reference need an HTTP repro (a list of C4 steps) or "
                        "a playwright one")
-    if departure is not None and not DEPARTURE_ID.fullmatch(departure):
-        raise BadDraft("--departure must be a departure ID like D-004")
+    departure = None
+    if oracle is not None:
+        departure = matching_departure(load_departures(oracle), record["repro"].get("steps"),
+                                       results[0], record["criterion"])
     header = text.split("\n## ", 1)[0]
     verdict = classify(*results, covered=oracle is not None and not is_spec_gap(text),
                        defect=bool(DEFECT.search(header)), departure=departure,
@@ -426,17 +516,15 @@ def load_result(path: Path, flag: str) -> dict:
 
 
 def classified(text: str, oracle: Path | None = None,
-               results: tuple[dict, dict] | None = None, departure: str | None = None) -> dict:
+               results: tuple[dict, dict] | None = None) -> dict:
     """The draft's finding, classified by the spec and, given both results, the reference."""
     record = finding(text)
     if oracle is not None:
         record = classify_by_oracle(record, text, oracle)
     if results is not None:
-        return with_reference(record, text, oracle, results, departure)
+        return with_reference(record, text, oracle, results)
     if record["repro"]["runner"] == "http":
         raise BadDraft("an HTTP repro is written with --rebuild and --reference results")
-    if departure is not None:
-        raise BadDraft("--departure needs --rebuild and --reference results")
     return record
 
 
@@ -451,13 +539,13 @@ def _next_number(out: Path) -> int:
 
 
 def write(repo: str, out: Path, draft: Path, oracle: Path | None = None,
-          results: tuple[dict, dict] | None = None, departure: str | None = None,
+          results: tuple[dict, dict] | None = None,
           targets: tuple[tuple[dict, str], ...] = ()) -> Path:
     """`targets`: (target, its variable) whose hosts and logins the finding must not hold."""
     if out.resolve().is_relative_to(Path(repo).resolve()):
         raise BadDraft("--out is inside the repo; findings are written outside it")
     text = draft.read_text(encoding="utf-8")
-    record = classified(text, oracle, results, departure)
+    record = classified(text, oracle, results)
     # The fresh results passed only the proxy's masking; this is the drafts' second check.
     # Only an HTTP repro's observed text comes from the targets; a cli draft's is the
     # hunter's own What happens, which the draft scan below covers.
@@ -503,11 +591,11 @@ def _main(argv: list[str] | None = None) -> int:
     w.add_argument("--ref-target", help="the reference's target name: likewise")
     c = sub.add_parser("classify", help="print the class and route from both replay results")
     c.add_argument("--draft", required=True, type=Path)
-    c.add_argument("--oracle", type=Path, help="the spec folder Expected cites")
+    c.add_argument("--oracle", type=Path,
+                   help="the spec folder Expected cites; its departures.yaml is matched")
     for sp in (w, c):
         sp.add_argument("--rebuild", type=Path, help="replay's output against the rebuild")
         sp.add_argument("--reference", type=Path, help="replay's output against the reference")
-        sp.add_argument("--departure", help="the departure ID the difference matches")
     p = sub.add_parser("replay", help="run a draft's HTTP repro against one base")
     p.add_argument("--draft", required=True, type=Path)
     p.add_argument("--base", required=True, help="a proxy listener: $BASE or $REF_BASE")
@@ -534,8 +622,7 @@ def _main(argv: list[str] | None = None) -> int:
             # ASCII: the target's text must not reach a terminal as control characters.
             print(json.dumps(replay(steps, args.base, os.environ)))
         elif args.command == "classify":
-            record = classified(args.draft.read_text(encoding="utf-8"), args.oracle, results,
-                                args.departure)
+            record = classified(args.draft.read_text(encoding="utf-8"), args.oracle, results)
             print(json.dumps({k: record[k] for k in ("class", "route", "departure",
                                                       "propose_departure") if k in record}))
         else:
@@ -546,8 +633,7 @@ def _main(argv: list[str] | None = None) -> int:
                     (args.target, "BASE"), (args.ref_target, "REF_BASE")) if name)
             except BadTarget as exc:
                 raise BadDraft(str(exc)) from None
-            print(write(args.repo, args.out, args.draft, args.oracle, results,
-                        args.departure, targets))
+            print(write(args.repo, args.out, args.draft, args.oracle, results, targets))
     except BadDraft as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

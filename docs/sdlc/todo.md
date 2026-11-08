@@ -46,7 +46,6 @@
   - the hunter writes its draft through a quoted heredoc (S2-6);
   - `replay` depends on contracts' private `_run_steps`, `_Fail` and their wording, plus a process-global opener (S2-7, R2-10);
   - dedupe the target-independent draft checks (CR-12);
-  - a `--departure` is ignored silently when the reference didn't run (R2-9);
   - render repeats a heading scan and renders twice (R2-12, R2-13).
 
 - [ ] Make the test suite pass on Windows: the 16 Windows-only failures in `.sdlc/baseline.md` (fake `gh` that Windows can run without passing titles through `cmd.exe`, `USERPROFILE` in the drafts and findings fixtures, POSIX-mode asserts, read-only git objects, CRLF and forbidden names in fixtures, symlink privilege), then add a `windows-latest` CI runner — left out of the Windows isolation change on purpose; 2026-11-06-m-windows-isolation (2026-11-06)

@@ -377,11 +377,11 @@ def test_write_takes_class_from_both_results(make_repo, tmp_path):
     # The finding's draft shows the results it was classified from, not the hunter's.
     r1.write_text(json.dumps(OTHER), encoding="utf-8")
     result = run_script("finding_v1", "write", "--repo", repo, "--out", out, "--draft", draft,
-                        "--rebuild", r1, "--reference", r2, "--departure", "D-001")
+                        "--rebuild", r1, "--reference", r2)
     assert result.returncode == 0, result.stderr
     second = json.loads((out / "BH-0002.json").read_text(encoding="utf-8"))
     assert OTHER["message"] in second["draft"] and FAIL["message"] not in second["draft"]
-    assert (second["class"], second["departure"]) == ("accepted-departure", "D-001")
+    assert second["class"] == "build-defect"
     bad = tmp_path / "bad.json"
     bad.write_text("{not json", encoding="utf-8")
     r1.write_text(json.dumps(FAIL), encoding="utf-8")
@@ -389,8 +389,6 @@ def test_write_takes_class_from_both_results(make_repo, tmp_path):
     for extra, names in ((("--rebuild", tmp_path / "missing.json", "--reference", r2),
                           "--rebuild"),
                          (("--rebuild", bad, "--reference", r2), "--rebuild"),
-                         (("--rebuild", r1, "--reference", r2, "--departure", "D-4"),
-                          "--departure"),
                          (("--rebuild", r1, "--reference", r2), "not a finding")):
         result = run_script("finding_v1", "write", "--repo", repo, "--out", out, "--draft",
                             draft, *extra)
@@ -558,6 +556,7 @@ def test_fixture_pair_is_classified(make_repo, tmp_path):
     repo = make_repo({"a.py": ""})
     env, _ = home_env(tmp_path)
     out, spec = tmp_path / "out", PAIR / "spec"
+    registry = (spec / "departures.yaml").read_bytes()
     rebuild, rebuild_url = start_app("rebuild")
     reference, reference_url = start_app("reference")
     classes = {}
@@ -577,24 +576,21 @@ def test_fixture_pair_is_classified(make_repo, tmp_path):
                     path = tmp_path / f"{name}.{side}.json"
                     path.write_text(ran.stdout, encoding="utf-8")
                     results.append(path)
-                for departure in ((), ("--departure", "D-001")):
-                    if departure and name != "departure":
-                        continue
-                    wrote = run_script("finding_v1", "write", "--repo", repo, "--out", out,
-                                       "--draft", draft, "--oracle", spec,
-                                       "--rebuild", results[0], "--reference", results[1],
-                                       *departure)
-                    assert wrote.returncode == 0, (name, wrote.stderr)
-                    finding = json.loads(Path(wrote.stdout.strip()).read_text(encoding="utf-8"))
-                    classes[(name, bool(departure))] = finding["class"]
+                wrote = run_script("finding_v1", "write", "--repo", repo, "--out", out,
+                                   "--draft", draft, "--oracle", spec,
+                                   "--rebuild", results[0], "--reference", results[1])
+                assert wrote.returncode == 0, (name, wrote.stderr)
+                finding = json.loads(Path(wrote.stdout.strip()).read_text(encoding="utf-8"))
+                classes[name] = (finding["class"], finding.get("departure"))
         finally:
             stop(proxy)
     finally:
         stop(rebuild, reference)
     assert classes == {
-        ("spec-gap", False): "spec-gap",
-        ("reference-defect", False): "reference-defect",
-        ("departure", False): "build-defect",
-        ("departure", True): "accepted-departure",
-        ("build-defect", False): "build-defect",
+        "spec-gap": ("spec-gap", None),
+        "reference-defect": ("reference-defect", None),
+        "departure": ("accepted-departure", "D-001"),
+        "build-defect": ("build-defect", None),
     }
+    # Proposed, never written: the registry is the owner's.
+    assert (spec / "departures.yaml").read_bytes() == registry

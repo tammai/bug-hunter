@@ -96,7 +96,8 @@ With `--oracle <spec>` (a folder holding `criteria.lock.json`), bugs are judged 
 With `--target <rebuild> --reference <reference>`, every repro runs against the rebuild and its running reference, and a script classifies each finding from the two results. Check before step 1: `--reference` without `--target`, or without `--format finding-v1 --out <dir>` → say which and stop, having run nothing. **Live target** and **Orchestrated runs** above hold, with these changes:
 
 - **Targets.** `<name>` is a name in `targets.json` or a localhost URL, like `--target`, and must be another origin: a different scheme, host or port. The same origin with a different base path is refused, and `localhost`, `127.0.0.1` and `[::1]` on one port are one origin. Writes follow the same rule as for `--target`: a named reference takes them only when its entry has `"writes": true`, and a localhost URL always takes them, being the owner's own local copy.
-- **Check (before the cost question).** Add `--reference "<name>"` to the `live_proxy.py … --check` call. It prints `target ok:` and `reference ok:` lines, and a `warning:` for each account that only one target has: steps using it can't run on both, so its findings fall back to the spec's class. An `error:` line → show it and stop.
+- **Check (before the cost question).** Add `--reference "<name>"` to the `live_proxy.py … --check` call. It prints `target ok:` and `reference ok:` lines, and a `warning:` for each account that only one target has: steps using it can't run on both, so its findings fall back to the spec's class (or `accepted-departure` when a departure matches). An `error:` line → show it and stop.
+- **Departures (with `--oracle`, before the cost question).** When `<spec>/departures.yaml` exists, run `python3 "$PLUGIN/contracts/v1/contracts.py" departures "<spec>/departures.yaml"`. An `error:` line → show it and stop, having run nothing. Each `blocked:` line (a departure still `status: proposed`) is shown as a warning in the cost question, and the run goes on although the command exits 1 for it: that entry is never matched. `finding_v1.py write --oracle` reads the same file and matches each finding against it (Classify, below). Neither you nor any agent ever writes `departures.yaml`: a departure is only ever proposed, in a finding's `propose_departure`, for a person to decide.
 - **Cost question (step 2).** Show both targets by name (never a URL), whether each allows writes, each one's account names and every `warning:` line. Every repro runs twice, and you replay each verified one yourself (Classify, below), so the request budget is 400 × (hunters + up to 6 per hunter), shared by both targets.
 - **Proxy.** Start it with `--reference "<name>"` added. Wait for both its `listening on <url>` line (`PROXY`) and its `reference listening on <url>` line (`REF_PROXY`). If it has stopped before the verifiers run, or before Classify, restart it the same way. Each listener reaches only its own target.
 - **Agents (steps 3 and 4).** Give each hunter and verifier `PROXY`, `REF_PROXY` and the account names, plus the line `Reference: on` (and `Output: finding-v1`, as above). Never give them a URL, `targets.json` or a token. A verifier never writes the draft through its shell: before dispatching it, `mkdir -p "<scratch>/verifier-<part>-<n>"`, copy the checked draft file to `draft.md` in it, and give the verifier that path along with the text.
@@ -109,6 +110,7 @@ With `--target <rebuild> --reference <reference>`, every repro runs against the 
 
   Then add `--rebuild "$SCRATCH/<part>-<n>.rebuild.json" --reference "$SCRATCH/<part>-<n>.reference.json" --target "<rebuild name>" --ref-target "<reference name>"` to its `finding_v1.py write`, with `--oracle "<spec>"` when given. The two names let it refuse a finding whose results or draft show either target's host or a login. The script sets `class` and `route` from the two results and the spec, and fills `observed.rebuild` and `observed.reference`:
   - `build-defect`, possibly with `propose_departure`, which proposes and never writes `departures.yaml`;
+  - `accepted-departure`, routed to `drop`, with `departure: <ID>`: with `--oracle`, the rebuild failed at the repro's last check, its value there matches an accepted entry of `<spec>/departures.yaml` in the finding's scope (an `http` match item on that check's pointer whose rule the value satisfies; an entry listing `criteria` needs the finding's criterion among them, else one listing `features` needs its feature; the first such entry in the file), the reference ran or not, the reference doesn't fail the same way, and the draft has no `Defect: yes`;
   - `reference-defect`, routed to a person;
   - `spec-gap`, routed to rspec;
   - `environment`, routed to the orchestrator. The rebuild replay didn't run (budget used up, proxy gone, an account variable missing), so the finding is kept for a retry, never dropped;
@@ -119,10 +121,11 @@ With `--target <rebuild> --reference <reference>`, every repro runs against the 
   - a result file is unusable;
   - the finding would show a target's host or a login: echoed by a target past the masking, or in the draft's own text;
   - the draft is wrong: a citation the spec lacks, or a finding that isn't valid finding-v1;
+  - `departures.yaml` is invalid (it changed since the check before step 2): stop classifying and show the line;
   - a flag is wrong: a target name not in `targets.json`, or `--out` inside the repo. Fix the flag and run it again.
 
-  In every case except a wrong flag, list the draft with the message. `--departure` is not passed yet: matching `departures.yaml` comes in a later part.
-- **Report (step 6).** Add Class and Route columns. List the writes the proxy forwarded per target (its log's `target` field) and the budget used by both.
+  In every case except a wrong flag, list the draft with the message.
+- **Report (step 6).** Add Class and Route columns. List each `accepted-departure` finding apart, as dropped, with its departure ID and that entry's `summary` from `departures.yaml`. List the writes the proxy forwarded per target (its log's `target` field) and the budget used by both.
 
 ## Browser mode (`--browser`)
 
