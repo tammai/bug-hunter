@@ -56,6 +56,7 @@ inline, one part
 - 2026-11-09 review round 2 FAIL (S9, H5, H6): user replied 'one more round'
 - 2026-11-09 user replied 'stop' after round-3 fixes; reviews r3 cancelled; branch left uncommitted, unshipped
 - 2026-11-09 Stage 3: pass
+- 2026-11-09 2026-11-09 deployed v0.5.0 to GitHub release: smoke test pass
 
 ## Deviations
 - 2026-11-09 AC-004 narrowed after review: Cargo and Bun keep per-agent caches (CARGO_HOME holds build config; Bun hardlinks on Linux), pnpm/uv set to clone-or-copy, --cache must sit in a marked run folder
