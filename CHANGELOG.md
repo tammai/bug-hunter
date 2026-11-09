@@ -1,12 +1,6 @@
 # Changelog
 
-## 0.4.0-rc.2 — 2026-11-09 (pre-release, not tagged)
-
-### Fixed
-
-- **A reproduced draft was dropped when a login value is a common word.** `drafts.py check` refused any draft that mentioned a login piece of 6 or more characters, so with an account sent as `Authorization: Bearer member`, every draft saying "member" failed with "holds a login value of account member", and a real finding was lost (pre-release smoke S-51). A word-like piece (lowercase or Capitalized letters with up to 3 trailing digits, 6–15 characters) now counts only as a credential: after an auth scheme (`Bearer member`), or after a field or flag whose name holds the account's header or cookie name or a credential word (`access_token`, `--password`, `X-Auth-Token`, `"newPassword":`). The full header value and any secret-looking piece, mixed-case tokens included, still count anywhere. The proxy's response masking is unchanged. [Change record](docs/sdlc/changes/2026-11-09-s-login-word.md).
-
-## 0.4.0-rc.1 — 2026-11-09 (pre-release, not tagged)
+## 0.4.0 — 2026-11-09
 
 bug-hunter for rebuilds: a hunt judged against the spec and a running reference, browser repros, and routable findings ([spec](docs/specs/rebuild-upgrade/04-bug-hunter.md), parts 1–5). Every new behaviour is behind a flag: without `--format finding-v1`, `--oracle`, `--reference`, `--browser`, `--yes`, `--budget` or `--cost-log`, `/hunt` behaves as in 0.3.3. Change records: [part 1](docs/sdlc/changes/2026-11-08-m-finding-v1-budget.md), [part 2](docs/sdlc/changes/2026-11-08-m-oracle-scoping.md), [part 3](docs/sdlc/changes/2026-11-08-m-reference-classify.md), [review follow-ups](docs/sdlc/changes/2026-11-08-m-review-followups.md), [part 4](docs/sdlc/changes/2026-11-08-m-browser-mode.md), [part 5](docs/sdlc/changes/2026-11-08-m-departures.md).
 
@@ -37,7 +31,8 @@ bug-hunter for rebuilds: a hunt judged against the spec and a running reference,
 
 - **`oracle.py scope --live`** keeps only features whose files define HTTP routes, and exits 1 when none do, as `scope.py --live` does.
 - **`oracle.py` reads no spec or repo file through a symlink**, so a hunted repo can't bring a file from outside it into a hunter's brief.
-- **A Python standard-library server is found by `--live`.** A `BaseHTTPRequestHandler` subclass with a `do_GET`/`do_POST`/… method counts as serving HTTP routes, so `/hunt --target` hunts it; a `do_` method on any other class doesn't. Found preparing the rc.1 live run ([change record](docs/sdlc/changes/2026-11-09-s-release-rc1.md)).
+- **A Python standard-library server is found by `--live`.** A `BaseHTTPRequestHandler` subclass with a `do_GET`/`do_POST`/… method counts as serving HTTP routes, so `/hunt --target` hunts it; a `do_` method on any other class doesn't. Found preparing the live run ([change record](docs/sdlc/changes/2026-11-09-s-release-rc1.md)).
+- **A reproduced draft was dropped when a login value is a common word.** `drafts.py check` refused any draft that mentioned a login piece of 6 or more characters, so with an account sent as `Authorization: Bearer member`, every draft saying "member" failed with "holds a login value of account member", and a real finding was lost (found in the 0.4.0-rc.1 smoke test, S-51). A word-like piece (lowercase or Capitalized letters with up to 3 trailing digits, 6–15 characters) now counts only as a credential: after an auth scheme (`Bearer member`), or after a field or flag whose name holds the account's header or cookie name or a credential word (`access_token`, `--password`, `X-Auth-Token`, `"newPassword":`). The full header value and any secret-looking piece, mixed-case tokens included, still count anywhere. The proxy's response masking is unchanged. [Change record](docs/sdlc/changes/2026-11-09-s-login-word.md).
 
 ### Removed
 
@@ -45,11 +40,11 @@ bug-hunter for rebuilds: a hunt judged against the spec and a running reference,
 
 ### Known issues
 
-- **No tag yet, so fetch steps 404.** Stub and browser drafts fetch `stub_server.py` or `browser.py` from `raw.githubusercontent.com/tammai/bug-hunter/v<version>/…`. Until `v0.4.0-rc.1` (or the final `v0.4.0`) is pushed, that step fails for a reader re-running a draft by hand; `repro-verifier` copies the stub from the plugin instead, so verification is unaffected.
 - **Windows:** 17 tests fail on Windows only (`.sdlc/baseline.md`); none is on the `/hunt` or `/audit` command path. Linux CI is the reference. A symlink test skips on Windows accounts that can't create links.
 - **Departure matching** reads the rebuild's value back from the contracts' failure message, so it depends on that wording (with `replay`'s use of contracts' private runner, ticket S2-7); a message cut at 500 characters never matches, and browser, cli and maestro repros are never matched (human-only).
-- **No live `--oracle --reference` run yet.** The rebuild + reference fixture pair is classified correctly in pytest (build defect, reference defect, spec gap, accepted departure), but a live `/hunt --oracle --reference` with real agents was skipped for this pre-release by the owner's decision; the first one will be on the owner's first real rebuild.
+- **No live `--oracle --reference` run yet.** The rebuild + reference fixture pair is classified correctly in pytest (build defect, reference defect, spec gap, accepted departure), but a live `/hunt --oracle --reference` with real agents was skipped for this release by the owner's decision; the first one will be on the owner's first real rebuild.
 - **Browser mode with `--oracle`** isn't applied yet (`oracle.py` has no `--browser`); `/hunt` says so.
+- **Leak check for word-like logins (S-51 tickets, `docs/sdlc/todo.md`):** a word with a second word between field and value is missed (`<input name="password" value="member">`, `{"name":"token","value":"member"}`, `the password is member`); a lowercase-only random token of 6–15 letters counts only in credential context; and rare prose is still refused, the safe side (`Auth: member`, `a bearer member` for a Bearer account).
 - **Review tickets** are listed in each part's change file and in `docs/sdlc/todo.md`: the `oracle.py` citation and scope edge cases, the leak scan's known limits (a protocol-relative `//plainname`, rare address spellings), an allow-list of forwarded headers, and test-suite tidy-ups.
 
 ## 0.3.3 — 2026-11-08
