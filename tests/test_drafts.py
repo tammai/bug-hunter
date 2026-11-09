@@ -224,3 +224,46 @@ def test_live_drafts_hide_host_and_credentials(make_repo, tmp_path):
     plain = tmp_path / "plain.md"
     plain.write_text(LIVE.replace('"$BASE', '"https://uat.acme.test:8443'), encoding="utf-8")
     assert run_script("drafts", "check", plain, env=env).returncode == 0
+
+
+ROLE_WORD_DRAFT = """# A whitespace-only task title is accepted
+
+## What happens
+A member creating a task with the title "   " gets 201; the reference answers 422.
+
+## Steps to reproduce
+Set before running: `BASE` (the dev or UAT URL), `MEMBER_AUTH` (a member's login header).
+```
+$ curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/tasks" -H "$MEMBER_AUTH" \
+    -H 'Content-Type: application/json' -d '{"title": "   "}'
+201
+```
+
+## Expected
+422, as for an empty title: every member's task needs a real title.
+
+## Root cause
+`src/tasks.js`, `createTask`, lines 12–15: the title is no longer trimmed before the check.
+"""
+
+
+def test_login_value_that_is_a_common_word_only_counts_as_a_credential():
+    from drafts import leaks
+
+    target = {"url": "http://127.0.0.1:5000", "accounts": {
+        "member": {"Authorization": "Bearer member"},
+        "admin": {"Authorization": "Bearer 9fK2xQ7vL0pR3sT8"}}}
+    assert leaks(ROLE_WORD_DRAFT, target) == []
+    assert leaks("A basic member gets 201. Author: a member. Bypass: member, Inside: member",
+                 target) == []
+    # The credential itself still leaks: the header, and a secret-looking token on its own.
+    assert leaks(ROLE_WORD_DRAFT.replace('"$MEMBER_AUTH"', '"Authorization: Bearer member"'),
+                 target)
+    assert leaks(ROLE_WORD_DRAFT.replace("422, as", "9fK2xQ7vL0pR3sT8 gets 422, as"), target)
+    # The word alone, as any credential field echoes it.
+    for echoed in ('{"access_token": "member"}', "--token=member", "password: `member`",
+                   "<password>member</password>", '{"newPassword": ["member"]}'):
+        assert leaks(echoed, target), echoed
+    # A short token still counts in its longer encoded forms, as the proxy masks them.
+    assert leaks("got a%2Fb%2Bc back", {"url": target["url"], "accounts": {
+        "guest": {"Authorization": "Bearer a/b+c"}}})

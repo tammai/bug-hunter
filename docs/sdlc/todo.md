@@ -2,6 +2,12 @@
 
 ## Open
 
+- [ ] Leak check for word-like logins, review tickets left after round 2 of 2026-11-09-s-login-word (2026-11-09)
+  - A word after a second word between field and value is missed: `<input name="password" value="member">`, `{"name":"token","value":"member"}`, `the password is member` (round 2, M-2).
+  - A lowercase-only random token of 6–15 letters (`qwxzkvbnmt`) is treated as a word and counts only in credential context (round 2, L-2).
+  - Rare prose still refused, the safe side: `Auth: member`, `a bearer member` for a Bearer account.
+  - `tests/test_departures.py:103` breaks E501 (105 > 100) at c2c5fc0, so `uv run ruff check .` fails; not in `.sdlc/baseline.md`.
+
 - [ ] `oracle.py` (part 2) review tickets, unverified, from a code review of 8dcab0e that was meant for part 3; triaged as tickets by the orchestrator (msg_34addfc88592). The `--live` and symlink findings were fixed in 2026-11-08-m-review-followups. 2026-11-08-m-review-followups (2026-11-08)
   - **Citations:**
     - `rule_citations` misses `` `domain.md` §X `` (backticked file name) and a comma between file and §;

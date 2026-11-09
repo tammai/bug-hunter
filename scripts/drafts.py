@@ -151,7 +151,7 @@ def leaks(text: str, target: dict, variable: str = "BASE", replay: bool = False)
     # An HTTP-replay draft (a reference run) logs in through ACCEPT_ACCOUNT_<NAME>, not curl.
     def login(name: str) -> str:
         return f"ACCEPT_ACCOUNT_{name}" if replay else f'-H "${name}_AUTH"'
-    from live_proxy import LOCAL_HOSTS, _secrets  # live_proxy imports this module
+    from live_proxy import LOCAL_HOSTS  # live_proxy imports this module
 
     found = []
     # Every check runs on every decoded spelling, so no encoding layer hides a value.
@@ -163,13 +163,52 @@ def leaks(text: str, target: dict, variable: str = "BASE", replay: bool = False)
     if any("x-bug-hunter-account" in t.lower() for t in spellings):
         found.append(f"writes the proxy's account header: write {login('<ACCOUNT>')} instead")
     for name, headers in target["accounts"].items():
-        # Every form the proxy masks: as sent, JSON-escaped, percent-encoded, HTML entities and
-        # a Basic login decoded; pieces under 6 characters would match ordinary words.
-        forms = _secrets({"url": target["url"], "accounts": {name: headers}})
-        if any(form in t for form in forms for t in spellings):
+        if any(_holds_login(t, headers, target["url"]) for t in spellings):
             found.append(f"holds a login value of account {name}: "
                          f"write {login(name.upper())} instead")
     return found
+
+
+# A login piece shaped like a word ("member", "admin1"): prose is full of these, so one only
+# counts next to what makes it a credential. Long letter runs are random tokens, not words.
+WORDLIKE = re.compile(r"[A-Z]?[a-z]+\d{0,3}")  # lower or Capitalized: mixed case is random
+WORDLIKE_MAX = 15
+CREDENTIAL_FIELDS = r"password|passwd|pwd|pass|token|secret|api[_-]?key|key|auth"
+# Where a name starts or ends inside an identifier: its edge, `_`/`-`, or a camelCase hump.
+SEGMENT_START = r"(?:(?<![\w-])|(?<=[_-])|(?<=[a-z0-9])(?=[A-Z]))"
+SEGMENT_END = r"(?=[_-]|(?<=[a-z0-9])[A-Z]|[^\w-]|\Z)"
+
+
+def _holds_login(text: str, headers: dict, url: str) -> bool:
+    """Whether `text` holds one of these login headers' values, or a part one could echo."""
+    from live_proxy import _forms, _pieces  # live_proxy imports this module
+
+    # Every form the proxy masks: as sent, JSON-escaped, percent-encoded, HTML entities and a
+    # Basic login decoded; forms under 6 characters would match ordinary words.
+    pieces = _pieces({"url": url, "accounts": {"_": headers}})
+    words = {p for p in pieces if WORDLIKE.fullmatch(p) and 6 <= len(p) <= WORDLIKE_MAX}
+    if any(len(form) >= 6 and form in text for p in pieces - words for form in _forms(p)):
+        return True
+    if not words:
+        return False
+    # A word counts only as a credential: after this account's auth scheme, or after any field
+    # or flag with one of these headers' or cookies' names or a credential word as a whole
+    # segment of its name (access_token, --password, X-Auth-Token, <newPassword>), so prose
+    # ("Author: a member", "Bypass: member") stays clean.
+    names = {h for h in headers} | {c.partition("=")[0].strip()
+                                     for v in headers.values() for c in v.split(";") if "=" in c}
+    context = "|".join([*(re.escape(n) for n in names if n), CREDENTIAL_FIELDS])
+    schemes = {v.split()[0] for v in headers.values() if len(v.split()) > 1}
+    scheme = rf"(?i:{'|'.join(map(re.escape, schemes))})\s++" if schemes else None
+    # One start per identifier and possessive runs: drafts and echoed responses are untrusted,
+    # and a backtracking field match is cubic on a long run like "authauth…".
+    # Then punctuation before the value (`: "`, `>`, `=`, `": ["`), or only spaces after a flag.
+    name = rf"(?<![\w-])(?=[\w-]*?{SEGMENT_START}(?i:{context}){SEGMENT_END})[\w-]++"
+    field = (rf"(?:{name}\s*+[^\w\s]\W*+|(?=-){name}\s++)"
+             rf"{f'(?:{scheme})?' if scheme else ''}")
+    before = f"(?:{field}|\\b{scheme})" if scheme else field
+    word = "|".join(map(re.escape, words))
+    return re.search(rf"{before}(?i:{word})(?![\w-])", text) is not None
 
 
 def _spellings(text: str) -> set[str]:

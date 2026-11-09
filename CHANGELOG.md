@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0-rc.2 — 2026-11-09 (pre-release, not tagged)
+
+### Fixed
+
+- **A reproduced draft was dropped when a login value is a common word.** `drafts.py check` refused any draft that mentioned a login piece of 6 or more characters, so with an account sent as `Authorization: Bearer member`, every draft saying "member" failed with "holds a login value of account member", and a real finding was lost (pre-release smoke S-51). A word-like piece (lowercase or Capitalized letters with up to 3 trailing digits, 6–15 characters) now counts only as a credential: after an auth scheme (`Bearer member`), or after a field or flag whose name holds the account's header or cookie name or a credential word (`access_token`, `--password`, `X-Auth-Token`, `"newPassword":`). The full header value and any secret-looking piece, mixed-case tokens included, still count anywhere. The proxy's response masking is unchanged. [Change record](docs/sdlc/changes/2026-11-09-s-login-word.md).
+
 ## 0.4.0-rc.1 — 2026-11-09 (pre-release, not tagged)
 
 bug-hunter for rebuilds: a hunt judged against the spec and a running reference, browser repros, and routable findings ([spec](docs/specs/rebuild-upgrade/04-bug-hunter.md), parts 1–5). Every new behaviour is behind a flag: without `--format finding-v1`, `--oracle`, `--reference`, `--browser`, `--yes`, `--budget` or `--cost-log`, `/hunt` behaves as in 0.3.3. Change records: [part 1](docs/sdlc/changes/2026-11-08-m-finding-v1-budget.md), [part 2](docs/sdlc/changes/2026-11-08-m-oracle-scoping.md), [part 3](docs/sdlc/changes/2026-11-08-m-reference-classify.md), [review follow-ups](docs/sdlc/changes/2026-11-08-m-review-followups.md), [part 4](docs/sdlc/changes/2026-11-08-m-browser-mode.md), [part 5](docs/sdlc/changes/2026-11-08-m-departures.md).

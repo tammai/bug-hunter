@@ -176,8 +176,8 @@ def _basic_passwords(target: dict) -> list[tuple[str, str]]:
     return found
 
 
-def _secrets(target: dict) -> list[str]:
-    """Every form of every account value, and of the parts a response might echo alone."""
+def _pieces(target: dict) -> set[str]:
+    """Every account value, and the parts a response might echo alone, stripped."""
     pieces = set()
     for headers in target["accounts"].values():
         for value in headers.values():
@@ -185,7 +185,13 @@ def _secrets(target: dict) -> list[str]:
             pieces |= {cookie.partition("=")[2] for cookie in value.split(";")}
     for _, decoded in _basic_passwords(target):
         pieces |= {decoded, decoded.partition(":")[2]}
-    found = set().union(*(_forms(p.strip()) for p in pieces)) if pieces else set()
+    return {p.strip() for p in pieces}
+
+
+def _secrets(target: dict) -> list[str]:
+    """Every form of every account value, and of the parts a response might echo alone."""
+    pieces = _pieces(target)
+    found = set().union(*(_forms(p) for p in pieces)) if pieces else set()
     # Short pieces would mask ordinary words.
     return sorted((v for v in found if len(v) >= 6), key=len, reverse=True)
 
