@@ -98,7 +98,7 @@ def test_every_stack_has_an_edge_input_list_covering_its_traps():
     named = {s["edge_inputs"] for s in stacks}
     files = {p.stem for p in (ROOT / "edge-inputs").glob("*.md")}
     assert named <= files
-    assert files - named == {"generic", "integrations", "live-http"}
+    assert files - named == {"generic", "integrations", "live-http", "web-ui"}
     for name in named:
         assert (ROOT / f"edge-inputs/{name}.md").read_text(encoding="utf-8").strip(), name
     for name, traps in TRAPS.items():

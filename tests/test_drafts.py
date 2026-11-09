@@ -136,6 +136,38 @@ def test_check_rejects_empty_title_and_ignores_headings_in_output(tmp_path):
     assert result.returncode == 0, result.stdout
 
 
+def test_check_reads_fences_as_commonmark_does(tmp_path):
+    # A Python 3.11+ traceback in the pasted output: its indented `~~~~^^^^` caret line used to
+    # toggle the fence, hiding Expected and Root cause (python-markdown2, B0 run 1).
+    traceback = ("Traceback (most recent call last):\n"
+                 "    sys.exit(main(sys.argv))\n"
+                 "             ~~~~^^^^^^^^^^\n"
+                 "~~~ not a closer for a backtick fence\n"
+                 "AttributeError: 'NoneType' object has no attribute 'encode'\n")
+    path = tmp_path / "01.md"
+    path.write_text(GOOD.replace("B10\n```", "B10\n" + traceback + "```"), encoding="utf-8")
+    result = run_script("drafts", "check", path)
+    assert result.returncode == 0, result.stdout
+
+
+def test_check_rejects_the_owners_home_path(tmp_path):
+    # python-markdown2, B0 run 7: a traceback in the output named C:\Users\<name>\AppData\...,
+    # putting the owner's user name in a draft meant for a public issue.
+    home = tmp_path / "Users" / "alice"
+    home.mkdir(parents=True)
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+    path = tmp_path / "01.md"
+    posix = home.as_posix()
+    git_bash = "/" + posix[0].lower() + posix[2:] if posix[1:2] == ":" else posix
+    for leak in (str(home) + os.sep + "tmp" + os.sep + "lib.py", git_bash.upper() + "/tmp/x"):
+        path.write_text(GOOD.replace("B10\n```", f"B10\n  File \"{leak}\"\n```"),
+                        encoding="utf-8")
+        result = run_script("drafts", "check", path, env=env)
+        assert result.returncode == 1 and "home folder" in result.stdout, (leak, result.stdout)
+    path.write_text(GOOD, encoding="utf-8")
+    assert run_script("drafts", "check", path, env=env).returncode == 0
+
+
 LIVE = """# Order total accepts a negative quantity
 
 Set before running: `BASE` (the dev or UAT URL), `ALICE_AUTH` (a normal user's login header).
@@ -192,3 +224,46 @@ def test_live_drafts_hide_host_and_credentials(make_repo, tmp_path):
     plain = tmp_path / "plain.md"
     plain.write_text(LIVE.replace('"$BASE', '"https://uat.acme.test:8443'), encoding="utf-8")
     assert run_script("drafts", "check", plain, env=env).returncode == 0
+
+
+ROLE_WORD_DRAFT = """# A whitespace-only task title is accepted
+
+## What happens
+A member creating a task with the title "   " gets 201; the reference answers 422.
+
+## Steps to reproduce
+Set before running: `BASE` (the dev or UAT URL), `MEMBER_AUTH` (a member's login header).
+```
+$ curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/tasks" -H "$MEMBER_AUTH" \
+    -H 'Content-Type: application/json' -d '{"title": "   "}'
+201
+```
+
+## Expected
+422, as for an empty title: every member's task needs a real title.
+
+## Root cause
+`src/tasks.js`, `createTask`, lines 12–15: the title is no longer trimmed before the check.
+"""
+
+
+def test_login_value_that_is_a_common_word_only_counts_as_a_credential():
+    from drafts import leaks
+
+    target = {"url": "http://127.0.0.1:5000", "accounts": {
+        "member": {"Authorization": "Bearer member"},
+        "admin": {"Authorization": "Bearer 9fK2xQ7vL0pR3sT8"}}}
+    assert leaks(ROLE_WORD_DRAFT, target) == []
+    assert leaks("A basic member gets 201. Author: a member. Bypass: member, Inside: member. "
+                 "`MEMBER_AUTH` (member's login header)", target) == []
+    # The credential itself still leaks: the header, and a secret-looking token on its own.
+    assert leaks(ROLE_WORD_DRAFT.replace('"$MEMBER_AUTH"', '"Authorization: Bearer member"'),
+                 target)
+    assert leaks(ROLE_WORD_DRAFT.replace("422, as", "9fK2xQ7vL0pR3sT8 gets 422, as"), target)
+    # The word alone, as any credential field echoes it.
+    for echoed in ('{"access_token": "member"}', "--token=member", "password: `member`",
+                   "<password>member</password>", '{"newPassword": ["member"]}'):
+        assert leaks(echoed, target), echoed
+    # A short token still counts in its longer encoded forms, as the proxy masks them.
+    assert leaks("got a%2Fb%2Bc back", {"url": target["url"], "accounts": {
+        "guest": {"Authorization": "Bearer a/b+c"}}})

@@ -39,7 +39,7 @@ Then ask: "Start the audit?" Wait for the owner's yes. Anything else → stop, h
 
 ## 3. Scripted checks
 
-1. `RUN=$(python3 "$PLUGIN/scripts/scratch.py" new)`: a private run folder in the temp folder, outside the repo, with a `cache/` every agent shares for downloads. A non-zero exit → show its message and stop. From here on, if you stop for any reason (an error, the owner cancelling), run `python3 "$PLUGIN/scripts/scratch.py" clean "$RUN"` first and show what it printed: the run will hold the fingerprints and copies of the repo. Make one clone with `python3 "$PLUGIN/scripts/throwaway.py" "$REPO" "$RUN/base"`, which every agent copies cheaply, and the command's own copy with `python3 "$PLUGIN/scripts/throwaway.py" "$REPO" "$RUN/copy" --base "$RUN/base"`. Run every command in this section behind `ISO="$(python3 -I "$PLUGIN/scripts/isolate.py" "$RUN/cmd" --cache "$RUN/cache")" && eval "$ISO" || exit 1;`.
+1. `RUN=$(python3 "$PLUGIN/scripts/scratch.py" new)`: a private run folder in the temp folder, outside the repo, with a `cache/` every agent shares for downloads. A non-zero exit → show its message and stop. From here on, if you stop for any reason (an error, the owner cancelling), run `python3 "$PLUGIN/scripts/reap.py" "$RUN"` and then `python3 "$PLUGIN/scripts/scratch.py" clean "$RUN"` first and show what it printed: the run will hold the fingerprints and copies of the repo. Make one clone with `python3 "$PLUGIN/scripts/throwaway.py" "$REPO" "$RUN/base"`, which every agent copies cheaply, and the command's own copy with `python3 "$PLUGIN/scripts/throwaway.py" "$REPO" "$RUN/copy" --base "$RUN/base"`. Run every command in this section behind `ISO="$(python3 -I "$PLUGIN/scripts/isolate.py" "$RUN/cmd" --cache "$RUN/cache")" && eval "$ISO" || exit 1;`.
 2. **Secrets:** run `python3 "$PLUGIN/scripts/secrets_scan.py" "$REPO" --fingerprints "$RUN/fingerprints.json" > "$RUN/secrets.json"`. The fingerprints are hashes of every secret it found and of slices of them. They are still sensitive (short slices can be guessed from their hashes), so they stay in `$RUN` (private, 0700) with mode 0600 and are deleted with it; every `findings.py check`, `inventory` and `report` call below gets `--fingerprints "$RUN/fingerprints.json"`, so no finding or report line can carry a secret the scan saw, even partly. It reads the repo itself, not the copy, because the copy lacks local `.env` files; it only reads, never runs anything. Then run `python3 "$PLUGIN/scripts/findings.py" from-secrets-scan "$RUN/secrets.json" "$RUN/found"`. Never print the scan's input files.
 3. **Dependencies:** for each `audits` entry, run its `step` from `$RUN/copy` with its output redirected to `$RUN/audit-<n>.json`.
    - The exit code isn't the signal: npm and composer exit non-zero when they find advisories.
@@ -64,7 +64,7 @@ From each reply:
 
 ## 5. Screen, then verify
 
-1. Run `python3 "$PLUGIN/scripts/findings.py" check <file> --fingerprints "$RUN/fingerprints.json"` on every agent finding in `$RUN/agent` before any verifier sees it. A failing finding is dropped and recorded by its **file name and the problems `check` printed**, never by its title or text: a finding that fails for a secret must not carry that secret anywhere.
+1. Run `python3 "$PLUGIN/scripts/findings.py" check <file> --fingerprints "$RUN/fingerprints.json" --repo "$REPO"` on every agent finding in `$RUN/agent` before any verifier sees it. A failing finding is dropped and recorded by its **file name and the problems `check` printed**, never by its title or text: a finding that fails for a secret must not carry that secret anywhere.
 2. Dispatch one agent per remaining agent finding, all at once, with `subagent_type: bug-hunter:finding-verifier`. Its prompt:
    - the finding's text, inside a fenced block longer than any fence in it;
    - `REPO`, `PLUGIN`, `RUN=<run>` and `SCRATCH=<run>/verifier-<id>-<n>`;
@@ -76,7 +76,7 @@ From each reply:
 ## 6. Write
 
 1. Move the confirmed agent findings into `$RUN/found`, next to the scripted ones.
-2. Run `python3 "$PLUGIN/scripts/findings.py" dedupe "$RUN/found" "$AUDIT"`. It drops findings already in `$AUDIT` from earlier runs, and repeats within this run, keeping the more severe. Its key is category, CWE and the root-cause Where line: the one marked "(fix here)", else the last.
+2. Run `python3 "$PLUGIN/scripts/findings.py" dedupe "$RUN/found" "$AUDIT" --repo "$REPO"`. It drops findings already in `$AUDIT` from earlier runs, and repeats within this run, keeping the more severe. Its key is category, CWE and the root-cause Where line: the one marked "(fix here)", else the last.
 3. For each remaining finding, in order of severity: `NN=$(python3 "$PLUGIN/scripts/findings.py" next "$AUDIT")`, then copy it to `$AUDIT/$NN.md` with mode 0600. Never rewrite a finding's evidence.
 4. Run `python3 "$PLUGIN/scripts/findings.py" inventory "$RUN/inventory.txt" "$AUDIT" --fingerprints "$RUN/fingerprints.json"`. It merges into the inventory from earlier runs.
 5. Write `$RUN/meta.json`:
@@ -85,7 +85,7 @@ From each reply:
    - `not_audited`: stacks without a dependency audit, and failed audits with their reason;
    - `dropped`: a `title` and `reason` for each finding that wasn't confirmed, and `{"title": "<file name>", "reason": "failed check: <problems>"}` for each that failed `check`.
 6. Run `python3 "$PLUGIN/scripts/findings.py" report "$AUDIT" --meta "$RUN/meta.json" --fingerprints "$RUN/fingerprints.json"`.
-7. Tell the owner you're cleaning up the run, then run `python3 "$PLUGIN/scripts/scratch.py" clean "$RUN"`, which removes the fingerprints too. Show its two lines: the run's size, and the space freed.
+7. Tell the owner you're cleaning up the run, then run `python3 "$PLUGIN/scripts/reap.py" "$RUN"` (it stops the background processes agents listed) and `python3 "$PLUGIN/scripts/scratch.py" clean "$RUN"`, which removes the fingerprints too. Show its two lines: the run's size, and the space freed.
 
 ## 7. Report
 

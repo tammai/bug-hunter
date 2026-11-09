@@ -1,0 +1,8 @@
+- id: D-001
+  kind: simplification
+  criteria: [F-TSK-01.AC1]
+  features: [F-TSK-01]
+  summary: The rebuild pads task keys to four digits; the reference does not.
+  match:
+    - {runner: http, pointer: /key, rule: "regex:^TSK-\\d{4}$"}
+  decided_by: "Tam Mai, fixture for bug-hunter part 5"

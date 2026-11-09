@@ -23,6 +23,7 @@ Every row passes on Linux CI and fails only on Windows, because of how the test 
 | (root) | tests/test_drafts.py › test_dir_is_outside_target_named_after_origin | Windows only: the test moves `HOME`, but `Path.home()` reads `USERPROFILE` on Windows. | 2026-11-06 |
 | (root) | tests/test_findings.py › test_audit_folder_and_numbering | Windows only: `HOME` vs `USERPROFILE`, as above. | 2026-11-06 |
 | (root) | tests/test_drafts.py › test_dir_names_never_collide_or_escape | Windows only: `shutil.rmtree` can't delete git's read-only object files on Windows. | 2026-11-06 |
+| (root) | tests/test_scope.py › test_live_keeps_only_parts_serving_http | Windows only: `shutil.rmtree` PermissionError on git's read-only object files, as above; fails on `main` too. Added with the owner's OK in docs/sdlc/changes/2026-11-08-m-b0-live-validation.md. | 2026-11-08 |
 | (root) | tests/test_findings.py › test_script_outputs_become_findings | Windows only: asserts POSIX mode `0o600`; Windows reports `0o666`. | 2026-11-06 |
 | (root) | tests/test_findings.py › test_report_and_inventory | Windows only: POSIX mode, as above. | 2026-11-06 |
 | (root) | tests/test_findings.py › test_known_secrets_are_withheld_and_code_is_not | Windows only: POSIX mode, as above. | 2026-11-06 |

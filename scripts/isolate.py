@@ -415,6 +415,19 @@ def _carry_versions(env: dict[str, str], real: Path, scratch: Path) -> None:
         ))
 
 
+def _browsers_dir(view: dict[str, str], real: Path) -> Path:
+    """Playwright's browsers folder before isolation, as browser.py finds it."""
+    # A copy of browser.browsers_dir: this script runs with -I, so it imports no neighbour.
+    chosen = view.get("PLAYWRIGHT_BROWSERS_PATH")
+    if chosen and chosen != "0":
+        return Path(chosen)
+    if WINDOWS:
+        return Path(view.get("LOCALAPPDATA") or real / "AppData" / "Local") / "ms-playwright"
+    if sys.platform == "darwin":
+        return real / "Library" / "Caches" / "ms-playwright"
+    return Path(view.get("XDG_CACHE_HOME") or real / ".cache") / "ms-playwright"
+
+
 def _environ() -> dict[str, str]:
     if WINDOWS:
         # os.environ uppercases every name on Windows; bash, which evals the output, doesn't.
@@ -430,6 +443,8 @@ def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("scratch")
     parser.add_argument("--cache", help="the run's download cache, shared by its agents")
+    parser.add_argument("--browser", action="store_true",
+                        help="keep Playwright's installed browsers readable; downloads fail")
     args = parser.parse_args(argv)
     scratch = Path(args.scratch).resolve()
     if any(ch.isspace() for ch in str(scratch)):
@@ -487,9 +502,26 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"error: can't prepare {scratch / 'home'}: {exc}", file=sys.stderr)
         return 1
     unset, exports = _plan(scratch, env, cache)
+    if args.browser:
+        # The owner's installed browsers, used where they are: HOME and LOCALAPPDATA move
+        # into the scratch folder, where Playwright would find none. The skip variable only
+        # covers install hooks; an explicit `playwright install` reads the download host,
+        # which is pointed at a closed port so it fails rather than writing to the folder.
+        exports["PLAYWRIGHT_BROWSERS_PATH"] = str(_browsers_dir(view, real))
+        exports["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] = "1"
+        exports["PLAYWRIGHT_DOWNLOAD_HOST"] = "http://127.0.0.1:9"
+    # Servers outlive the call that starts them; listing them on exit lets reap.py stop them.
+    record = shlex.join([Path(sys.executable).as_posix(), "-I",
+                         Path(__file__).with_name("reap.py").as_posix(), scratch.as_posix(),
+                         "--record"])
+    listing = f'j=$(jobs -p); [ -z "$j" ] || {record} $j > /dev/null 2>&1'
+    # Agents start in the target repo; a cd chained into a backgrounded `&&` list never
+    # reaches their own shell, so a relative write would land in the repo.
+    home_dir = " || ".join(f"cd {shlex.quote(p.as_posix())}"
+                           for p in (scratch / "copy", scratch))
     print("unset " + " ".join(unset) + "; export " + " ".join(
         f"{key}={shlex.quote(value)}" for key, value in exports.items()
-    ) + ";")
+    ) + f"; trap {shlex.quote(listing)} EXIT; {{ {home_dir}; }} 2> /dev/null;")
     return 0
 
 

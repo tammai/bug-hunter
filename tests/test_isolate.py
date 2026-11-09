@@ -7,7 +7,7 @@ from pathlib import Path
 
 import isolate
 import pytest
-from conftest import SCRIPTS, run_script
+from conftest import SCRIPTS, git, run_script
 
 WINDOWS = os.name == "nt"
 windows_only = pytest.mark.skipif(not WINDOWS, reason="Windows-only behaviour")
@@ -70,6 +70,64 @@ def symlink_or_skip(target: Path, link: Path) -> None:
         if WINDOWS and getattr(exc, "winerror", None) == 1314:
             pytest.skip("creating a symlink on Windows needs Developer Mode or admin")
         raise
+
+
+def test_background_jobs_are_listed_so_reap_stops_them(tmp_path):
+    # json-server, B0 run 10: a hunter left two servers running without listing them, which
+    # blocked a verifier's port. The isolation prefix every agent call starts with lists them.
+    scratch = tmp_path / "hunter-1"
+    command = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch)])
+    script = f'eval "$({command})"; sleep 300 > /dev/null 2>&1 & echo $!'
+    pid = subprocess.run([BASH, "-c", script], capture_output=True, text=True,
+                         check=True).stdout.strip()
+    assert pid in (scratch / "bg.pids").read_text(encoding="utf-8").split()
+
+    assert run_script("reap", tmp_path).returncode == 0
+    gone = subprocess.run([BASH, "-c", f"kill -0 {pid}"], capture_output=True).returncode
+    assert gone != 0
+
+
+def test_relative_writes_land_in_the_copy_never_the_repo(tmp_path):
+    # json-server, B0 run 13: `cd copy && … & echo $! > srv.pid` put the cd in the background
+    # job, so srv.pid was written to the shell's starting folder, the target repo.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    scratch = tmp_path / "verifier-1-1"
+    command = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch)])
+    write = 'eval "$({command})"; echo x > stray.txt'
+    subprocess.run([BASH, "-c", write.format(command=command)], cwd=repo, check=True)
+    assert not (repo / "stray.txt").exists() and (scratch / "stray.txt").exists()
+
+    (scratch / "copy").mkdir()
+    subprocess.run([BASH, "-c", write.format(command=command)], cwd=repo, check=True)
+    assert not (repo / "stray.txt").exists() and (scratch / "copy" / "stray.txt").exists()
+
+
+def test_a_hunter_can_replace_its_copy_after_the_prefix(tmp_path):
+    # The prefix starts each call inside <scratch>/copy, so the hunter's fresh-copy step
+    # deletes the folder its own shell sits in; that must still work and rebuild the copy.
+    # An ASCII repo path: argv passed through `bash -c` on Windows loses non-ASCII names.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+    git(repo, "init", "-q")
+    git(repo, "add", "-A")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    scratch = tmp_path / "hunter-1"
+    prefix = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch)])
+    throwaway = shlex.join([sys.executable, str(SCRIPTS / "throwaway.py"), str(repo),
+                            (scratch / "copy").as_posix()])
+    subprocess.run([BASH, "-c", f'eval "$({prefix})"; {throwaway}'], check=True,
+                   capture_output=True)
+    (scratch / "copy" / "left-behind").write_text("x", encoding="utf-8")
+
+    step = (f'rm -rf '
+            f'{shlex.quote((scratch / "copy").as_posix())}; {throwaway}')
+    result = subprocess.run([BASH, "-c", f'eval "$({prefix})"; {step}'],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert (scratch / "copy" / "a.py").exists()
+    assert not (scratch / "copy" / "left-behind").exists()
 
 
 def test_home_caches_and_credentials_move_into_scratch(tmp_path):
