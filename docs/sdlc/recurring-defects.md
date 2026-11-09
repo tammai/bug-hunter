@@ -28,3 +28,6 @@ One line per defect: what it looks like, then the severity.
 - A read-only guard that checks only the request method, so `X-HTTP-Method-Override` or `_method` turns an allowed GET into a write: high
 - A shell step that sets a variable as a command prefix (`BASE=x curl "$BASE"`), which the same command's own expansion never sees, or that a later setup step unsets (`isolate.py` drops `*AUTH*`): high
 - Masking that matches secrets case-insensitively or bare host names inside words, so ordinary response text is mangled and hunters report the proxy's damage as the target's bug: medium
+- A recursive delete or chmod that checks a path is a folder and acts on the path later (or retries a failed step by full path from an error hook), so code still running in the folder can swap a link in and the walk leaves it; open each folder with `O_NOFOLLOW` relative to its parent's handle and do every step through that handle: high
+- Cleanup that stops at the first entry it can't remove, or deletes its marker before the rest, so a secret file survives or a later sweep can't find the leftover folder: high
+- A test written for a guard that passes with the guard removed (the swap lands before the check, or an earlier error skips the code under test): medium
