@@ -254,8 +254,8 @@ def test_login_value_that_is_a_common_word_only_counts_as_a_credential():
         "member": {"Authorization": "Bearer member"},
         "admin": {"Authorization": "Bearer 9fK2xQ7vL0pR3sT8"}}}
     assert leaks(ROLE_WORD_DRAFT, target) == []
-    assert leaks("A basic member gets 201. Author: a member. Bypass: member, Inside: member",
-                 target) == []
+    assert leaks("A basic member gets 201. Author: a member. Bypass: member, Inside: member. "
+                 "`MEMBER_AUTH` (member's login header)", target) == []
     # The credential itself still leaks: the header, and a secret-looking token on its own.
     assert leaks(ROLE_WORD_DRAFT.replace('"$MEMBER_AUTH"', '"Authorization: Bearer member"'),
                  target)

@@ -52,6 +52,7 @@
   - R2-H2: `<password>member</password>` and `"password": ["member"]` leaked.
   - The brief says a round-2 high security finding is still fixed and checked. Both were fixed test first (new asserts failed, then passed) and checked by probes. Prose, leak shapes and 80k-character pathological inputs all run in under 25 ms.
   - M-2 and L-2 and the rare remaining prose refusals became tickets in `docs/sdlc/todo.md`.
+- **After round 2, found while checking:** the placeholder the error tells hunters to write, `` `MEMBER_AUTH` (member's login header) ``, tripped the check, because `AUTH` is a credential segment. That is S-51 again. Fixed test first in a follow-up commit: the account's own placeholders (`<NAME>_AUTH`, `ACCEPT_ACCOUNT_<NAME>`) are not credential fields. No reviewer round ran on it.
 - **Tests:** `uv run pytest` gives 231 passed, 17 failed and 6 skipped. The 17 failures are exactly `.sdlc/baseline.md`'s rows, diffed by name. AC-001 failed first (red recorded), then passed.
 - **Lint:** the changed files are clean. `uv run ruff check .` fails only on `tests/test_departures.py:103` E501, which was already there at c2c5fc0; it is filed as a ticket.
 - **Deviations:** the commit is on `2026-11-09-s-release-rc1` by hand, with no push and no `ship.py`, per the brief.

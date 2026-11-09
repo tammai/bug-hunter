@@ -163,7 +163,7 @@ def leaks(text: str, target: dict, variable: str = "BASE", replay: bool = False)
     if any("x-bug-hunter-account" in t.lower() for t in spellings):
         found.append(f"writes the proxy's account header: write {login('<ACCOUNT>')} instead")
     for name, headers in target["accounts"].items():
-        if any(_holds_login(t, headers, target["url"]) for t in spellings):
+        if any(_holds_login(t, name, headers, target["url"]) for t in spellings):
             found.append(f"holds a login value of account {name}: "
                          f"write {login(name.upper())} instead")
     return found
@@ -179,7 +179,7 @@ SEGMENT_START = r"(?:(?<![\w-])|(?<=[_-])|(?<=[a-z0-9])(?=[A-Z]))"
 SEGMENT_END = r"(?=[_-]|(?<=[a-z0-9])[A-Z]|[^\w-]|\Z)"
 
 
-def _holds_login(text: str, headers: dict, url: str) -> bool:
+def _holds_login(text: str, account: str, headers: dict, url: str) -> bool:
     """Whether `text` holds one of these login headers' values, or a part one could echo."""
     from live_proxy import _forms, _pieces  # live_proxy imports this module
 
@@ -203,7 +203,10 @@ def _holds_login(text: str, headers: dict, url: str) -> bool:
     # One start per identifier and possessive runs: drafts and echoed responses are untrusted,
     # and a backtracking field match is cubic on a long run like "authauth…".
     # Then punctuation before the value (`: "`, `>`, `=`, `": ["`), or only spaces after a flag.
-    name = rf"(?<![\w-])(?=[\w-]*?{SEGMENT_START}(?i:{context}){SEGMENT_END})[\w-]++"
+    # The placeholders this check tells drafts to write (MEMBER_AUTH) are not credentials.
+    own = "|".join(re.escape(p) for p in (f"{account}_AUTH", f"ACCEPT_ACCOUNT_{account}"))
+    name = (rf"(?<![\w-])(?!(?i:{own})(?![\w-]))"
+            rf"(?=[\w-]*?{SEGMENT_START}(?i:{context}){SEGMENT_END})[\w-]++")
     field = (rf"(?:{name}\s*+[^\w\s]\W*+|(?=-){name}\s++)"
              rf"{f'(?:{scheme})?' if scheme else ''}")
     before = f"(?:{field}|\\b{scheme})" if scheme else field
