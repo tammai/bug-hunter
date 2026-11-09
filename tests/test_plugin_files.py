@@ -299,3 +299,52 @@ def test_live_steps_export_placeholders_and_keep_the_proxy_up():
     assert hunt.index("--check") < hunt.index("Start N hunters?")
     intro = hunt.split("## Live target")[0]
     assert "--target" in intro
+
+
+def test_hunt_and_audit_manage_their_run_folder():
+    for rel in ("commands/hunt.md", "commands/audit.md"):
+        _, body = read(rel)
+        sweep = body.find('scripts/scratch.py" sweep')
+        assert 0 <= sweep < body.find("## 2. Ask before spending"), rel
+        assert 'RUN=$(python3 "$PLUGIN/scripts/scratch.py" new)' in body, rel
+        assert 'scripts/throwaway.py" "$REPO" "$RUN/base"' in body, rel
+        assert 'scripts/scratch.py" clean "$RUN"' in body, rel
+        assert "freed" in body and "stop for any reason" in body, rel
+        assert "RUN=<run>" in body or "`RUN`" in body, rel
+        for gone in ("SCRATCH=$(mktemp -d)", 'rm -rf "$SCRATCH"', 'rm -rf "$RUN"'):
+            assert gone not in body, f"{rel}: {gone}"
+
+
+def test_hunt_saves_drafts_only_when_the_owner_chooses():
+    _, hunt = read("commands/hunt.md")
+    question = hunt.find("Fix these here, or save them as drafts to post?")
+    assert question > 0
+    assert hunt.find('scripts/drafts.py" next') > question
+    assert 'mkdir -p "$DRAFTS"' not in hunt[:question]
+    for needed in ("Fix here", "Save all", "Save some", "lost", "known list"):
+        assert needed in hunt[question:], needed
+    assert "--keep kept" in hunt
+
+
+def test_agents_copy_from_the_base_share_the_cache_and_clean_up():
+    for rel in ("agents/bug-hunter.md", "agents/repro-verifier.md",
+                "agents/security-auditor.md", "agents/finding-verifier.md"):
+        _, body = read(rel)
+        assert ISOLATE_LINE in body, rel
+        assert ('scripts/throwaway.py" "<REPO>" "<SCRATCH>/copy" --base "<RUN>/base"'
+                in body), rel
+        assert 'rm -rf "<SCRATCH>/copy" "<SCRATCH>/home"' in body, rel
+        assert "(`RUN`)" in body, rel
+
+
+def test_commands_stop_on_a_failed_run_folder_and_keep_the_proxy_in_it():
+    for rel in ("commands/hunt.md", "commands/audit.md"):
+        _, body = read(rel)
+        new = body.index('RUN=$(python3 "$PLUGIN/scripts/scratch.py" new)')
+        assert "non-zero exit" in body[new:new + 400], rel
+    _, hunt = read("commands/hunt.md")
+    assert 'P="$RUN/proxy"' in hunt and "P=$(mktemp -d)" not in hunt
+    assert 'rm -rf "$P"' not in hunt
+    assert "stop the proxy" in hunt[hunt.index("stop for any reason"):][:400]
+    fix = hunt[hunt.index("- **Fix here:**"):][:600]
+    assert "data" in fix and "throwaway copy" in fix

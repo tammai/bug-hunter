@@ -27,7 +27,8 @@ BASH = _bash()
 DUMP_ENV = 'for n in $(compgen -e); do printf "%s=%s\\0" "$n" "${!n}"; done'
 
 ISOLATE_LINE = (
-    'ISO="$(python3 -I "<PLUGIN>/scripts/isolate.py" "<SCRATCH>")" && eval "$ISO" || exit 1;'
+    'ISO="$(python3 -I "<PLUGIN>/scripts/isolate.py" "<SCRATCH>" --cache "<RUN>/cache")"'
+    ' && eval "$ISO" || exit 1;'
 )
 
 
@@ -379,7 +380,8 @@ def test_the_agents_isolation_line_fails_closed(tmp_path):
     spaced = tmp_path / "has space"
     spaced.mkdir()
     marker = tmp_path / "ran"
-    line = ISOLATE_LINE.replace("<PLUGIN>", str(SCRIPTS.parent)).replace("<SCRATCH>", str(spaced))
+    line = (ISOLATE_LINE.replace("<PLUGIN>", str(SCRIPTS.parent))
+            .replace("<SCRATCH>", str(spaced)).replace("<RUN>", str(tmp_path)))
     result = subprocess.run([BASH, "-c", f"{line} touch {shlex.quote(str(marker))}"],
                             capture_output=True)
     assert result.returncode != 0 and not marker.exists()
@@ -651,3 +653,55 @@ def test_undecodable_environment_bytes_dont_break_isolation(tmp_path):
 @pytest.mark.skipif(WINDOWS, reason="Windows Python has no descriptor-relative calls")
 def test_the_descriptor_path_is_on_for_this_posix_python():
     assert isolate.DIR_FD
+
+
+def isolated_env_with_cache(scratch: Path, cache: Path, env: dict) -> dict:
+    command = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch),
+                          "--cache", str(cache)])
+    out = subprocess.run([BASH, "-c", f'eval "$({command})"; {DUMP_ENV}'], env=env,
+                         capture_output=True, check=True).stdout
+    return dict(item.split("=", 1) for item in out.decode().split("\0") if "=" in item)
+
+
+def test_download_caches_are_shared_through_the_run_cache(tmp_path):
+    run = tmp_path / "bug-hunter-run"
+    scratch, cache = run / "hunter-1", run / "cache"
+    scratch.mkdir(parents=True)
+    (run / ".bug-hunter-run").write_text('{"created": 0}', encoding="utf-8")
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "real home")}
+    plain = isolated_env(scratch, env)
+    got = isolated_env_with_cache(scratch, cache, env)
+    home = scratch / "home"
+    shared = ["npm_config_cache", "npm_config_store_dir", "YARN_CACHE_FOLDER",
+              "YARN_GLOBAL_FOLDER", "UV_CACHE_DIR", "PIP_CACHE_DIR", "POETRY_CACHE_DIR",
+              "COMPOSER_CACHE_DIR", "GOMODCACHE", "GOCACHE", "BUNDLE_USER_CACHE"]
+    for key in shared:
+        assert got[key].startswith(str(cache) + os.sep), key
+    assert len({got[key] for key in shared}) == len(shared)
+    assert cache.is_dir()
+    assert got["HOME"] == str(home)
+    # Not download caches: Cargo's home holds config the build obeys, and Bun links installs.
+    for key in ("XDG_CACHE_HOME", "GRADLE_USER_HOME", "CARGO_HOME"):
+        assert got[key].startswith(str(home)), key
+    assert "BUN_INSTALL_CACHE_DIR" not in got
+    assert got["JAVA_TOOL_OPTIONS"] == f"-Duser.home={home}"
+    # Installed files are copied or cloned out of the cache, never hardlinked to it.
+    assert got["UV_LINK_MODE"] in ("clone", "copy")
+    assert got["npm_config_package_import_method"] == "clone-or-copy"
+    linking = {"UV_LINK_MODE", "npm_config_package_import_method"}
+    assert {k: v for k, v in got.items() if k not in {*shared, *linking}} == {
+        k: v for k, v in plain.items() if k not in shared}
+
+    marker = tmp_path / "ran"
+    bad = [run / "has space", run / "linked cache", tmp_path / "cache"]
+    link_folder(tmp_path, bad[1])
+    blocked = tmp_path / "blocked"
+    blocked.write_text("a file", encoding="utf-8")
+    bad.append(blocked / "cache")
+    for cache_path in bad:
+        command = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch),
+                              "--cache", str(cache_path)])
+        line = f'ISO="$({command})" && eval "$ISO" || exit 1; touch {shlex.quote(str(marker))}'
+        result = subprocess.run([BASH, "-c", line], env=env, capture_output=True, text=True)
+        assert result.returncode != 0 and not marker.exists(), cache_path
+        assert "error:" in result.stderr and "Traceback" not in result.stderr, cache_path

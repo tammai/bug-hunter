@@ -105,7 +105,31 @@ def _lookup(env: dict[str, str]) -> dict[str, str]:
     return {k.upper(): v for k, v in env.items()} if WINDOWS else env
 
 
-def _plan(scratch: Path, env: dict[str, str]) -> tuple[list[str], dict[str, str]]:
+def _shared_caches(cache: Path) -> dict[str, str]:
+    """Download caches every agent in a run can share: content-checked and safe to fill at once."""
+    # Left per agent: Gradle's user home holds its daemons, Maven's local repository has no
+    # locking by default, Cargo's home holds the config.toml every build obeys, and Bun
+    # hardlinks installs to its cache. uv and pnpm are told to copy or clone out of the
+    # cache, since a hardlink would let one agent's edit to an installed file reach the rest.
+    return {
+        "npm_config_cache": str(cache / "npm"),
+        "npm_config_store_dir": str(cache / "pnpm-store"),
+        "npm_config_package_import_method": "clone-or-copy",
+        "YARN_CACHE_FOLDER": str(cache / "yarn"),
+        "YARN_GLOBAL_FOLDER": str(cache / "yarn-berry"),
+        "UV_CACHE_DIR": str(cache / "uv"),
+        "UV_LINK_MODE": "clone" if sys.platform == "darwin" else "copy",
+        "PIP_CACHE_DIR": str(cache / "pip"),
+        "POETRY_CACHE_DIR": str(cache / "poetry"),
+        "COMPOSER_CACHE_DIR": str(cache / "composer"),
+        "GOMODCACHE": str(cache / "go-mod"),
+        "GOCACHE": str(cache / "go-build"),
+        "BUNDLE_USER_CACHE": str(cache / "bundler"),
+    }
+
+
+def _plan(scratch: Path, env: dict[str, str],
+          cache: Path | None = None) -> tuple[list[str], dict[str, str]]:
     """The variables to unset and to export."""
     view = _lookup(env)
     real = Path(view.get("HOME") or Path.home())
@@ -152,6 +176,8 @@ def _plan(scratch: Path, env: dict[str, str]) -> tuple[list[str], dict[str, str]
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_TERMINAL_PROMPT": "0",
     }
+    if cache is not None:
+        exports.update(_shared_caches(cache))
     roots = [real]
     if WINDOWS:
         # A kept variable goes out under the name(s) the owner set it with, not uppercased.
@@ -416,6 +442,7 @@ def _main(argv: list[str] | None = None) -> int:
         stream.reconfigure(encoding="utf-8", errors=stream.errors)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("scratch")
+    parser.add_argument("--cache", help="the run's download cache, shared by its agents")
     parser.add_argument("--browser", action="store_true",
                         help="keep Playwright's installed browsers readable; downloads fail")
     args = parser.parse_args(argv)
@@ -424,6 +451,28 @@ def _main(argv: list[str] | None = None) -> int:
         print("error: the scratch path has whitespace, which JAVA_TOOL_OPTIONS can't carry; "
               "use a mktemp -d path", file=sys.stderr)
         return 1
+    cache = None
+    if args.cache is not None:
+        given = Path(args.cache)
+        cache = given.parent.resolve() / given.name
+        if any(ch.isspace() for ch in str(cache)):
+            print("error: the cache path has whitespace; use the run folder scratch.py made",
+                  file=sys.stderr)
+            return 1
+        # Only inside a run folder scratch.py made, so a wrong path can't point every
+        # agent's downloads at the owner's own folders.
+        if not (cache.parent / ".bug-hunter-run").is_file():
+            print(f"error: the cache {cache} isn't in a run folder made by scratch.py",
+                  file=sys.stderr)
+            return 1
+        try:
+            # Created under its parent, so a symlink planted at the cache path is refused
+            # rather than followed.
+            _make_folder(cache.parent, cache)
+            _refuse_links(cache.parent, cache)
+        except OSError as exc:
+            print(f"error: can't use the cache {cache}: {exc}", file=sys.stderr)
+            return 1
     folders = ["home", "home/.config", "no-gh"]
     scanned = ["home", "home/.config"]
     if WINDOWS:
@@ -452,7 +501,7 @@ def _main(argv: list[str] | None = None) -> int:
     except OSError as exc:
         print(f"error: can't prepare {scratch / 'home'}: {exc}", file=sys.stderr)
         return 1
-    unset, exports = _plan(scratch, env)
+    unset, exports = _plan(scratch, env, cache)
     if args.browser:
         # The owner's installed browsers, used where they are: HOME and LOCALAPPDATA move
         # into the scratch folder, where Playwright would find none. The skip variable only

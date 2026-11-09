@@ -35,7 +35,16 @@ From the root of the repo you want hunted:
 2. **Ask.** It shows the hunter count, the expected cost (about 100k tokens per hunter, plus about 20k per verifier) and the parts `--max` leaves out. Then it waits for your yes. Answer no and nothing runs.
 3. **Hunt.** One `bug-hunter` agent per part reads the code and tries edge inputs: paths with spaces, CRLF, empty files, `B10` sorting before `B2`, missing JSON keys, failing subprocesses and more. It drops anything it can't reproduce and anything already known (open issues and earlier drafts).
 4. **Verify.** A separate `repro-verifier` re-runs each draft's steps in a fresh copy, from the draft alone. Only drafts that reproduce are kept.
-5. **Draft.** The report lists the kept drafts, and what was dropped and why.
+5. **Clean up and report.** It removes the run's working files and tells you how much space that freed. Then it lists the verified bugs, and what was dropped and why.
+6. **Fix here, or save to post.** It asks what you want. **Fix here** writes nothing: the full drafts are in the session, so you can ask Claude to fix them right away. **Save all** or **save some** writes drafts for `/hunt-post`. Unsaved drafts are gone when the session ends, and only saved drafts count as "already known" in later hunts.
+
+### Disk use
+
+All the agents in one run share one folder, `<temp>/bug-hunter-XXXX`, made by `scripts/scratch.py`:
+
+- **One clone per run.** It's shallow, with only the latest commit. Each agent copies it with copy-on-write (APFS clones on macOS, reflinks on btrfs and XFS, a plain copy anywhere else), so a copy costs almost nothing until the agent changes files.
+- **One download cache per run.** npm, pnpm, Yarn, uv, pip, Poetry, Composer, Go and Bundler download each package once for all agents, and installs copy or clone out of it, never hardlink. Gradle, Maven, Cargo and Bun keep their own per agent. Gradle and Maven aren't safe to share between builds running at the same time, Cargo's folder also holds the config every build obeys, and Bun hardlinks its installs.
+- **Cleanup.** Each agent deletes its copy and installed dependencies before it replies. The run folder is removed at the end, or when the command stops early, and you're told the size freed. Every `/hunt` and `/audit` first sweeps folders that earlier runs left more than 12 hours ago, and lists younger ones so you can remove them if no other run is going.
 
 If `/hunt` isn't found, use `/bug-hunter:hunt` (and `/bug-hunter:hunt-post`).
 
@@ -64,7 +73,7 @@ Agents could still open a connection elsewhere: their instructions forbid it, as
 
 ### Drafts
 
-Drafts are written outside the repo:
+Drafts you save are written outside the repo:
 
 - `~/.bug-hunter/<host>/<owner>/<repo>/drafts/NN.md`;
 - `~/.bug-hunter/local/<folder>/drafts/NN.md` for a repo without an `origin`.
@@ -258,7 +267,7 @@ uv run ruff check .
 | `agents/` | `bug-hunter`, `repro-verifier`, `security-auditor` and `finding-verifier` |
 | `edge-inputs/` | the edge-input lists hunters work through |
 | `security/` | the security and PII checklists auditors work through |
-| `scripts/` | standard-library Python the commands call: `scope.py`, `known.py`, `drafts.py`, `post.py`, `throwaway.py`, `isolate.py`, `secrets_scan.py`, `findings.py`, `finding_v1.py`, `cost_log.py`, `oracle.py`, `browser.py` |
+| `scripts/` | standard-library Python the commands call: `scope.py`, `known.py`, `drafts.py`, `post.py`, `throwaway.py`, `isolate.py`, `scratch.py`, `secrets_scan.py`, `findings.py`, `finding_v1.py`, `cost_log.py`, `oracle.py`, `browser.py` |
 | `contracts/v1/` | the shared contracts, vendored byte-identical from tammai/product-rebuild; never edit them here |
 | `tests/` | pytest for the scripts, and checks on the prompt files |
 
