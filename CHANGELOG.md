@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.0 — 2026-11-09
+
+A multi-agent `/hunt` on a large repo left 18 GB of working files. A run now costs about one clone, one download cache and what each agent installs, and cleans up after itself ([change](docs/sdlc/changes/2026-11-07-l-lean-scratch.md)).
+
+### Added
+
+- **One run folder per run.** `scripts/scratch.py new` makes `<temp>/bug-hunter-XXXX` (mode 0700, marked), with a `cache/` and a `base/`. `/hunt` and `/audit` tell you what they are cleaning up and how much space it freed.
+- **`scratch.py clean` and `sweep`.** `clean` removes a run, including read-only trees such as Go's module cache, and refuses anything that is not a folder it made. `sweep` removes leftovers of earlier runs (older than 12 hours by default) and lists younger ones as "may be in use"; both commands run it before the cost question. On Linux and macOS a clean never follows a link swapped in while it runs.
+- **`throwaway.py --base <run>/base`** copies the run's one base clone with copy-on-write (`cp -c` on macOS, `--reflink=auto` on Linux, a plain copy elsewhere), and refuses a base it did not make for the same repo.
+- **`isolate.py --cache <run>/cache`** shares the download caches of npm, pnpm, Yarn, uv, pip, Poetry, Composer, Go and Bundler across a run's agents. pnpm and uv clone or copy out of it, never hardlink.
+
+### Changed
+
+- **`/hunt` no longer writes drafts on its own.** After verifying it shows the table and asks "Fix these here, or save them as drafts to post?". Only a save writes into the drafts folder, so `/hunt-post` works as before on saved drafts. Unsaved drafts are lost when the session ends, and only saved drafts feed the known list. The drafts folder layout and the draft format are unchanged. With `--format finding-v1` nothing is asked.
+- `throwaway.py` clones with `--depth 1`, so code under test that reads its own git history sees one commit.
+- Each hunter, verifier and auditor removes its own `copy/` and `home/` before its final reply, and `reap.py` runs before every clean.
+- Cargo, Bun, Gradle and Maven keep per-agent caches.
+
+### Known issues
+
+- On Windows, a folder swapped for a junction while `clean` runs is not guarded (`shutil.rmtree` works by path there). Junctions present before the clean are removed without being entered. The Windows-only tests are not run in CI.
+- Review tickets left open: the base is writable and only its links are re-checked; a base's `.git` can point git elsewhere through text, not links; the `--cache` marker check can raise; a tree deeper than about 256 levels is left with an error (the marker stays, so a sweep finds it).
+
 ## 0.4.0 — 2026-11-09
 
 bug-hunter for rebuilds: a hunt judged against the spec and a running reference, browser repros, and routable findings ([spec](docs/specs/rebuild-upgrade/04-bug-hunter.md), parts 1–5). Every new behaviour is behind a flag: without `--format finding-v1`, `--oracle`, `--reference`, `--browser`, `--yes`, `--budget` or `--cost-log`, `/hunt` behaves as in 0.3.3. Change records: [part 1](docs/sdlc/changes/2026-11-08-m-finding-v1-budget.md), [part 2](docs/sdlc/changes/2026-11-08-m-oracle-scoping.md), [part 3](docs/sdlc/changes/2026-11-08-m-reference-classify.md), [review follow-ups](docs/sdlc/changes/2026-11-08-m-review-followups.md), [part 4](docs/sdlc/changes/2026-11-08-m-browser-mode.md), [part 5](docs/sdlc/changes/2026-11-08-m-departures.md).
