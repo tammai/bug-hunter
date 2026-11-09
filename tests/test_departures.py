@@ -100,7 +100,8 @@ def test_departure_matches_by_pointer_and_rule():
                                    (D1, "F-TSK-02.AC1", "D-001")):
         assert matching_departure([entry], STEPS, KEY_FAIL, criterion) == want, (entry, criterion)
     # An earlier check on the same pointer could have written the same message.
-    earlier_null = {"result": "fail", "step": 1, "message": 'step 1 /key: got "TSK-0003", expected null'}
+    earlier_null = {"result": "fail", "step": 1,
+                    "message": 'step 1 /key: got "TSK-0003", expected null'}
     same_pointer = [{**STEPS[0], "expect": {**STEPS[0]["expect"], "json": [
         {"pointer": "/key", "equals": None}, *STEPS[0]["expect"]["json"]]}}]
     for steps, result in ((later_check, KEY_FAIL), (later_step, KEY_FAIL),
