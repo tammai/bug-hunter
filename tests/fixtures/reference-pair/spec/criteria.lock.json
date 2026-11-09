@@ -1,0 +1,10 @@
+{
+  "contracts": "1.1.1",
+  "spec": "spec",
+  "generated": "2026-11-08T10:00:00Z",
+  "criteria": [
+    {"id": "F-TSK-01.AC1", "feature": "F-TSK-01", "file": "features/F-TSK-01.md", "text_sha256": "0000000000000000000000000000000000000000000000000000000000000000", "tag": "docs", "priority": "MVP", "level": 2, "test": null, "departures": []},
+    {"id": "F-TSK-01.AC2", "feature": "F-TSK-01", "file": "features/F-TSK-01.md", "text_sha256": "0000000000000000000000000000000000000000000000000000000000000000", "tag": "docs", "priority": "MVP", "level": 2, "test": null, "departures": []},
+    {"id": "F-TSK-02.AC1", "feature": "F-TSK-02", "file": "features/F-TSK-02.md", "text_sha256": "0000000000000000000000000000000000000000000000000000000000000000", "tag": "docs", "priority": "MVP", "level": 1, "test": null, "departures": []}
+  ]
+}

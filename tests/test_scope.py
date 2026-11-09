@@ -58,6 +58,28 @@ def test_max_caps_hunters_and_cost(make_repo):
         assert "Traceback" not in result.stderr
 
 
+def test_budget_caps_hunters_at_worst_case_cost(make_repo):
+    repo = make_repo({**{f"api{i}/server.js": "app.get('/x', h)\n" for i in range(3)},
+                      "lib/a.py": "", "lib2/b.py": ""})
+    result, out = scope(repo, "--budget", "450000")
+    assert result.returncode == 0, result.stderr
+    assert [p["dir"] for p in out["parts"]] == ["api0", "api1"]
+    assert [p["dir"] for p in out["skipped"]] == ["api2", "lib", "lib2"]
+    assert (out["hunters"], out["est_tokens"]) == (2, 200_000)
+    assert out["budget"] == {"tokens": 450000, "per_hunter": 200000, "left_out": 3}
+
+    result, out = scope(repo, "--max", "1", "--budget", "450000")
+    assert out["hunters"] == 1 and out["budget"]["left_out"] == 0
+
+    result, out = scope(repo, "--live", "--budget", "400000")
+    assert result.returncode == 0, result.stderr
+    assert out["hunters"] == 2 and out["budget"]["left_out"] == 1
+
+    low = run_script("scope", repo, "--budget", "199999")
+    assert low.returncode == 1 and low.stderr.startswith("error:")
+    assert "Traceback" not in low.stderr
+
+
 def test_build_and_docs_tooling_parts_come_last(make_repo):
     # trentm/python-markdown2: --max 1 used to spend the only hunter on setup.py.
     repo = make_repo({
@@ -169,8 +191,14 @@ def test_live_route_markers_across_frameworks(make_repo):
         "actix/main.rs": '#[get("/orders")]\nasync fn orders() {}\n',
         "axum/main.rs": 'let app = Router::new().route("/orders", get(list));\n',
         "echo/main.go": 'e := echo.New()\ne.GET("/orders", list)\n',
+        "stdlib/server.py": "from http.server import BaseHTTPRequestHandler\n\n\n"
+                            "class Handler(BaseHTTPRequestHandler):\n"
+                            "    def log_message(self, *a):\n        pass\n\n"
+                            "    def do_GET(self):\n        self.send_response(200)\n",
     }
     clients = {
+        # A do_ method alone is not a server: the BaseHTTPRequestHandler subclass is the signal.
+        "jobs/steps.py": "class Step:\n    def do_GET(self):\n        return 1\n",
         "front/api.js": "const api = axios.create()\n"
                         "export const list = () => api.get('/orders')\n",
         "lib/util.py": "def total(items):\n    return sum(items)\n",

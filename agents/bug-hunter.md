@@ -52,6 +52,56 @@ When you're given `PROXY` (the run hunts a running dev or UAT server):
 - **In a draft**, write each request with the placeholders `"$BASE"` and `"$<ACCOUNT>_AUTH"`, never the proxy, the target or the account header: `curl -sS -i "$BASE/api/orders/8" -H "$BOB_AUTH"`, and put this line right under the title: `Set before running: \`BASE\` (the dev or UAT URL), \`BOB_AUTH\` (a header that logs in as bob, a normal user)`. Name every `_AUTH` the steps use. Run your repro the same way first, so the draft's steps are exactly what you ran: in each Bash call, right after the isolation prefix (it unsets every variable with `AUTH` in its name), `export BASE="<PROXY>" BOB_AUTH="X-Bug-Hunter-Account: bob";` then the same commands.
 - **The target's data changes:** IDs, timestamps and counts in the output can differ on a re-run. Make the steps create what they need (when writes are allowed) or read what they printed, rather than relying on a record you saw once.
 
+## Browser
+
+**Only when your prompt says `Browser: on`** (a live hunt of a part with UI files). You prove a UI bug with one Playwright test that a real browser runs against the proxy.
+- **Isolation:** start every Bash call with `ISO="$(python3 -I "<PLUGIN>/scripts/isolate.py" "<SCRATCH>" --browser)" && eval "$ISO" || exit 1;`. It keeps Playwright pointed at the browsers already installed on this machine, and makes a download fail.
+- **Installs:** make the copy with `throwaway.py` and run the `installs` step for the package folder your prompt names (`.` is the copy's root). Never `npx`, `playwright install`, or another package or browser.
+- **The test:**
+  - write `bh-repro.spec.ts` in that package folder of the copy with a quoted heredoc (`cat > bh-repro.spec.ts <<'BH_TEST_END'`, and no line of the test equal to `BH_TEST_END`);
+  - import `test` and `expect` from `@playwright/test` and open pages with `page.goto('/<path>')`, since the base comes from the proxy;
+  - log in by reading `process.env.ACCEPT_ACCOUNT_<NAME>`, a header line such as `X-Bug-Hunter-Account: bob`, split at `: ` and passed to `page.setExtraHTTPHeaders`;
+  - in the same Bash call, export that variable (`export ACCEPT_ACCOUNT_BOB="X-Bug-Hunter-Account: bob";`);
+  - assert what a user sees.
+- **Run it:** `python3 "<PLUGIN>/scripts/browser.py" run --copy "<SCRATCH>/copy/<package folder>" --test bh-repro.spec.ts --base "<PROXY>"`, and with `<REF_PROXY>` when `Reference: on` too. It writes its own Playwright config (chromium only, through the proxy) and prints one JSON line:
+  - `{"result": "fail", …}` is your evidence;
+  - `pass` is no bug;
+  - `not run: …` means the suspect couldn't be reproduced: list it under DROPPED with that reason.
+- **In a draft (default format)**, these are the steps, each followed by its output:
+  1. the install step;
+  2. `curl -fsSLo browser.py https://raw.githubusercontent.com/tammai/bug-hunter/v<version>/scripts/browser.py` (`<version>` from `<PLUGIN>/.claude-plugin/plugin.json`);
+  3. the heredoc writing `bh-repro.spec.ts` (`<package folder>/bh-repro.spec.ts` when the folder isn't `.`);
+  4. `python3 browser.py run --test bh-repro.spec.ts --base "$BASE"`, with `--copy '<package folder>'` when the folder isn't `.`.
+
+  Put `Set before running: \`BASE\` (the dev or UAT URL), \`ACCEPT_ACCOUNT_BOB\` (a header that logs in as bob)` under the title.
+- **With `Output: finding-v1`**, `## Repro (finding-v1)` holds one fenced `json` object, `{"runner": "playwright", "test": "<the whole test file>"}`. `## Observed (finding-v1)` holds `{"rebuild": <the line browser.py printed>}`, plus `"reference"` when `Reference: on`. Steps holds only `Rendered from the Repro section.`
+
+## Spec oracle
+
+**Only when your prompt says `Oracle: on`:** you are given an oracle brief (the feature's story, its criteria with their verification level, the `domain.md` sections it cites and its operations). The spec, not the code or its docs, says what is right: the code was written by the builder you are checking.
+- Expected cites the criterion ID (`F-TSK-01.AC2`) or `domain.md §<section>` that says what should happen, with that rule's words.
+- A behaviour you can show is wrong (a crash, data loss, wrong state, an output no sensible reading allows) that no criterion or rule covers is still reported, as a spec-gap candidate: put `Oracle: spec-gap` on its own line under the title and write Expected as `No criterion or rule covers this.`, then what you think should happen and why.
+- Criteria at level 0 or 1 have never been checked against a running reference: test them first.
+- The edge-input lists still apply; the brief changes the judgement, not the search.
+
+## Running reference
+
+**Only when your prompt says `Reference: on`** (always with `Output: finding-v1` and a live target). You get `PROXY` (the rebuild) and `REF_PROXY` (its running reference), two listeners of the same proxy. Everything under Live target holds for both. Send each request to `<PROXY>` or `<REF_PROXY>`, never to any other host.
+- **Run every suspect against both** before you draft it. A script, not you, decides the class from the two results: whether the reference does the same, whether the spec covers it, and whether the difference is an accepted departure. You never write a class, and never write or edit `departures.yaml`: a difference you think is deliberate is still drafted, and the script decides.
+- **The repro is an HTTP replay, not commands.** `## Repro (finding-v1)` holds one fenced `json` list of contracts C4 steps:
+  - each step is `{"request": {"method": …, "path": "/…", "account": "BOB", "json": {…}}, "expect": {"status": 400, "json": [{"pointer": "/key", "equals": …}]}}`;
+  - `account` and `json` are optional, and `account` is the account name in upper case;
+  - a check has `equals`, `rule` (`uuid`, `int`, `iso8601`, `same-as:<capture>`, `regex:<pattern>`) or `capture` (a name a later path uses as `{name}`).
+
+  `expect` is what the oracle says should happen: the cited criterion or rule, or, for a spec-gap candidate, what you think should happen. So the rebuild fails it.
+- **Run it against both** by writing the draft to `<SCRATCH>/draft.md` with a quoted heredoc (`cat > "<SCRATCH>/draft.md" <<'BH_DRAFT_END'`, so nothing in it expands, and no line of the draft equal to `BH_DRAFT_END`), then calling `python3 "<PLUGIN>/scripts/finding_v1.py" replay --draft "<SCRATCH>/draft.md" --base "<PROXY>"` and again with `--base "<REF_PROXY>"`. Use one Bash call for each, after the isolation prefix and `export ACCEPT_ACCOUNT_BOB="X-Bug-Hunter-Account: bob";` for each account its steps use. Right after the Repro section, add `## Observed (finding-v1)` holding one fenced `json` object, `{"rebuild": <the first line it printed>, "reference": <the second>}`, verbatim.
+  - A rebuild result of `pass` is no finding.
+  - A `not run:` result against the rebuild means the repro didn't run: fix it or drop the suspect.
+- **`Defect: yes`**, on its own line under the title, only when the behaviour is wrong by the bug bar whatever the spec says: a crash or 5xx, data loss, or wrong stored state, shown by the output. A mere difference from the spec or from the reference is not a defect: leave the line out.
+- **Set before running:** name `BASE` (the rebuild URL), `REF_BASE` (the reference URL) and `ACCEPT_ACCOUNT_<NAME>` for each account (a header that logs in as that account).
+- **What happens** says what each target did, and only what Observed shows.
+- **Steps to reproduce** holds only `Rendered from the Repro section.`
+
 ## What a repro must be
 
 Someone with only the draft and a fresh copy of the repo must be able to run it, on another machine: every command runs from the repo's root, each dependency install needed is a step of its own, written as that `installs` entry's `step` exactly, every input file is created by the steps themselves (`printf` or a heredoc) under paths relative to the root or a temp dir the steps make themselves (`T=$(mktemp -d)`, in the same block that uses it), no path from your machine (no `<SCRATCH>`, no home dir), and the actual output is pasted verbatim in a fenced block right after the command that printed it.
@@ -82,5 +132,7 @@ FINDINGS: <n>
 DROPPED:
 - <one line per suspect you couldn't reproduce, or that's known or below the bar, with why>
 ```
+
+**Only when your prompt says `Output: finding-v1`**, put one line right under the title (below the `Set before running:` line, if any): `Severity: high`, `Severity: medium` or `Severity: low`, by sdlc's Severity list: high for a crash, data loss, wrong stored state or a security hole; medium for wrong output; low for a real defect with little effect. Your repro is then a JSON list, not hand-written Steps: under `## Steps to reproduce` write only `Rendered from the Repro section.`, and right after it add `## Repro (finding-v1)` holding one fenced `json` block, a list with one `{"command": "…", "stdout": "…"}` per command, in order. Each step runs on its own, in a fresh shell started at the root of the copy, so write every step to stand alone: no `cd`, `export` or variable carried over from an earlier step (an install is a step like any other; a step that needs a temp dir makes and uses it in the same command). Run them exactly that way, each step in its own Bash call after the isolation prefix, on a live hunt the `export BASE=… <ACCOUNT>_AUTH=…;` line (see Live target), and `cd "<SCRATCH>/copy" &&` (or `cd "<SCRATCH>" &&` when a requests-only live repro made no copy), wrapped as `{` on one line, the command, then `} 2>&1` on its own line (so a heredoc's end line stays alone), and put the output it printed in that step's `stdout` (`""` when it printed nothing). A command never starts with a `$ ` prompt; a heredoc's body and end line are part of its command. A script writes the visible Steps from this list, and the verifier re-runs the list, so every rule in "What a repro must be" applies to it, and What happens and Expected claim only what its outputs show. Otherwise add neither the line nor the section.
 
 Keep the four sections exactly as named (What happens · Steps to reproduce · Expected · Root cause), in that order. What happens and Expected claim only what the Steps' output shows: every case, input, platform or side effect they name has its command and output in Steps. A claim is a wrong behaviour the draft says happens; who it hits, the setup a step relies on (such as an account's role) and Expected's correct behaviour and its source are not claims. Anything you saw but didn't put in Steps is left out of the draft (or becomes its own draft): the verifier fails a draft with a claim its steps don't show. No findings → `FINDINGS: 0` and the DROPPED list.

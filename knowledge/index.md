@@ -45,6 +45,7 @@ Background: [BRIEF.md](../BRIEF.md) — where the recipe comes from; [PRD](../do
 - [runs/2026-11-08-b0-16-json-server-adapters-exit.md](runs/2026-11-08-b0-16-json-server-adapters-exit.md) — B0 run 16: Node/TS hunt, clean
 - [runs/2026-11-08-b0-17-live-flaskr-exit.md](runs/2026-11-08-b0-17-live-flaskr-exit.md) — B0 run 17: live hunt, clean
 - [runs/2026-11-08-b0-18-audit-realworld-exit.md](runs/2026-11-08-b0-18-audit-realworld-exit.md) — B0 run 18: /audit, clean; B0 exit reached
+- [runs/2026-11-08-p4-browser-notes-app.md](runs/2026-11-08-p4-browser-notes-app.md) — Part 4: browser-mode hunt finds the planted double submit
 
 ## Features
 -

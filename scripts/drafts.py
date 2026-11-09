@@ -1,11 +1,20 @@
 """Where a repo's drafts live, the next draft number, and the fixed draft format check."""
 
 import argparse
+import html
 import re
 import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
+
+JSON_LETTERS = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r",
+                "t": "\t"}
+JSON_ESCAPE = re.compile(r'\\(u[0-9a-fA-F]{4}|["\\/bfnrt])')
+HEX_ESCAPE = re.compile(r"\\x([0-9a-fA-F]{2})")
+ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")  # terminal colour and cursor codes
+MAX_DECODE_ROUNDS = 8
+MAX_SPELLINGS = 256
 
 SECTIONS = ["What happens", "Steps to reproduce", "Expected", "Root cause"]
 DRAFT_NAME = re.compile(r"^(\d+)\.md$")
@@ -105,6 +114,12 @@ def problems(text: str) -> list[str]:
     steps = bodies.get("steps to reproduce", [])
     if steps and not any(in_fence for _, in_fence in fenced(steps)):
         found.append("## Steps to reproduce has no code block with the actual output")
+    # A browser draft writes its test with a heredoc the verifier's shell runs: a second end
+    # line inside the test would end it early and run the rest as commands.
+    if any("<<'BH_TEST_END'" in line for line in steps) and \
+            sum(line.strip() == "BH_TEST_END" for line in steps) != 1:
+        found.append("## Steps to reproduce: the test's heredoc needs exactly one BH_TEST_END "
+                     "line, its last")
     return found
 
 
@@ -120,31 +135,169 @@ def _home_problems(text: str) -> list[str]:
     return []
 
 
-def _live_problems(text: str, target: dict) -> list[str]:
+def _live_problems(text: str, target: dict, variable: str = "BASE",
+                   replay: bool = False) -> list[str]:
     """Ways a live draft would leak the target's host or a login into a public issue."""
-    found = []
-    lowered = text.lower()
-    url = urlsplit(target["url"])
-    hosts = {url.netloc.lower()}
-    if url.hostname not in ("localhost", "127.0.0.1", "::1"):
-        hosts.add(url.hostname.lower())  # a bare "localhost" in prose gives nothing away
-    if any(host in lowered for host in hosts):
-        found.append("names the target's host: write \"$BASE\" instead")
-    if "x-bug-hunter-account" in lowered:
-        found.append('writes the proxy\'s account header: write -H "$<ACCOUNT>_AUTH" instead')
-    for name, headers in target["accounts"].items():
-        for value in headers.values():
-            pieces = {value, value.partition(" ")[2]}
-            pieces |= {cookie.partition("=")[2] for cookie in value.split(";")}
-            # Short pieces ("1", "en") would match ordinary words.
-            if any(len(p.strip()) >= 6 and p.strip() in text for p in pieces):
-                found.append(f"holds a login value of account {name}: "
-                             f'write -H "${name.upper()}_AUTH" instead')
-                break
+    found = leaks(text, target, variable, replay)
     setup = next((line for line in text.splitlines()
                   if line.strip().lower().startswith("set before running:")), None)
-    if setup is None or not re.search(r"\bBASE\b", setup):
-        found.append("missing a 'Set before running:' line naming BASE")
+    if setup is None or not re.search(rf"\b{variable}\b", setup):
+        found.append(f"missing a 'Set before running:' line naming {variable}")
+    return found
+
+
+def leaks(text: str, target: dict, variable: str = "BASE", replay: bool = False) -> list[str]:
+    """The target's host, the proxy's account header or a login in `text`, never echoed."""
+    # An HTTP-replay draft (a reference run) logs in through ACCEPT_ACCOUNT_<NAME>, not curl.
+    def login(name: str) -> str:
+        return f"ACCEPT_ACCOUNT_{name}" if replay else f'-H "${name}_AUTH"'
+    from live_proxy import LOCAL_HOSTS  # live_proxy imports this module
+
+    found = []
+    # Every check runs on every decoded spelling, so no encoding layer hides a value.
+    spellings = _spellings(text)
+    patterns = _host_patterns(urlsplit(target["url"]), LOCAL_HOSTS)
+    if any(re.search(p, t, re.I) for p in patterns for t in spellings):
+        whose = "target's" if variable == "BASE" else "reference's"
+        found.append(f"names the {whose} host: write \"${variable}\" instead")
+    if any("x-bug-hunter-account" in t.lower() for t in spellings):
+        found.append(f"writes the proxy's account header: write {login('<ACCOUNT>')} instead")
+    for name, headers in target["accounts"].items():
+        if any(_holds_login(t, name, headers, target["url"]) for t in spellings):
+            found.append(f"holds a login value of account {name}: "
+                         f"write {login(name.upper())} instead")
+    return found
+
+
+# A login piece shaped like a word ("member", "admin1"): prose is full of these, so one only
+# counts next to what makes it a credential. Long letter runs are random tokens, not words.
+WORDLIKE = re.compile(r"[A-Z]?[a-z]+\d{0,3}")  # lower or Capitalized: mixed case is random
+WORDLIKE_MAX = 15
+CREDENTIAL_FIELDS = r"password|passwd|pwd|pass|token|secret|api[_-]?key|key|auth"
+# Where a name starts or ends inside an identifier: its edge, `_`/`-`, or a camelCase hump.
+SEGMENT_START = r"(?:(?<![\w-])|(?<=[_-])|(?<=[a-z0-9])(?=[A-Z]))"
+SEGMENT_END = r"(?=[_-]|(?<=[a-z0-9])[A-Z]|[^\w-]|\Z)"
+
+
+def _holds_login(text: str, account: str, headers: dict, url: str) -> bool:
+    """Whether `text` holds one of these login headers' values, or a part one could echo."""
+    from live_proxy import _forms, _pieces  # live_proxy imports this module
+
+    # Every form the proxy masks: as sent, JSON-escaped, percent-encoded, HTML entities and a
+    # Basic login decoded; forms under 6 characters would match ordinary words.
+    pieces = _pieces({"url": url, "accounts": {"_": headers}})
+    words = {p for p in pieces if WORDLIKE.fullmatch(p) and 6 <= len(p) <= WORDLIKE_MAX}
+    if any(len(form) >= 6 and form in text for p in pieces - words for form in _forms(p)):
+        return True
+    if not words:
+        return False
+    # A word counts only as a credential: after this account's auth scheme, or after any field
+    # or flag with one of these headers' or cookies' names or a credential word as a whole
+    # segment of its name (access_token, --password, X-Auth-Token, <newPassword>), so prose
+    # ("Author: a member", "Bypass: member") stays clean.
+    names = {h for h in headers} | {c.partition("=")[0].strip()
+                                     for v in headers.values() for c in v.split(";") if "=" in c}
+    context = "|".join([*(re.escape(n) for n in names if n), CREDENTIAL_FIELDS])
+    schemes = {v.split()[0] for v in headers.values() if len(v.split()) > 1}
+    scheme = rf"(?i:{'|'.join(map(re.escape, schemes))})\s++" if schemes else None
+    # One start per identifier and possessive runs: drafts and echoed responses are untrusted,
+    # and a backtracking field match is cubic on a long run like "authauth…".
+    # Then punctuation before the value (`: "`, `>`, `=`, `": ["`), or only spaces after a flag.
+    # The placeholders this check tells drafts to write (MEMBER_AUTH) are not credentials.
+    own = "|".join(re.escape(p) for p in (f"{account}_AUTH", f"ACCEPT_ACCOUNT_{account}"))
+    name = (rf"(?<![\w-])(?!(?i:{own})(?![\w-]))"
+            rf"(?=[\w-]*?{SEGMENT_START}(?i:{context}){SEGMENT_END})[\w-]++")
+    field = (rf"(?:{name}\s*+[^\w\s]\W*+|(?=-){name}\s++)"
+             rf"{f'(?:{scheme})?' if scheme else ''}")
+    before = f"(?:{field}|\\b{scheme})" if scheme else field
+    word = "|".join(map(re.escape, words))
+    return re.search(rf"{before}(?i:{word})(?![\w-])", text) is not None
+
+
+def _spellings(text: str) -> set[str]:
+    """`text` and what it decodes to (JSON escapes, HTML entities, %xx), to any depth."""
+    found = frontier = {text}
+    # Each decoding is applied again to what it gave until nothing new comes out; bounded,
+    # since every round can triple the set.
+    for _ in range(MAX_DECODE_ROUNDS):
+        frontier = {d for t in frontier
+                    for d in (unquote(t), html.unescape(t), _json_unescaped(t),
+                              HEX_ESCAPE.sub(lambda m: chr(int(m[1], 16)), t),
+                              ANSI.sub("", t))} - found
+        if not frontier or len(found) > MAX_SPELLINGS:
+            break
+        found = found | frontier
+    return found
+
+
+def _json_unescaped(text: str) -> str:
+    # One left-to-right pass, as a JSON parser reads a string: `\\n` is a backslash then n.
+    return JSON_ESCAPE.sub(lambda m: chr(int(m[1][1:], 16)) if m[1][0] == "u"
+                           else JSON_LETTERS[m[1]], text)
+
+
+def _host_patterns(url, local_hosts: set[str]) -> list[str]:
+    """Where `url`'s host names the target in decoded text."""
+    # No left boundary anywhere: whatever stands before a host (an undecoded escape, `_`, a
+    # letter of another script) must never hide it; over-refusing is the safe side. A right
+    # boundary only after a digit, so a longer port or address (the proxy's own listener at
+    # 127.0.0.1:50003, 10.0.0.12) isn't the target.
+    host, port = (url.hostname or "").lower(), url.port
+    scheme = r"[a-z][a-z0-9+.-]*://(?:[^\s/@]*@)?"  # a URL's host position, with any user@
+    if host in local_hosts:
+        # Any loopback spelling with exactly the target's port; a bare "localhost" gives
+        # nothing away.
+        alias = r"(?:localhost|127\.0\.0\.1|\[::1\]|::1)"
+        if port:
+            return [rf"{alias}:{port}(?!\d)"]
+        return [rf"{scheme}{alias}(?![\w.-]|:\d)"]
+    if "." in host or ":" in host:  # a domain, IPv4 or IPv6: anywhere, subdomains included
+        tail = r"(?![0-9a-f])" if ":" in host else r"(?!\d)" if host[-1].isdigit() else ""
+        return [re.escape(host) + tail]
+    # A plain name ("ref") only after a scheme (and any user@) or with its port: elsewhere
+    # every draft's own words ($REF_BASE, "reference", a /ref or //ref path, an @ref
+    # decorator, qa@ref.com) would match. Known limit: a protocol-relative //ref is missed.
+    name = re.escape(host)
+    found = [rf"{scheme}{name}(?![\w-]|\.\w)"]
+    if port:
+        found.append(rf"{name}:{port}(?!\d)")
+    return found
+
+
+def expected_body(text: str) -> str:
+    """The text of a draft's `## Expected` section."""
+    expected, current = [], None
+    for line, in_fence in fenced(text.splitlines()):
+        if line.startswith("## ") and not in_fence:
+            current = line[3:].strip().rstrip(":").casefold()
+        elif current == "expected":
+            expected.append(line)
+    return "\n".join(expected)
+
+
+def oracle_problems(text: str, spec: Path) -> list[str]:
+    """Ways a draft's Expected fails to rest on the spec: an unknown criterion or rule, or none."""
+    from oracle import (  # oracle imports scope
+        CRITERION,
+        domain_headings,
+        is_spec_gap,
+        load_lock,
+        rule_citations,
+    )
+
+    known = {c["id"] for c in load_lock(spec)}
+    body = expected_body(text)
+    found = []
+    ids = CRITERION.findall(body)
+    if set(ids) - known:
+        found.append("Expected cites a criterion that isn't in criteria.lock.json: "
+                     + ", ".join(sorted(set(ids) - known)))
+    rules, unknown = rule_citations(body, domain_headings(spec))
+    if unknown:
+        found.append("Expected cites a domain.md § that isn't a section of domain.md")
+    if not is_spec_gap(text) and not (set(ids) & known or rules):
+        found.append("Expected cites no criterion or domain.md rule (if none covers it, put "
+                     "'Oracle: spec-gap' under the title)")
     return found
 
 
@@ -160,7 +313,12 @@ def _main(argv: list[str] | None = None) -> int:
     check.add_argument("file")
     check.add_argument("--repo", help="with --target: the repo whose targets.json to read")
     check.add_argument("--target", help="a live draft: hide this target's host and logins")
+    check.add_argument("--reference", help="also hide this reference's host and logins")
+    check.add_argument("--oracle", type=Path, help="the spec folder Expected must cite")
     args = parser.parse_args(argv)
+    if getattr(args, "reference", None) and not args.target:
+        print("error: --reference needs --target", file=sys.stderr)
+        return 1
 
     if args.command == "dir":
         try:
@@ -182,15 +340,28 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"error: cannot read {args.file}: {exc}", file=sys.stderr)
         return 1
     found = problems(text) + _home_problems(text)
+    if args.oracle:
+        from oracle import BadOracle
+
+        try:
+            found += oracle_problems(text, args.oracle)
+        except BadOracle as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
     if args.target:
         from live_proxy import BadTarget, load_target  # live_proxy imports this module
 
         try:
-            found += _live_problems(text, load_target(args.repo or ".", args.target))
+            replay = bool(args.reference)
+            found += _live_problems(text, load_target(args.repo or ".", args.target),
+                                    replay=replay)
+            if args.reference:
+                found += _live_problems(text, load_target(args.repo or ".", args.reference),
+                                        "REF_BASE", replay)
         except BadTarget as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
-    for problem in found:
+    for problem in dict.fromkeys(found):
         print(problem)
     return 1 if found else 0
 
