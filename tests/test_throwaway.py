@@ -1,7 +1,10 @@
 import os
+import shlex
 import subprocess
+import sys
 
-from conftest import commit, git, run_script
+import pytest
+from conftest import SCRIPTS, commit, git, run_script
 
 
 def head(repo) -> str:
@@ -202,3 +205,185 @@ def test_a_base_with_links_or_alternates_in_git_is_refused(make_repo, tmp_path):
         result = run_script("throwaway", repo, dest, "--base", base)
         assert result.returncode == 1 and name in result.stderr, (name, result.stderr)
         assert not dest.exists(), name
+
+
+def new_base(repo, tmp_path, name):
+    base = tmp_path / f"run {name}" / "base"
+    result = run_script("throwaway", repo, base)
+    assert result.returncode == 0, result.stderr
+    return base
+
+
+def copy_from(repo, base, tmp_path, name):
+    dest = tmp_path / f"run {name}" / "copy"
+    return run_script("throwaway", repo, dest, "--base", base), dest
+
+
+def assert_refused(result, dest, why):
+    assert result.returncode == 1 and result.stderr.startswith("error:"), result.stderr
+    assert "Traceback" not in result.stderr and why in result.stderr, result.stderr
+    assert not dest.exists()
+
+
+def test_base_refuses_a_change_made_after_it_was_made(make_repo, tmp_path):
+    repo = make_repo({"src/a.py": "x = 1\n", ".gitignore": "*.log\n"})
+    commit(repo)
+    result, dest = copy_from(repo, new_base(repo, tmp_path, "untouched"), tmp_path, "untouched")
+    assert result.returncode == 0, result.stderr
+
+    changes = {
+        "edit": lambda b: (b / "src" / "a.py").write_text("changed\n", encoding="utf-8"),
+        "delete": lambda b: (b / "src" / "a.py").unlink(),
+        "untracked": lambda b: (b / "new.txt").write_text("x\n", encoding="utf-8"),
+        "ignored": lambda b: (b / "build.log").write_text("x\n", encoding="utf-8"),
+        "head": lambda b: commit(b, "moved"),
+    }
+    for label, change in changes.items():
+        base = new_base(repo, tmp_path, label)
+        change(base)
+        result, dest = copy_from(repo, base, tmp_path, label)
+        assert_refused(result, dest, "changed after it was made")
+
+
+def test_a_base_that_was_dirty_when_made_still_copies(make_repo, tmp_path):
+    repo = make_repo({"src/a.py": "x = 1\n"})
+    commit(repo)
+    (repo / "src" / "a.py").write_text("x = 2\n", encoding="utf-8")
+    base = new_base(repo, tmp_path, "dirty")
+    result, dest = copy_from(repo, base, tmp_path, "dirty")
+    assert result.returncode == 0, result.stderr
+    assert (dest / "src" / "a.py").read_text(encoding="utf-8") == "x = 2\n"
+
+
+def test_base_refuses_git_text_changed_after_it_was_made(make_repo, tmp_path):
+    repo = make_repo({"src/a.py": "x = 1\n"})
+    commit(repo)
+    ran = tmp_path / "ran by the base"
+
+    def set_config(base, key, value):
+        subprocess.run(["git", "config", "-f", str(base / ".git" / "config"), key, value],
+                       check=True)
+
+    changes = {
+        "hooksPath": lambda b: set_config(b, "core.hooksPath", str(tmp_path / "hooks")),
+        "fsmonitor": lambda b: set_config(b, "core.fsmonitor", f"touch {shlex.quote(str(ran))}"),
+        "insteadOf": lambda b: set_config(b, "url.https://evil/.insteadOf", "https://github.com/"),
+        "hook": lambda b: (b / ".git" / "hooks" / "pre-commit").write_text(
+            "#!/bin/sh\n", encoding="utf-8"),
+        "exclude": lambda b: (b / ".git" / "info" / "exclude").write_text(
+            "secret\n", encoding="utf-8"),
+        # A base made before seals existed (v0.5.0) is not trusted either.
+        "no seal": lambda b: (b / ".git" / "bug-hunter-seal").unlink(),
+    }
+    why = {"no seal": "seal", "hooksPath": "core.hookspath", "fsmonitor": "core.fsmonitor"}
+    for label, change in changes.items():
+        base = new_base(repo, tmp_path, label)
+        change(base)
+        result, dest = copy_from(repo, base, tmp_path, label)
+        assert_refused(result, dest, why.get(label, "changed after it was made"))
+    # Refusing must not run the base's own commands: git status would run a planted fsmonitor.
+    assert not ran.exists()
+
+
+def test_a_planted_filter_is_refused_without_running(make_repo, tmp_path):
+    repo = make_repo({"src/a.py": "x = 1\n"})
+    commit(repo)
+    base = new_base(repo, tmp_path, "filter")
+    ran = tmp_path / "filter ran"
+    subprocess.run(["git", "config", "-f", str(base / ".git" / "config"),
+                    "filter.x.clean", f"touch {shlex.quote(str(ran))}; cat"], check=True)
+    (base / ".git" / "info" / "attributes").write_text("* filter=x\n", encoding="utf-8")
+    (base / "src" / "a.py").touch()
+    result, dest = copy_from(repo, base, tmp_path, "filter")
+    assert_refused(result, dest, "filter.x.clean")
+    assert not ran.exists()
+
+
+def test_the_files_digest_is_checked_before_git_runs_on_the_base(make_repo, tmp_path,
+                                                                  monkeypatch):
+    import throwaway
+
+    repo = make_repo({"src/a.py": "x = 1\n"})
+    commit(repo)
+    base = new_base(repo, tmp_path, "order")
+    sealed = (base / ".git" / "bug-hunter-seal").read_text(encoding="utf-8")
+    assert throwaway._unchanged(base, sealed)
+    (base / ".git" / "info" / "exclude").write_text("changed\n", encoding="utf-8")
+
+    def no_git(*args, **kwargs):
+        raise AssertionError("git ran on a base whose .git text had changed")
+
+    monkeypatch.setattr(throwaway, "_git", no_git)
+    assert not throwaway._unchanged(base, sealed)
+
+
+def test_index_flags_that_hide_edits_are_part_of_the_seal(make_repo, tmp_path):
+    repo = make_repo({"src/a.py": "x = 1\n"})
+    commit(repo)
+    for flag in ("--skip-worktree", "--assume-unchanged"):
+        base = new_base(repo, tmp_path, flag.strip("-"))
+        git(base, "update-index", flag, "src/a.py")
+        (base / "src" / "a.py").write_text("hidden edit\n", encoding="utf-8")
+        result, dest = copy_from(repo, base, tmp_path, flag.strip("-"))
+        assert_refused(result, dest, "changed after it was made")
+
+
+def test_the_seal_does_not_depend_on_the_callers_git_ignore_files(make_repo, tmp_path):
+    repo = make_repo({"src/a.py": "x = 1\n"})
+    commit(repo)
+    (repo / "x.log").write_text("staged\n", encoding="utf-8")
+    git(repo, "add", "x.log")
+    ignoring, plain = tmp_path / "cfg a", tmp_path / "cfg b"
+    (ignoring / "git").mkdir(parents=True)
+    (ignoring / "git" / "ignore").write_text("*.log\n", encoding="utf-8")
+    plain.mkdir()
+    base = tmp_path / "run home" / "base"
+    made = run_script("throwaway", repo, base,
+                      env={**os.environ, "XDG_CONFIG_HOME": str(ignoring)})
+    assert made.returncode == 0, made.stderr
+    dest = tmp_path / "run home" / "copy"
+    result = run_script("throwaway", repo, dest, "--base", base,
+                        env={**os.environ, "XDG_CONFIG_HOME": str(plain)})
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="named pipes are POSIX only")
+def test_a_pipe_under_the_base_git_is_refused_not_waited_for(make_repo, tmp_path):
+    repo = make_repo({"src/a.py": "x = 1\n"})
+    commit(repo)
+    base = new_base(repo, tmp_path, "pipe")
+    os.mkfifo(base / ".git" / "hooks" / "pipe")
+    dest = tmp_path / "run pipe" / "copy"
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "throwaway.py"), str(repo), str(dest), "--base", str(base)],
+        capture_output=True, text=True, timeout=60)
+    assert_refused(result, dest, "changed after it was made")
+
+
+def test_refs_named_like_skipped_folders_are_still_sealed(make_repo, tmp_path):
+    repo = make_repo({"src/a.py": "x = 1\n"})
+    commit(repo)
+    git(repo, "checkout", "-q", "-b", "logs/main")
+    base = new_base(repo, tmp_path, "logs")
+    # Not `git commit`, which also writes COMMIT_EDITMSG and would be caught by that alone.
+    other = subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(base), "commit-tree",
+         "HEAD^{tree}", "-p", "HEAD", "-m", "x"], capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    git(base, "update-ref", "refs/heads/logs/main", other)
+    result, dest = copy_from(repo, base, tmp_path, "logs")
+    assert_refused(result, dest, "changed after it was made")
+
+
+def test_a_file_that_was_untracked_in_the_base_at_birth_is_sealed_by_content(make_repo,
+                                                                             tmp_path):
+    repo = make_repo({"src/a.py": "x = 1\n"})
+    commit(repo)
+    (repo / "n.py").write_text("new = 1\n", encoding="utf-8")
+    git(repo, "add", "n.py")
+    base = new_base(repo, tmp_path, "untracked")
+    result, dest = copy_from(repo, base, tmp_path, "before")
+    assert result.returncode == 0, result.stderr
+    (base / "n.py").write_text("new = 2\n", encoding="utf-8")
+    result, dest = copy_from(repo, base, tmp_path, "after")
+    assert_refused(result, dest, "changed after it was made")

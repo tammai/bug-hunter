@@ -1,8 +1,10 @@
 """Make a throwaway copy of a repo that nothing run inside it can reach back out of."""
 
 import argparse
+import hashlib
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -29,6 +31,101 @@ def _escaping_links(root: Path) -> list[str]:
 
 
 MARKER = "bug-hunter-base"
+SEAL = "bug-hunter-seal"
+# Git's own bookkeeping, at the top of .git, that changes without anyone changing the code,
+# and the two files that hold what is being compared.
+_UNSEALED = {"index", MARKER, SEAL}
+_BIG = {"objects", "logs"}
+
+
+def _seal_files(root: Path) -> str | None:
+    """A hash of every small file under root/.git: config, HEAD, hooks, refs, info."""
+    # Not the objects: reading the whole repo for every copy would cost what copy-on-write
+    # saves. Pure Python on purpose: this runs before any git command, so a base whose config
+    # was changed is refused without running what it names (fsmonitor, a filter).
+    digest = hashlib.sha256()
+    git_dir = root / ".git"
+    try:
+        for folder, dirs, files in os.walk(git_dir):
+            top = Path(folder) == git_dir
+            dirs[:] = sorted(d for d in dirs if not (top and d in _BIG))
+            for name in sorted(files):
+                path = Path(folder) / name
+                if name.endswith(".lock") or (top and name in _UNSEALED):
+                    continue
+                # A pipe or device here would block the read; git never makes one.
+                if not stat.S_ISREG(os.lstat(path).st_mode):
+                    return None
+                digest.update(path.relative_to(git_dir).as_posix().encode() + b"\0")
+                digest.update(path.read_bytes() + b"\0")
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def _pinned(root: Path) -> tuple[list[str], dict[str, str]]:
+    """Git options and environment for reading a base's state, whatever the caller's config."""
+    # The caller differs between the orchestrator and an agent (HOME is moved): its global
+    # ignore and attributes files, and the commands config can name, must not change the answer.
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    options = ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+               "-c", f"core.excludesFile={os.devnull}", "-c", f"core.attributesFile={os.devnull}",
+               "-c", "status.showUntrackedFiles=all", "-C", str(root)]
+    return options, env
+
+
+def _seal_status(root: Path) -> str | None:
+    """A hash of git's own view of the tree: status with ignored files, and the index flags."""
+    # Only run once _seal_files matched, so .git/config is still the clone's own.
+    options, env = _pinned(root)
+    status = _git(*options, "status", "--porcelain=v1", "-z", "--ignored",
+                  "--ignore-submodules=all", env=env)
+    # skip-worktree and assume-unchanged hide edits from status, so their flags are sealed.
+    flags = _git(*options, "ls-files", "-v", "-z", env=env)
+    if status.returncode != 0 or flags.returncode != 0:
+        return None
+    return hashlib.sha256(status.stdout + b"\0" + flags.stdout).hexdigest()
+
+
+def _seal_untracked(root: Path) -> str | None:
+    """A hash of the contents of files git doesn't track, which status lists by name only."""
+    # A base has few: the new files of the owner's uncommitted changes, which git apply leaves
+    # untracked. Without this an edit to one of them would leave the seal unchanged.
+    options, env = _pinned(root)
+    listing = _git(*options, "ls-files", "-o", "-z", env=env)
+    if listing.returncode != 0:
+        return None
+    digest = hashlib.sha256()
+    try:
+        for name in sorted(listing.stdout.split(b"\0")):
+            if not name:
+                continue
+            path = root / os.fsdecode(name)
+            kind = os.lstat(path).st_mode
+            digest.update(name + b"\0")
+            if stat.S_ISLNK(kind):
+                digest.update(os.fsencode(os.readlink(path)))
+            elif stat.S_ISREG(kind):
+                with open(path, "rb") as handle:
+                    while chunk := handle.read(1 << 16):
+                        digest.update(chunk)
+            else:
+                return None
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def _seal(root: Path) -> str | None:
+    parts = (_seal_files(root), _seal_status(root), _seal_untracked(root))
+    return None if None in parts else "\n".join(parts)
+
+
+def _unchanged(base: Path, sealed: str) -> bool:
+    """Whether base still matches its seal, looking at its files first and git only after."""
+    files, status, untracked = (sealed.strip().split("\n") + ["", ""])[:3]
+    return (_seal_files(base) == files and _seal_status(base) == status
+            and _seal_untracked(base) == untracked)
 
 
 def _git_links(root: Path) -> list[str]:
@@ -84,6 +181,11 @@ def _make(repo: Path, dest: Path, base: Path | None = None) -> str | None:
     if why := _refuse_escaping_links(dest):
         return why
     (dest / ".git" / MARKER).write_text(str(repo), encoding="utf-8")
+    sealed = _seal(dest)
+    if sealed is None:
+        shutil.rmtree(dest)
+        return "couldn't read the copy's .git and status to seal it"
+    (dest / ".git" / SEAL).write_text(sealed, encoding="utf-8")
     return None
 
 
@@ -106,14 +208,16 @@ def _git_points_out(git_dir: Path) -> str | None:
     try:
         found = subprocess.run(
             ["git", "config", "--file", str(git_dir / "config"), "--name-only", "--get-regexp",
-             r"^(core\.worktree|include\.path|includeif\..*\.path)$"],
+             r"^(core\.worktree|core\.fsmonitor|core\.hookspath|include\.path|includeif\..*\.path"
+             r"|filter\..*\.(clean|smudge|process)|diff\..*\.(textconv|command))$"],
             capture_output=True, text=True)
     except OSError:
         return ".git/config can't be read"
     if found.returncode not in (0, 1):
         return ".git/config can't be read"
     if names := found.stdout.split():
-        return ".git/config sets " + ", ".join(names) + ", which point outside the copy"
+        return ".git/config sets " + ", ".join(names) + ", which name a command or a " \
+            "path outside the copy"
     return None
 
 
@@ -137,6 +241,16 @@ def _copy_base(repo: Path, base: Path, dest: Path) -> str | None:
         return "symlinks in the base's .git, which git never makes: " + ", ".join(git_links)
     if why := _git_points_out(base / ".git"):
         return f"the base's {why}"
+    # Anything else a repro changed since the base was made: a hook, a config value, a file.
+    try:
+        sealed = (base / ".git" / SEAL).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return f"{base} has no seal, so it wasn't made by this version of throwaway.py; " \
+            "make a new base"
+    changed = f"{base} changed after it was made, so a copy could run code the hunt didn't " \
+        "start with; make a new base"
+    if not _unchanged(base, sealed):
+        return changed
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
@@ -159,6 +273,9 @@ def _copy_base(repo: Path, base: Path, dest: Path) -> str | None:
     if _git_links(dest) or _git_points_out(dest / ".git"):
         shutil.rmtree(dest)
         return "the copy's .git changed while copying to reach outside the copy"
+    if not _unchanged(base, sealed):
+        shutil.rmtree(dest)
+        return changed
     return _refuse_escaping_links(dest)
 
 

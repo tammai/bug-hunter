@@ -1,6 +1,7 @@
 """Make, clean up and sweep the temp folders /hunt and /audit run in."""
 
 import argparse
+import errno
 import json
 import os
 import shutil
@@ -143,6 +144,8 @@ def _empty_dir(fd: int, shown: str, errors: list[str], skip: tuple = ()) -> None
                 os.unlink(name, dir_fd=fd)
         except FileNotFoundError:
             pass
+        except RecursionError:
+            errors.append(f"{full}: nested too deeply to remove")
         except OSError as exc:
             errors.append(f"{full}: {exc.strerror}")
 
@@ -150,7 +153,9 @@ def _empty_dir(fd: int, shown: str, errors: list[str], skip: tuple = ()) -> None
 def _remove_dir(name: str, parent: int, shown: str, errors: list[str]) -> None:
     try:
         fd = _open_dir(name, parent)
-    except OSError:
+    except OSError as exc:
+        if exc.errno not in (errno.ELOOP, errno.ENOTDIR, errno.ENOENT):
+            raise
         # Swapped for a link or a file after it was listed: remove that entry, never what a
         # link names.
         os.unlink(name, dir_fd=parent)
@@ -207,8 +212,28 @@ def _clean_windows(run: Path, keep: str | None, errors: list[str]) -> None:
                 _remove_tree_windows(entry.path, errors)
             else:
                 _unlink(entry.path)
+        except FileNotFoundError:
+            pass
         except OSError as exc:
             errors.append(f"{entry.path}: {exc.strerror}")
+
+
+def _allow_deep_trees() -> int:
+    """Raise the limits a deep tree hits; returns the recursion limit to put back."""
+    # The walk holds one open folder handle per level and takes a few Python frames per level.
+    # macOS refuses an open-file limit above 10240.
+    try:
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        wanted = 10240 if hard == resource.RLIM_INFINITY else min(hard, 10240)
+        if soft != resource.RLIM_INFINITY and soft < wanted:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (wanted, hard))
+    except (ImportError, ValueError, OSError):
+        pass
+    before = sys.getrecursionlimit()
+    sys.setrecursionlimit(max(before, 40000))
+    return before
 
 
 def _clean(run: Path, keep: str | None) -> list[str]:
@@ -224,6 +249,7 @@ def _clean(run: Path, keep: str | None) -> list[str]:
             fd = os.open(run, DIR_FLAGS)
         except OSError as exc:
             return [f"{run}: {exc.strerror}"]
+        recursion = _allow_deep_trees()
         try:
             _empty_dir(fd, str(run), errors, skip=(MARKER, keep))
             if keep is None and not errors:
@@ -231,6 +257,7 @@ def _clean(run: Path, keep: str | None) -> list[str]:
         except OSError as exc:
             errors.append(f"{run / MARKER}: {exc.strerror}")
         finally:
+            sys.setrecursionlimit(recursion)
             os.close(fd)
     if keep is None and not errors:
         try:

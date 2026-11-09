@@ -2,11 +2,13 @@ import json
 import os
 import re
 import stat
+import subprocess
+import sys
 import time
 from pathlib import Path
 
 import pytest
-from conftest import run_script
+from conftest import SCRIPTS, run_script
 
 SIZE = r"\d+(\.\d)? (B|KB|MB|GB)"
 
@@ -330,3 +332,85 @@ def test_an_unlistable_run_folder_gives_an_error_not_a_traceback(temp_env):
         assert result.returncode == 0 and "Traceback" not in result.stderr, result.stderr
     finally:
         os.chmod(run, 0o700)
+
+
+def make_deep(top: str, depth: int) -> None:
+    fd = os.open(top, os.O_RDONLY)
+    try:
+        for _ in range(depth):
+            os.mkdir("d", dir_fd=fd)
+            inner = os.open("d", os.O_RDONLY, dir_fd=fd)
+            os.close(fd)
+            fd = inner
+    finally:
+        os.close(fd)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the descriptor walk is POSIX only")
+def test_clean_removes_a_tree_deeper_than_the_default_limits(temp_env):
+    import resource
+
+    _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if hard != resource.RLIM_INFINITY and hard < 2000:
+        pytest.skip("the hard open-file limit is too low for a deep tree")
+    _, env = temp_env
+    run = new_run(env)
+    top = os.path.join(run, "hunter-1")
+    os.makedirs(top)
+    make_deep(top, 600)
+
+    def small_soft_limit():
+        # What a shell gives by default on macOS: fewer handles than the tree has levels.
+        resource.setrlimit(resource.RLIMIT_NOFILE, (256, hard))
+
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "scratch.py"), "clean", run], env=env,
+        capture_output=True, text=True, preexec_fn=small_soft_limit)
+    assert result.returncode == 0, result.stderr
+    assert "Traceback" not in result.stderr and not os.path.exists(run)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the descriptor walk is POSIX only")
+def test_clean_names_the_real_reason_when_a_folder_cant_be_opened(temp_env, monkeypatch):
+    import errno
+
+    import scratch
+
+    temp, env = temp_env
+    monkeypatch.setenv("TMPDIR", str(temp))
+    run = new_run(env)
+    victim = os.path.join(run, "hunter-1", "victim")
+    os.makedirs(victim)
+    with open(os.path.join(victim, "f"), "w", encoding="utf-8") as out:
+        out.write("x")
+    real_open = os.open
+
+    def fake_open(path, *args, **kwargs):
+        if kwargs.get("dir_fd") is not None and path == "victim":
+            raise OSError(errno.EMFILE, os.strerror(errno.EMFILE))
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", fake_open)
+    errors = scratch._clean(Path(run), None)
+    monkeypatch.undo()
+    assert any("victim" in e and "Too many open files" in e for e in errors), errors
+    assert os.path.exists(os.path.join(victim, "f"))
+    assert os.path.exists(os.path.join(run, ".bug-hunter-run"))
+
+
+def test_windows_clean_ignores_a_top_level_file_that_vanishes(temp_env, monkeypatch):
+    import scratch
+
+    temp, env = temp_env
+    monkeypatch.setenv("TMPDIR", str(temp))
+    run = new_run(env)
+    with open(os.path.join(run, "fingerprints.json"), "w", encoding="utf-8") as out:
+        out.write("x")
+
+    def gone(path):
+        raise FileNotFoundError(2, "No such file or directory", path)
+
+    monkeypatch.setattr(scratch, "_unlink", gone)
+    errors: list[str] = []
+    scratch._clean_windows(Path(run), None, errors)
+    assert errors == []

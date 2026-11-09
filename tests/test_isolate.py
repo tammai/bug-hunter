@@ -705,3 +705,34 @@ def test_download_caches_are_shared_through_the_run_cache(tmp_path):
         result = subprocess.run([BASH, "-c", line], env=env, capture_output=True, text=True)
         assert result.returncode != 0 and not marker.exists(), cache_path
         assert "error:" in result.stderr and "Traceback" not in result.stderr, cache_path
+
+
+@pytest.mark.skipif(WINDOWS or os.geteuid() == 0,
+                    reason="POSIX permissions and symlinks, which root and Windows differ on")
+def test_cache_marker_check_never_raises(tmp_path):
+    def isolate(cache):
+        return subprocess.run(
+            [sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(tmp_path / "s"),
+             "--cache", str(cache)],
+            env={"PATH": os.environ["PATH"], "HOME": str(tmp_path / "home")},
+            capture_output=True, text=True)
+
+    unsearchable = tmp_path / "bug-hunter-a"
+    unsearchable.mkdir()
+    (unsearchable / ".bug-hunter-run").write_text("{}", encoding="utf-8")
+    unsearchable.chmod(0o600)
+    linked = tmp_path / "bug-hunter-b"
+    linked.mkdir()
+    real = tmp_path / "somewhere"
+    real.write_text("{}", encoding="utf-8")
+    os.symlink(real, linked / ".bug-hunter-run")
+    folder = tmp_path / "bug-hunter-c"
+    (folder / ".bug-hunter-run").mkdir(parents=True)
+    try:
+        for parent in (unsearchable, linked, folder):
+            result = isolate(parent / "cache")
+            assert result.returncode == 1, (parent, result.stderr)
+            assert result.stderr.startswith("error:") and "Traceback" not in result.stderr, (
+                parent, result.stderr)
+    finally:
+        unsearchable.chmod(0o700)
