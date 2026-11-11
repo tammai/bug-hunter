@@ -38,6 +38,34 @@ _UNSEALED = {"index", MARKER, SEAL}
 _BIG = {"objects", "logs"}
 
 
+_READ_ONLY = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | \
+    getattr(os, "O_BINARY", 0)
+
+
+def _hash_entry(digest, name: bytes, path: Path) -> bool:
+    """Add a path's name, type, mode and contents to digest; False for a pipe or device."""
+    # Every field is fixed-size or length-prefixed, so no bytes can move from one entry into
+    # the next, and a file and a link holding the same bytes hash apart.
+    info = os.lstat(path)
+    if stat.S_ISLNK(info.st_mode):
+        kind, body = b"L", hashlib.sha256(os.fsencode(os.readlink(path))).digest()
+    elif stat.S_ISREG(info.st_mode):
+        # No-follow and non-blocking: a pipe or link swapped in after the lstat is not read.
+        with os.fdopen(os.open(path, _READ_ONLY), "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                return False
+            body = hashlib.file_digest(handle, "sha256").digest()
+        kind = b"F"
+    elif stat.S_ISDIR(info.st_mode):
+        # A folder's contents are the tree walk's; here it only has to differ from a file.
+        kind, body = b"T", b""
+    else:
+        return False
+    digest.update(len(name).to_bytes(4, "big") + name + kind
+                  + stat.S_IMODE(info.st_mode).to_bytes(2, "big") + body)
+    return True
+
+
 def _seal_files(root: Path) -> str | None:
     """A hash of every small file under root/.git: config, HEAD, hooks, refs, info."""
     # Not the objects: reading the whole repo for every copy would cost what copy-on-write
@@ -53,12 +81,48 @@ def _seal_files(root: Path) -> str | None:
                 path = Path(folder) / name
                 if name.endswith(".lock") or (top and name in _UNSEALED):
                     continue
-                # A pipe or device here would block the read; git never makes one.
-                if not stat.S_ISREG(os.lstat(path).st_mode):
+                # git never makes a link, pipe or device here, and a pipe would block the read.
+                if not stat.S_ISREG(os.lstat(path).st_mode) or not _hash_entry(
+                        digest, os.fsencode(path.relative_to(git_dir).as_posix()), path):
                     return None
-                digest.update(path.relative_to(git_dir).as_posix().encode() + b"\0")
-                digest.update(path.read_bytes() + b"\0")
-    except OSError:
+    # ValueError: a name the filesystem encoding can't hold.
+    except (OSError, ValueError):
+        return None
+    return digest.hexdigest()
+
+
+def _seal_tree(root: Path) -> str | None:
+    """A hash of every entry in root's working tree: name, type, mode, and a file's size and
+    modification time."""
+    # Status hides what git doesn't track (a .git below the top, a pipe, an empty folder, a
+    # submodule's files), so the tree is walked here. Contents are left to status, which
+    # names the paths worth reading. Pure Python, like _seal_files, so it runs before git.
+    digest = hashlib.sha256()
+    try:
+        for folder, dirs, files in os.walk(root):
+            if folder == str(root):
+                dirs[:] = [d for d in dirs if d != ".git"]
+            dirs.sort()
+            for name in sorted(dirs + files):
+                # Any spelling a case-insensitive filesystem treats as .git is a repo git would
+                # enter from there, with its own config and hooks.
+                if name.lower() == ".git":
+                    return None
+                path = Path(folder) / name
+                info = os.lstat(path)
+                mode = stat.S_IMODE(info.st_mode).to_bytes(2, "big")
+                if stat.S_ISDIR(info.st_mode):
+                    record = b"T" + mode
+                elif stat.S_ISLNK(info.st_mode):
+                    record = b"L" + mode + hashlib.sha256(os.fsencode(os.readlink(path))).digest()
+                elif stat.S_ISREG(info.st_mode):
+                    record = b"F" + mode + info.st_size.to_bytes(8, "big") \
+                        + info.st_mtime_ns.to_bytes(9, "big", signed=True)
+                else:
+                    return None
+                rel = os.fsencode(path.relative_to(root).as_posix())
+                digest.update(len(rel).to_bytes(4, "big") + rel + record)
+    except (OSError, ValueError):
         return None
     return digest.hexdigest()
 
@@ -67,7 +131,10 @@ def _pinned(root: Path) -> tuple[list[str], dict[str, str]]:
     """Git options and environment for reading a base's state, whatever the caller's config."""
     # The caller differs between the orchestrator and an agent (HOME is moved): its global
     # ignore and attributes files, and the commands config can name, must not change the answer.
-    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    # Its GIT_* variables too: set inside a hook or alias, they move the index, the repo or
+    # the config git reads.
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
+    env |= {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
     options = ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
                "-c", f"core.excludesFile={os.devnull}", "-c", f"core.attributesFile={os.devnull}",
                "-c", "status.showUntrackedFiles=all", "-C", str(root)]
@@ -107,22 +174,14 @@ def _seal_git(root: Path) -> tuple[str, str] | None:
     try:
         for name in sorted(_status_paths(status.stdout)):
             path = root / os.fsdecode(name)
-            contents.update(name + b"\0")
             try:
-                kind = os.lstat(path).st_mode
-            except FileNotFoundError:
-                contents.update(b"\0deleted\0")
-                continue
-            if stat.S_ISLNK(kind):
-                contents.update(os.fsencode(os.readlink(path)))
-            elif stat.S_ISREG(kind):
-                with open(path, "rb") as handle:
-                    while chunk := handle.read(1 << 16):
-                        contents.update(chunk)
-            else:
-                return None
-            contents.update(b"\0")
-    except OSError:
+                if not _hash_entry(contents, name, path):
+                    return None
+            except (FileNotFoundError, NotADirectoryError):
+                # Deleted, or a folder on its way was replaced by a file.
+                contents.update(len(name).to_bytes(4, "big") + name + b"D")
+    # ValueError: a name Windows can't decode.
+    except (OSError, ValueError):
         return None
     return (hashlib.sha256(status.stdout + b"\0" + flags.stdout).hexdigest(),
             contents.hexdigest())
@@ -130,17 +189,18 @@ def _seal_git(root: Path) -> tuple[str, str] | None:
 
 def _seal(root: Path) -> str | None:
     files = _seal_files(root)
-    view = _seal_git(root) if files is not None else None
-    return None if view is None else "\n".join((files, *view))
+    tree = _seal_tree(root) if files is not None else None
+    view = _seal_git(root) if tree is not None else None
+    return None if view is None else "\n".join((files, tree, *view))
 
 
 def _unchanged(base: Path, sealed: str) -> bool:
     """Whether base still matches its seal, looking at its files first and git only after."""
-    parts = (sealed.strip().split("\n") + ["", ""])[:3]
-    if _seal_files(base) != parts[0]:
+    parts = (sealed.strip().split("\n") + ["", "", ""])[:4]
+    if _seal_files(base) != parts[0] or _seal_tree(base) != parts[1]:
         return False
     view = _seal_git(base)
-    return view is not None and list(view) == parts[1:]
+    return view is not None and list(view) == parts[2:]
 
 
 def _git_links(root: Path) -> list[str]:
@@ -225,7 +285,7 @@ def _git_points_out(git_dir: Path) -> str | None:
             ["git", "config", "--file", str(git_dir / "config"), "--name-only", "--get-regexp",
              r"^(core\.worktree|core\.fsmonitor|core\.hookspath|include\.path|includeif\..*\.path"
              r"|filter\..*\.(clean|smudge|process)|diff\..*\.(textconv|command))$"],
-            capture_output=True, text=True)
+            capture_output=True, text=True, cwd=tempfile.gettempdir())
     except OSError:
         return ".git/config can't be read"
     if found.returncode not in (0, 1):
@@ -307,16 +367,22 @@ def _main(argv: list[str] | None = None) -> int:
     try:
         # Absolute before git runs elsewhere (_git); an absolute path never reads the cwd.
         base = args.base.absolute() if args.base else None
-        why = _make(Path(args.repo).absolute(), Path(args.dest).absolute(), base)
+        repo, dest = Path(args.repo).absolute(), Path(args.dest).absolute()
+    except FileNotFoundError:
+        print("error: the current folder no longer exists, so relative paths can't be "
+              "resolved; give absolute ones", file=sys.stderr)
+        return 1
+    try:
+        why = _make(repo, dest, base)
     except FileNotFoundError:
         why = "git is not installed"
     except OSError as exc:
-        shutil.rmtree(args.dest, ignore_errors=True)
+        shutil.rmtree(dest, ignore_errors=True)
         why = f"couldn't copy: {exc}"
     if why:
         print(f"error: {why}", file=sys.stderr)
         return 1
-    print(Path(args.dest).resolve())
+    print(dest.resolve())
     return 0
 
 

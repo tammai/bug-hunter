@@ -256,22 +256,68 @@ def test_a_base_that_was_dirty_when_made_still_copies(make_repo, tmp_path):
 
 
 def test_a_file_that_was_changed_in_the_base_at_birth_is_sealed_by_content(make_repo, tmp_path):
-    repo = make_repo({"src/a.py": "x = 1\n", "src/b.py": "y = 1\n", ".gitignore": "*.log\n"})
+    repo = make_repo({"src/a.py": "x = 1\n", "src/b.py": "y = 1\n", ".gitignore": "*.log\n",
+                      "other.txt": "secret\n"})
     commit(repo)
-    (repo / "src" / "a.py").write_text("x = 2\n", encoding="utf-8")
+    # The NULs let bytes move from src/a.py into new.txt, the path listed before it.
+    (repo / "src" / "a.py").write_bytes(b"x\0src/a.py\0y")
     (repo / "src" / "b.py").unlink()
     (repo / "forced.log").write_text("kept\n", encoding="utf-8")
-    git(repo, "add", "-f", "forced.log")
+    (repo / "new.txt").write_bytes(b"other.txt")
+    git(repo, "add", "-f", "forced.log", "new.txt")
+
+    base = new_base(repo, tmp_path, "born dirty untouched")
+    result, dest = copy_from(repo, base, tmp_path, "born dirty untouched")
+    assert result.returncode == 0, result.stderr
+
+    def shift(b):
+        (b / "new.txt").write_bytes(b"other.txt\0src/a.py\0x")
+        (b / "src" / "a.py").write_bytes(b"y")
+
+    def link(b):
+        (b / "new.txt").unlink()
+        os.symlink("other.txt", b / "new.txt")
+
     changes = {
         "edit": lambda b: (b / "src" / "a.py").write_text("x = 3\n", encoding="utf-8"),
         "recreate": lambda b: (b / "src" / "b.py").write_text("y = 2\n", encoding="utf-8"),
         "ignored": lambda b: (b / "forced.log").write_text("changed\n", encoding="utf-8"),
+        "shift": shift,
     }
+    if os.name != "nt":
+        # Windows has no executable bit, and symlinks need rights the tests can't assume.
+        changes["mode"] = lambda b: (b / "src" / "a.py").chmod(0o755)
+        changes["link"] = link
     for label, change in changes.items():
         base = new_base(repo, tmp_path, f"born dirty {label}")
         change(base)
         result, dest = copy_from(repo, base, tmp_path, f"born dirty {label}")
         assert_refused(result, dest, "changed after it was made")
+
+
+def test_a_base_born_with_a_folder_turned_into_a_file_still_copies(make_repo, tmp_path):
+    repo = make_repo({"src/b.py": "y = 1\n", "keep.py": "k = 1\n"})
+    commit(repo)
+    (repo / "src" / "b.py").unlink()
+    (repo / "src").rmdir()
+    (repo / "src").write_text("now a file\n", encoding="utf-8")
+    git(repo, "add", "-A")
+    base = new_base(repo, tmp_path, "folder to file")
+    result, dest = copy_from(repo, base, tmp_path, "folder to file")
+    assert result.returncode == 0, result.stderr
+    assert (dest / "src").read_text(encoding="utf-8") == "now a file\n"
+
+
+def test_the_seal_does_not_depend_on_the_callers_git_environment(make_repo, tmp_path):
+    repo = make_repo({"src/a.py": "x = 1\n"})
+    commit(repo)
+    base = new_base(repo, tmp_path, "env")
+    # Set when the caller runs inside a git hook or alias; an empty index lists every file.
+    env = {**os.environ, "GIT_INDEX_FILE": str(tmp_path / "no index"),
+           "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "status.relativePaths",
+           "GIT_CONFIG_VALUE_0": "true"}
+    result = run_script("throwaway", repo, tmp_path / "run env" / "copy", "--base", base, env=env)
+    assert result.returncode == 0, result.stderr
 
 
 def test_base_refuses_git_text_changed_after_it_was_made(make_repo, tmp_path):
@@ -377,6 +423,105 @@ def test_a_pipe_under_the_base_git_is_refused_not_waited_for(make_repo, tmp_path
         [sys.executable, str(SCRIPTS / "throwaway.py"), str(repo), str(dest), "--base", str(base)],
         capture_output=True, text=True, timeout=60)
     assert_refused(result, dest, "changed after it was made")
+
+
+def test_a_git_planted_below_the_top_of_the_base_is_refused(make_repo, tmp_path):
+    repo = make_repo({"src/a.py": "x = 1\n"})
+    commit(repo)
+    ran = tmp_path / "ran by the base"
+
+    def gitfile(b):
+        (b / "src" / ".git").write_text(f"gitdir: {repo / '.git'}\n", encoding="utf-8")
+
+    def git_folder(b):
+        subprocess.run(["git", "init", "-q", str(b / "src")], check=True)
+        subprocess.run(["git", "config", "-f", str(b / "src" / ".git" / "config"),
+                        "core.fsmonitor", f"touch {shlex.quote(str(ran))}"], check=True)
+
+    for label, change in {"gitfile": gitfile, "git folder": git_folder}.items():
+        base = new_base(repo, tmp_path, label)
+        change(base)
+        result, dest = copy_from(repo, base, tmp_path, label)
+        assert_refused(result, dest, "changed after it was made")
+    assert not ran.exists()
+
+
+def test_a_base_born_with_a_file_turned_into_a_folder_still_copies(make_repo, tmp_path):
+    repo = make_repo({"foo": "x\n", "keep.py": "k = 1\n"})
+    commit(repo)
+    (repo / "foo").unlink()
+    (repo / "foo").mkdir()
+    (repo / "foo" / "bar").write_text("y\n", encoding="utf-8")
+    git(repo, "add", "-A")
+    base = new_base(repo, tmp_path, "file to folder")
+    result, dest = copy_from(repo, base, tmp_path, "file to folder")
+    assert result.returncode == 0, result.stderr
+    assert (dest / "foo" / "bar").read_text(encoding="utf-8") == "y\n"
+
+
+def test_what_git_status_never_lists_is_still_sealed(make_repo, tmp_path):
+    repo = make_repo({"src/a.py": "x = 1\n"})
+    commit(repo)
+    changes = {"empty folder": lambda b: (b / "src" / "empty").mkdir()}
+    if os.name != "nt":
+        changes["pipe"] = lambda b: os.mkfifo(b / "src" / "pipe")
+    for label, change in changes.items():
+        base = new_base(repo, tmp_path, label)
+        change(base)
+        dest = tmp_path / f"run {label}" / "copy"
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "throwaway.py"), str(repo), str(dest), "--base",
+             str(base)], capture_output=True, text=True, timeout=60)
+        assert_refused(result, dest, "changed after it was made")
+
+
+def test_a_name_under_git_that_isnt_utf8_is_sealed_not_a_traceback(make_repo, tmp_path,
+                                                                    monkeypatch):
+    import throwaway
+
+    # macOS and Windows can't hold such a name, so the walk is made to report one (a Latin-1
+    # branch name on Linux) backed by a real file.
+    repo = make_repo({"src/a.py": "x = 1\n"})
+    commit(repo)
+    base = new_base(repo, tmp_path, "latin1")
+    git_dir = base / ".git"
+    real = git_dir / "HEAD"
+    odd = "caf\udce9"
+    walk, lstat, open_ = os.walk, os.lstat, os.open
+
+    def swap(p):
+        return real if str(p).endswith(odd) else p
+
+    monkeypatch.setattr(throwaway.os, "walk", lambda top: (
+        (f, d, f_ + [odd] if f == str(git_dir) else f_) for f, d, f_ in walk(top)))
+    monkeypatch.setattr(throwaway.os, "lstat", lambda p: lstat(swap(p)))
+    monkeypatch.setattr(throwaway.os, "open", lambda p, *a: open_(swap(p), *a))
+    assert isinstance(throwaway._seal_files(base), str)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows can't delete the current folder")
+def test_a_copy_from_a_deleted_current_folder_still_copies(make_repo, tmp_path):
+    repo = make_repo({"src/a.py": "x = 1\n"})
+    commit(repo)
+    base = new_base(repo, tmp_path, "cwd")
+    gone = tmp_path / "run cwd" / "old copy"
+    gone.mkdir()
+    dest = tmp_path / "run cwd" / "copy"
+    # A hunter replacing its copy runs this from inside the folder it just deleted.
+    script = f"cd {shlex.quote(str(gone))} && rmdir {shlex.quote(str(gone))} && exec " + \
+        " ".join(shlex.quote(str(a)) for a in
+                 (sys.executable, SCRIPTS / "throwaway.py", repo, dest, "--base", base))
+    result = subprocess.run(["sh", "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+    # A relative path can't be resolved there: the error says so, not that git is missing.
+    gone.mkdir()
+    script = f"cd {shlex.quote(str(gone))} && rmdir {shlex.quote(str(gone))} && exec " + \
+        " ".join(shlex.quote(str(a)) for a in
+                 (sys.executable, SCRIPTS / "throwaway.py", repo, "relative copy"))
+    result = subprocess.run(["sh", "-c", script], capture_output=True, text=True)
+    assert result.returncode == 1 and "current folder" in result.stderr, result.stderr
+    assert "Traceback" not in result.stderr
 
 
 def test_refs_named_like_skipped_folders_are_still_sealed(make_repo, tmp_path):
