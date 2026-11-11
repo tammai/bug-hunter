@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Shared contracts 1.2.0**, vendored byte-identical in `contracts/v1/` from product-rebuild. C3's level 1 now needs a SUPPORTED verdict, and an `[inferred]` criterion never reaches it by audit; no field or format changes, so findings and the scripts that read specs are unaffected ([change](docs/sdlc/changes/2026-11-11-s-contracts-1-2-0.md)).
+
 ## 0.5.0 — 2026-11-09
 
 A multi-agent `/hunt` on a large repo left 18 GB of working files. A run now costs about one clone, one download cache and what each agent installs, and cleans up after itself ([change](docs/sdlc/changes/2026-11-07-l-lean-scratch.md)).
