@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.1 — 2026-11-11
+
+The shared contracts move to 1.3.0: a criterion's level 1 now needs a source, and the lock check enforces it. Nothing bug-hunter writes or reads changes.
+
 ### Changed
 
 - **Shared contracts 1.3.0**, vendored byte-identical in `contracts/v1/` from product-rebuild. `check_lock` now reports an error for a criterion tagged `inferred` at level 1, and a new invalid fixture proves it in `vendor-check`; no field or format changes ([change](docs/sdlc/changes/2026-11-11-s-contracts-1-3-0.md)).
