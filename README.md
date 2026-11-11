@@ -129,7 +129,7 @@ For a pipeline such as product-rebuild, which runs `/hunt` unattended and routes
 
 Run the steps in order, each in a fresh shell started at the repo's root; `stdout` is what each printed, stdout and stderr together, as `2>&1` writes them. Each step stands alone: files an earlier step wrote are still there, but no `cd`, `export` or shell variable carries over (known limit: shell state shared between steps isn't supported yet). `env` (live hunts only) names the variables the steps read, from the draft's `Set before running:` line. In this mode the JSON is the source: the hunter writes the steps as a `## Repro (finding-v1)` section holding one fenced JSON list, `scripts/finding_v1.py render` writes the draft's visible Steps from it, the verifier re-runs the JSON steps (instead of the rendered Steps), and `finding_v1.py write` writes the finding from the list the verifier reproduced. In the rendered Steps each command starts with `$ `; a line inside a heredoc body or an output that happens to start with `$ ` is not a command. The JSON is what runs.
 
-The contracts are vendored, byte-identical, in `contracts/v1/` (version 1.2.0); `python3 contracts/v1/contracts.py finding <file>` checks a finding.
+The contracts are vendored, byte-identical, in `contracts/v1/` (version 1.3.0); `python3 contracts/v1/contracts.py finding <file>` checks a finding.
 
 ### Hunt against a spec (0.4, unreleased)
 
