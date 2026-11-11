@@ -9,7 +9,7 @@
     {
       "name": "bug-hunter",
       "source": "./",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "description": "Hunts edge-case bugs in a repo, proves each with a repro a separate verifier re-runs, and writes an issue draft per bug. Never posts on its own: /hunt-post files only the drafts you name.",
       "license": "MIT",
       "author": {
