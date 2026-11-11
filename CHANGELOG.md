@@ -4,6 +4,7 @@
 
 ### Changed
 
+- **Shared contracts 1.3.0**, vendored byte-identical in `contracts/v1/` from product-rebuild. `check_lock` now reports an error for a criterion tagged `inferred` at level 1, and a new invalid fixture proves it in `vendor-check`; no field or format changes ([change](docs/sdlc/changes/2026-11-11-s-contracts-1-3-0.md)).
 - **Shared contracts 1.2.0**, vendored byte-identical in `contracts/v1/` from product-rebuild. C3's level 1 now needs a SUPPORTED verdict, and an `[inferred]` criterion never reaches it by audit; no field or format changes, so findings and the scripts that read specs are unaffected ([change](docs/sdlc/changes/2026-11-11-s-contracts-1-2-0.md)).
 
 ## 0.5.0 — 2026-11-09
