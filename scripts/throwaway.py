@@ -74,8 +74,23 @@ def _pinned(root: Path) -> tuple[list[str], dict[str, str]]:
     return options, env
 
 
-def _seal_status(root: Path) -> str | None:
-    """A hash of git's own view of the tree: status with ignored files, and the index flags."""
+def _status_paths(status: bytes) -> list[bytes]:
+    """Every path in `git status --porcelain=v1 -z` output, ignored ones included."""
+    # Ignored too: a file the owner force-added but didn't commit lands in the base ignored.
+    paths, entries = [], iter(status.split(b"\0"))
+    for entry in entries:
+        if len(entry) < 4:
+            continue
+        code = entry[:2]
+        paths.append(entry[3:])
+        # A rename or copy is followed by its source path, which is not a separate entry.
+        if b"R" in code or b"C" in code:
+            next(entries, None)
+    return paths
+
+
+def _seal_git(root: Path) -> tuple[str, str] | None:
+    """Hashes of git's view of the tree (status and index flags) and of each listed path."""
     # Only run once _seal_files matched, so .git/config is still the clone's own.
     options, env = _pinned(root)
     status = _git(*options, "status", "--porcelain=v1", "-z", "--ignored",
@@ -84,48 +99,48 @@ def _seal_status(root: Path) -> str | None:
     flags = _git(*options, "ls-files", "-v", "-z", env=env)
     if status.returncode != 0 or flags.returncode != 0:
         return None
-    return hashlib.sha256(status.stdout + b"\0" + flags.stdout).hexdigest()
-
-
-def _seal_untracked(root: Path) -> str | None:
-    """A hash of the contents of files git doesn't track, which status lists by name only."""
-    # A base has few: the new files of the owner's uncommitted changes, which git apply leaves
-    # untracked. Without this an edit to one of them would leave the seal unchanged.
-    options, env = _pinned(root)
-    listing = _git(*options, "ls-files", "-o", "-z", env=env)
-    if listing.returncode != 0:
-        return None
-    digest = hashlib.sha256()
+    # Status names a path, not what it holds: a file already changed or untracked when the base
+    # was made (the owner's uncommitted changes; every text file on Windows, where the clone
+    # checks out with the system autocrlf the pinned status doesn't read) could be edited again
+    # and still give the same status. So each path it lists is sealed by content.
+    contents = hashlib.sha256()
     try:
-        for name in sorted(listing.stdout.split(b"\0")):
-            if not name:
-                continue
+        for name in sorted(_status_paths(status.stdout)):
             path = root / os.fsdecode(name)
-            kind = os.lstat(path).st_mode
-            digest.update(name + b"\0")
+            contents.update(name + b"\0")
+            try:
+                kind = os.lstat(path).st_mode
+            except FileNotFoundError:
+                contents.update(b"\0deleted\0")
+                continue
             if stat.S_ISLNK(kind):
-                digest.update(os.fsencode(os.readlink(path)))
+                contents.update(os.fsencode(os.readlink(path)))
             elif stat.S_ISREG(kind):
                 with open(path, "rb") as handle:
                     while chunk := handle.read(1 << 16):
-                        digest.update(chunk)
+                        contents.update(chunk)
             else:
                 return None
+            contents.update(b"\0")
     except OSError:
         return None
-    return digest.hexdigest()
+    return (hashlib.sha256(status.stdout + b"\0" + flags.stdout).hexdigest(),
+            contents.hexdigest())
 
 
 def _seal(root: Path) -> str | None:
-    parts = (_seal_files(root), _seal_status(root), _seal_untracked(root))
-    return None if None in parts else "\n".join(parts)
+    files = _seal_files(root)
+    view = _seal_git(root) if files is not None else None
+    return None if view is None else "\n".join((files, *view))
 
 
 def _unchanged(base: Path, sealed: str) -> bool:
     """Whether base still matches its seal, looking at its files first and git only after."""
-    files, status, untracked = (sealed.strip().split("\n") + ["", ""])[:3]
-    return (_seal_files(base) == files and _seal_status(base) == status
-            and _seal_untracked(base) == untracked)
+    parts = (sealed.strip().split("\n") + ["", ""])[:3]
+    if _seal_files(base) != parts[0]:
+        return False
+    view = _seal_git(base)
+    return view is not None and list(view) == parts[1:]
 
 
 def _git_links(root: Path) -> list[str]:

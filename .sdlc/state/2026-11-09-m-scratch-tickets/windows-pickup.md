@@ -1,41 +1,24 @@
-# Windows pickup: 2026-11-09-m-scratch-tickets
+# Back to macOS: 2026-11-09-m-scratch-tickets
 
-Start a Claude Code session on Windows in a clone of this repo, then say: "finish 2026-11-09-m-scratch-tickets from its windows-pickup.md". Everything that can run on macOS has run. What is left needs Windows, then shipping.
+The Windows session ran on 2026-11-11 and handed the feature back. On the Mac, pull the branch, then say: "finish 2026-11-09-m-scratch-tickets from its windows-pickup.md". This file replaced the Windows pickup note; the original is in git history (`648fd0e`).
 
-## Where it stands (written on macOS, 2026-11-09)
+## What the Windows session did
 
-- **Branch:** `2026-11-09-m-scratch-tickets`, pushed, no PR yet. `main` is at `4328dfa` (v0.5.0 released, its record merged).
-- **Change:** `docs/sdlc/changes/2026-11-09-m-scratch-tickets.md` (AC-001 to AC-006). State: `.sdlc/state/2026-11-09-m-scratch-tickets.md`, track M, risk high, in **Review**.
-- **Built and green on macOS:** all six acceptance tests, and `verify.py` passes (full `uv run pytest`).
-- **Reviews run on macOS** (reports in `.sdlc/.work/findings/2026-11-09-m-scratch-tickets/`, git-ignored, so not on your Windows clone; the summary is in the change file's `## Review` once written):
-  - Round 1: security FAIL (S1: the seal ran a planted `core.fsmonitor` or filter before refusing; S2: `--skip-worktree` hid edits), code FAIL (H1 caller's ignore files, M1, M2 pipe, L1). All fixed with tests.
-  - Round 2: both FAIL on one test gap (R2-1); fixed, plus TK1 (untracked-at-birth files now sealed by content) and TK3 (`core.fsmonitor`, `core.hooksPath`, `filter.*`, `diff.*.textconv` refused in `.git/config`). Fixes made after your typed "one more round".
-  - Round 3 (the check of those fixes): security PASS, code PASS. Review's gate is met on macOS; `## Review` is written with the Windows checks marked pending.
-- **Deviations logged** in the state file: AC-001 and AC-002 widened after round 1; round-2 fixes. The trust-anchor hook flags criteria changes after Review started; your first message in the Windows session accepts that.
-- **Tickets left open:** TK2 (the `.git` digest reads whole files under `.git/modules/*/objects` and `lfs/objects`: cost only).
+- Ran every Windows check from the pickup note. Results are in the change file, `## Review` → "Drift and manual checks" → "Windows run, 2026-11-11".
+- **Found and fixed one real bug in the seal** (`scripts/throwaway.py`):
+  - What happened: an edit to a tracked file in the base after it was made was not refused on Windows.
+  - Cause: status names a path, not what it holds, and a file already non-clean at birth stays ` M` after another edit. On Windows every text file is non-clean at birth (the clone checks out with the system `core.autocrlf=true`, which the pinned status hides). On every platform, so is every file the owner's uncommitted changes touched.
+  - The fix: `_seal_git` hashes the contents of every path the pinned status lists (changed, deleted as a sentinel, untracked, ignored), with status and the index flags read once.
+  - The test: `test_a_file_that_was_changed_in_the_base_at_birth_is_sealed_by_content`, red then green on Windows; it should also fail on `main`'s seal on any OS.
+- The feature went back to Build (`state.py advance … 2`). Deviations are logged for the fix and for the baseline.
+- `.sdlc/baseline.md` grew by three Windows-only rows with the owner's OK. All three fail identically on `main`. One of them is a real v0.5.0 bug, filed in `docs/sdlc/todo.md`: `scratch.py clean` can't remove a read-only folder on Windows.
 
-## What only Windows can check
+## What's left, on the Mac
 
-Set up first: `git switch 2026-11-09-m-scratch-tickets`, `uv sync --frozen`, run from Git Bash. Turn on Windows Developer Mode (or run as admin) so the symlink tests can create links.
-
-1. **The full suite.** `uv run pytest` with no filters. The only failures allowed are the rows in `.sdlc/baseline.md` (17 Windows-only rows). A failure not listed there blocks Review; look at it before assuming it's the environment.
-2. **Tests that must run and pass on Windows** (`uv run pytest tests/test_scratch.py tests/test_throwaway.py -v`):
-   - `tests/test_scratch.py::test_clean_removes_a_junction_without_entering_it` must be **run, not skipped**. It is the only test of the Windows junction handling, and it has never run.
-   - `tests/test_scratch.py::test_windows_clean_ignores_a_top_level_file_that_vanishes` (AC-006).
-   - Every new seal test in `tests/test_throwaway.py` (AC-001, AC-002). The pipe test skips on Windows (no `mkfifo`), as do the POSIX permission tests.
-3. **Things in the seal most likely to differ on Windows.** If a seal test fails here, find out which of these it is before changing code:
-   - `core.excludesFile` and `core.attributesFile` pinned to `nul` (`os.devnull`): git must read that as empty. If a base made under one `XDG_CONFIG_HOME` is refused under another, this is why.
-   - `core.autocrlf true` in the global config: make a base from a repo that has an uncommitted change and LF files, then `--base` copy it. The copy must succeed (the seal records the status the base had when made).
-   - The fsmonitor and filter tests use `touch <marker>` as the planted command. They need `touch` on the Git Bash PATH; if it isn't found the marker isn't created and the test would pass for the wrong reason, so check the marker command ran in a control case.
-   - Reading every file under `.git` (the files digest) while git holds a file open; a refusal with "changed after it was made" on an untouched base is the symptom.
-4. **Manual check for AC-003** (its test is POSIX-only): with a run folder whose `.bug-hunter-run` is a directory, and again with no marker, `python scripts/isolate.py <scratch> --cache <run>/cache` prints one `error:` line and exits 1, no traceback.
-5. **AC-006 for real (optional):** delete a top-level file in a run folder while `python scripts/scratch.py clean <run>` runs; it must not report the vanished file as an error. Hard to time; the unit test covers the code path.
-6. **Still true on Windows, don't try to fix:** a folder swapped for a junction *while* `clean` runs is not guarded (AC-006 of lean scratch, narrowed on purpose; `shutil.rmtree` works by path). T6 (deep trees) doesn't apply: Windows uses a different removal path.
-
-Record what you find under `## Review` → "Drift and manual checks" in the change file (a line per item: ran, result). A real bug: failing test first, fix, rerun the suite.
-
-## Then finish
-
-1. Review: `## Review` is already written. Replace its "Pending, needs Windows" bullet with what you ran and found, then `state.py advance 2026-11-09-m-scratch-tickets 4 --gate pass --verified` as a call of its own. A Windows failure that shows a real bug goes back to Build (failing test first), and Review reruns.
-2. Ship: `python3 "$CLAUDE_PLUGIN_ROOT/scripts/ship.py" 2026-11-09-m-scratch-tickets ...`, commit, push, `gh pr create`, watch CI (Ubuntu).
-3. Merging and the release are the owner's calls. This fixes bugs in v0.5.0 behaviour, so a patch release `v0.5.1` fits the runbook (`knowledge/runbooks/release.md`); decide whether to cut it. The `Bash(gh pr merge *)` allow rule lives in the Mac's git-ignored `.claude/settings.local.json`, not in this repo.
+1. **Acceptance tests table:** add `test_a_file_that_was_changed_in_the_base_at_birth_is_sealed_by_content` to AC-001's row in `## Acceptance tests`. It changes the record above `## Review`, so the trust anchor will ask for a typed OK. Then `verify.py red` can't re-record AC-001 (its other tests pass), so decide with the owner how the red evidence stands: the new test was seen red on Windows, as `## Review` says.
+2. **`verify.py --feature 2026-11-09-m-scratch-tickets`:** must pass. The red records for AC-001 to AC-006 are in the Mac's `.sdlc/.work/`.
+3. **Review round on the seal change:** `state.py advance … 3 --gate pass --verified`, then a security and code round (high risk) on `git diff 648fd0e -- scripts/throwaway.py tests/test_throwaway.py`, told it follows round 3. Check especially:
+   - the porcelain `-z` parsing in `_status_paths` (renames carry a second path);
+   - the cost: on Windows every copy now reads every text file of the base (like TK2);
+   - that bases made before this change are refused as changed (they are throwaway; "make a new base").
+4. **Update `## Review`** with the round, then Ship as the original note said: `ship.py`, PR, watch CI (Ubuntu). Merging, and whether to cut v0.5.1, are the owner's calls.

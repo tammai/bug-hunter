@@ -255,6 +255,25 @@ def test_a_base_that_was_dirty_when_made_still_copies(make_repo, tmp_path):
     assert (dest / "src" / "a.py").read_text(encoding="utf-8") == "x = 2\n"
 
 
+def test_a_file_that_was_changed_in_the_base_at_birth_is_sealed_by_content(make_repo, tmp_path):
+    repo = make_repo({"src/a.py": "x = 1\n", "src/b.py": "y = 1\n", ".gitignore": "*.log\n"})
+    commit(repo)
+    (repo / "src" / "a.py").write_text("x = 2\n", encoding="utf-8")
+    (repo / "src" / "b.py").unlink()
+    (repo / "forced.log").write_text("kept\n", encoding="utf-8")
+    git(repo, "add", "-f", "forced.log")
+    changes = {
+        "edit": lambda b: (b / "src" / "a.py").write_text("x = 3\n", encoding="utf-8"),
+        "recreate": lambda b: (b / "src" / "b.py").write_text("y = 2\n", encoding="utf-8"),
+        "ignored": lambda b: (b / "forced.log").write_text("changed\n", encoding="utf-8"),
+    }
+    for label, change in changes.items():
+        base = new_base(repo, tmp_path, f"born dirty {label}")
+        change(base)
+        result, dest = copy_from(repo, base, tmp_path, f"born dirty {label}")
+        assert_refused(result, dest, "changed after it was made")
+
+
 def test_base_refuses_git_text_changed_after_it_was_made(make_repo, tmp_path):
     repo = make_repo({"src/a.py": "x = 1\n"})
     commit(repo)

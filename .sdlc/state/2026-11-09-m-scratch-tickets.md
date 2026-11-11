@@ -11,7 +11,7 @@ Base: 4328dfa
 Owner: tam.mai@bigin.vn
 Tool: claude-code
 Verified: 4328dfa tree 4429c53b2d5b2dc12eb51982efe0c4c627e597b3
-Current: Stage 3 – Review
+Current: Stage 2 – Build
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
@@ -45,6 +45,9 @@ inline, one part; Windows-only checks and shipping are left to a Windows session
 ## Deviations
 - 2026-11-09 2026-11-09 AC-001 and AC-002 widened after review round 1. What: AC-001 also covers moved refs, skip-worktree and assume-unchanged edits and the caller's global ignore files; AC-002 also covers not running a planted fsmonitor or filter and a named pipe under .git; the seal is now a files digest compared before git runs plus a pinned status digest. Why: security S1 (the first seal ran the base's fsmonitor before refusing), S2, and code H1, M2, L1. Effect: tests/test_throwaway.py gains six tests, scripts/throwaway.py changes only the seal; S3 and submodule contents are recorded as known limits.
 - 2026-11-09 2026-11-09 round 2 fixes after the owner's typed 'one more round'. What: the seal now also hashes the contents of untracked files (TK1), config keys core.fsmonitor, core.hooksPath, filter.* and diff.*.textconv are refused outright in .git/config (TK3), the L1 test moves the ref without git commit (R2-1). Why: security-r2 tickets TK1 and TK3 and code R2-1. Effect: scripts/throwaway.py seal gains a third digest and a stricter config check; two tests' expected refusal message changed to the earlier, more specific one, and a unit test now pins the files-before-git order; TK2 (cost of reading whole files under .git/modules and lfs) stays a ticket.
+- 2026-11-11 2026-11-11 scripts/throwaway.py seal, Windows run. What: the seal now hashes the contents of every path the pinned status lists (changed, deleted as a sentinel, untracked), not only untracked files; status and index flags are read once (_seal_git). Why: on Windows test_base_refuses_a_change_made_after_it_was_made failed (edit case copied): the clone checks out with the system core.autocrlf=true, the pinned status hides it, so every text file reads ' M' at birth and a later edit leaves status unchanged; the same hole held on every platform for files the owner's uncommitted changes touched. Effect: new test test_a_file_that_was_changed_in_the_base_at_birth_is_sealed_by_content (red, then green); bases made before this change are refused as changed; on Windows each copy reads every text file of the base (cost, like TK2).
+- 2026-11-11 2026-11-11 .sdlc/baseline.md and docs/sdlc/todo.md, baseline grown with the owner's OK. What: three Windows-only rows added (test_copy_from_a_base_is_independent_and_checked, test_copy_from_a_base_falls_back_when_cp_fails: Git for Windows core.symlinks=false checks links out as files; test_clean_reports_size_and_removes_read_only_trees: scratch.py clean can't remove a read-only folder on Windows, a real v0.5.0 bug, filed as a todo) and the reason on test_refuses_symlinks_out_of_the_copy_and_a_used_dest updated. Why: with Developer Mode on they still fail on Windows, identically on main, so this change didn't cause them. Effect: Review gates on the grown baseline; the read-only clean fix is its own S change.
+- 2026-11-11 2026-11-11 scripts/throwaway.py seal, correction to the line before: the content digest covers every path the pinned status lists, ignored ones included (status --ignored), so a file the owner force-added (git add -f) but didn't commit, which lands in the base ignored, stays sealed by content as git ls-files -o sealed it before. Test: the ignored case in test_a_file_that_was_changed_in_the_base_at_birth_is_sealed_by_content, red then green.
 
 ## Open questions
 -
