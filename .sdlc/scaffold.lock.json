@@ -1,57 +1,57 @@
 {
-  "scaffold_version": "3.1.0",
+  "scaffold_version": "3.5.0",
   "hosts": [
     "claude-code"
   ],
   "files": {
     ".github/workflows/sdlc-verify.yml": {
       "class": "seeded",
-      "sha256": "b125ecf9efddc7187dc7fbe38ae2ae93aa60ebae674779463ccf1a60d5aded1e",
+      "sha256": "4dd983da69d839f79b5640bd12ef1cdebf6fb10880ad704422b594a2b60705c6",
       "template": "builtin:ci"
     },
     ".sdlc/ci/invariants.py": {
       "class": "seeded",
-      "sha256": "eef64f3401e131389b02008c2b3ee6ce479aedc8e2970d1e24540065c53a8d79",
+      "sha256": "39f3ee9ea6398758fbd83b909022cc8f75debf4604c8cbc7ad7c009b0fa9b654",
       "template": "templates/project/ci/invariants.py"
     },
     ".github/workflows/sdlc-invariants.yml": {
       "class": "seeded",
-      "sha256": "730ad6df777ce9d53a59a47885da7253e4d98eab243b640912d4712e507082b8",
+      "sha256": "7d51f78b140b6b54e0738a92ada79e722e040b62d7cf16fe6b31e4a24bb2d10b",
       "template": "builtin:invariants"
     },
     ".claude/rules/sdlc.md": {
       "class": "generated",
-      "sha256": "8a353f8bee68b81f7dab0a8330f2c9ed9544f266845d85693c78d5cca3670226",
+      "sha256": "1c12b0d662b50c1b0c44f370e21bd8aa375489d27e6ff223e47e85fbd4bfe0ac",
       "template": "templates/project/rules/sdlc.md"
     },
     ".claude/rules/sdlc-code-style.md": {
       "class": "generated",
-      "sha256": "7c7bcd3d859178470c735ed259a4780ed9ca99093533e193c5be0a79c1c05061",
+      "sha256": "2e798b0573ddb0d3cb93b3b8e7b621e8b4e8f7206eeca8dcd75fe9f150eca57e",
       "template": "templates/project/rules/code-style.md"
     },
     ".claude/rules/sdlc-tests.md": {
       "class": "generated",
-      "sha256": "f3108f3d8b8b360d49486778a20b0f4d98058af0193081f0e71f3e833152e33d",
+      "sha256": "cf465c30263cb410fe3f20bf97a239986750abb2337d5d3cc5b0a5029c179a13",
       "template": "templates/project/rules/tests.md"
     },
     ".claude/rules/sdlc-migrations.md": {
       "class": "generated",
-      "sha256": "345daea315f63e41c5be1e27e1249316d6b4c0aeffacd487f15332a141413f5e",
+      "sha256": "ef4c9eb3710affa2533fde0a98c12b12bd37c174d7eedcaeb931c7233851a1d2",
       "template": "templates/project/rules/migrations.md"
     },
     ".claude/rules/sdlc-sensitive.md": {
       "class": "generated",
-      "sha256": "d5488eccae0cf34bb819655e1842c026f935d52ff8c6fe63610edf80a5ef1282",
+      "sha256": "251b5bf623352e9a6d224d513fa24127880e3b175d3cd47190f78a1ac43b9e5a",
       "template": "templates/project/rules/sensitive.md"
     },
     ".claude/rules/sdlc-ci.md": {
       "class": "generated",
-      "sha256": "8ef4357438bf55e2afc76e1d4507db692ea6d6638c532451f5b4447910cfc5ec",
+      "sha256": "bc1691c73470e7b5a88cc16973d13cde41ed2e359370a63e3eea59c07e8e74ec",
       "template": "templates/project/rules/ci.md"
     },
     ".claude/rules/sdlc-ui.md": {
       "class": "generated",
-      "sha256": "14f5ddbb77b798b3906e02c5c3fdc15cc92d34079cc062787c2d0a9fc30f5839",
+      "sha256": "5c75e852beb24560c9ce7156fb443eb39bff5c647480eef1b5e545692bb9755a",
       "template": "templates/project/rules/ui.md"
     },
     ".claude/hookify/sdlc-console-log.md": {
@@ -131,7 +131,7 @@
     },
     ".sdlc/lint/ruff.sdlc.toml": {
       "class": "seeded",
-      "sha256": "c6367a7b12f79e1423a6e5c2dfa6c97f34aee39ffb34756d348f79fc9c532341",
+      "sha256": "00b74e2b62123c6ac12829e4ecd4b94078ddb945cd7969ab11ce06b4500c8c83",
       "template": "templates/project/lint/ruff.sdlc.toml"
     }
   },
@@ -158,7 +158,9 @@
   },
   "migrations": {
     "applied": [],
-    "skipped": {}
+    "skipped": {
+      "3.5.0-accept-keys": "not spec-backed; the only criteria.lock.json files are test fixtures (tests/fixtures, contracts/v1/fixtures)"
+    }
   },
   "setup": {
     "kind": "greenfield",

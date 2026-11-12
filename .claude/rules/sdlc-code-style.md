@@ -3,7 +3,7 @@ paths:
   - "**/*.{ts,tsx,js,jsx,mjs,cjs,vue,svelte}"
   - "**/*.{py,go,rs,java,kt,rb,php,cs,swift}"
 ---
-<!-- Managed by the sdlc plugin v3.1.0; regenerated on upgrade. Change paths via "areas.source" in .sdlc/config.json. -->
+<!-- Managed by the sdlc plugin v3.5.0; regenerated on upgrade. Change paths via "areas.source" in .sdlc/config.json. -->
 # Code style (sdlc policy)
 
 Comments
