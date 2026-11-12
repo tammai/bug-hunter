@@ -10,11 +10,22 @@ import sys
 import tempfile
 from pathlib import Path
 
+# What `git rev-parse --local-env-vars` lists: set inside a hook or alias of another repo, these
+# would send every command (the clone, the origin removal, the patch) to that repo instead.
+_REPO_VARS = {
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE", "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
+}
+
 
 def _git(*args: str, **kwargs) -> subprocess.CompletedProcess:
     # A hunter replacing its copy calls this from inside the folder it just deleted; git and
     # the shell it starts fail without a current folder, and every call names its repo anyway.
     kwargs.setdefault("cwd", tempfile.gettempdir())
+    kwargs.setdefault("env", {k: v for k, v in os.environ.items()
+                              if k.upper() not in _REPO_VARS})
     return subprocess.run(["git", "--no-optional-locks", *args], capture_output=True, **kwargs)
 
 
@@ -167,9 +178,8 @@ def _seal_git(root: Path) -> tuple[str, str] | None:
     if status.returncode != 0 or flags.returncode != 0:
         return None
     # Status names a path, not what it holds: a file already changed or untracked when the base
-    # was made (the owner's uncommitted changes; every text file on Windows, where the clone
-    # checks out with the system autocrlf the pinned status doesn't read) could be edited again
-    # and still give the same status. So each path it lists is sealed by content.
+    # was made (the owner's uncommitted changes) could be edited again and still give the same
+    # status. So each path it lists is sealed by content.
     contents = hashlib.sha256()
     try:
         for name in sorted(_status_paths(status.stdout)):
@@ -212,6 +222,27 @@ def _git_links(root: Path) -> list[str]:
     return sorted(found)
 
 
+def _line_endings() -> list[str]:
+    """The caller's core.autocrlf and core.eol as `git clone --config` options."""
+    # The clone checks out with them (Git for Windows' system autocrlf), but the seal reads the
+    # base with system and global config pinned off: unless the clone's own config holds them,
+    # every text file reads as changed. Typed as git reads them (a bare key, 2, input).
+    options = []
+    raw = _git("config", "--get", "core.autocrlf", text=True, encoding="utf-8")
+    if raw.returncode == 0:
+        value = raw.stdout.strip().lower()
+        if value != "input":
+            typed = _git("config", "--type=bool", "--get", "core.autocrlf", text=True,
+                         encoding="utf-8")
+            value = typed.stdout.strip() if typed.returncode == 0 else ""
+        if value in ("true", "false", "input"):
+            options += ["--config", f"core.autocrlf={value}"]
+    eol = _git("config", "--get", "core.eol", text=True, encoding="utf-8")
+    if eol.returncode == 0 and (value := eol.stdout.strip().lower()) in ("lf", "crlf", "native"):
+        options += ["--config", f"core.eol={value}"]
+    return options
+
+
 def _make(repo: Path, dest: Path, base: Path | None = None) -> str | None:
     """Copy repo to dest; returns the reason when it can't be done safely."""
     if dest.exists() and (not dest.is_dir() or any(dest.iterdir())):
@@ -229,8 +260,8 @@ def _make(repo: Path, dest: Path, base: Path | None = None) -> str | None:
     # environments would all point back into the real repo. One commit is enough to run the
     # code, and history is most of a large repo's size.
     dest.parent.mkdir(parents=True, exist_ok=True)
-    clone = _git("clone", "--quiet", "--no-local", "--no-hardlinks", "--depth", "1", "--",
-                 str(repo), str(dest))
+    clone = _git("clone", *_line_endings(), "--quiet", "--no-local", "--no-hardlinks",
+                 "--depth", "1", "--", str(repo), str(dest))
     if clone.returncode != 0:
         return f"git clone failed: {clone.stderr.decode(errors='replace').strip()}"
     # Without this, a repro's `git push` would write into the real repo.

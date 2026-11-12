@@ -80,11 +80,31 @@ def _created(path: Path) -> float | None:
     return float(created) if isinstance(created, (int, float)) else None
 
 
+# IsReparseTagNameSurrogate: the tag's bit for "this names another file" (links, junctions).
+_NAME_SURROGATE = 0x20000000
+
+
 def _clear_read_only(path: str) -> None:
-    """Windows refuses to delete a read-only file, such as Go's 0444 module files."""
+    """Windows refuses to delete a read-only file or folder, such as Go's module cache."""
+    # Code still running in the run can swap a link in for the entry after the check, and chmod
+    # follows links (on Windows too, from Python 3.13), so it is told not to. A folder higher
+    # up swapped for a junction is still followed: the known limit of path-based removal.
     try:
-        if stat.S_ISREG(os.lstat(path).st_mode):
-            os.chmod(path, stat.S_IWRITE)
+        info = os.lstat(path)
+        # A symlink or junction (a name surrogate) leads elsewhere; a dedup or cloud placeholder
+        # file also has a reparse point but is an ordinary file to remove.
+        if getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT \
+                and getattr(info, "st_reparse_tag", 0) & _NAME_SURROGATE:
+            return
+        if stat.S_ISREG(info.st_mode):
+            mode = stat.S_IREAD | stat.S_IWRITE
+        elif stat.S_ISDIR(info.st_mode):
+            mode = stat.S_IRWXU
+        else:
+            return
+        # Linux has no lchmod; it never runs this outside tests (Windows only).
+        no_follow = {"follow_symlinks": False} if os.chmod in os.supports_follow_symlinks else {}
+        os.chmod(path, mode, **no_follow)
     except OSError:
         pass
 

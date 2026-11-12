@@ -320,6 +320,75 @@ def test_the_seal_does_not_depend_on_the_callers_git_environment(make_repo, tmp_
     assert result.returncode == 0, result.stderr
 
 
+def test_a_base_records_the_line_ending_settings_it_was_checked_out_with(make_repo, tmp_path):
+    import throwaway
+
+    # text=auto: without it core.eol changes nothing on checkout.
+    repo = make_repo({"src/a.txt": "one\ntwo\n", "b.txt": "x\n", ".gitattributes": "* text=auto\n"})
+    commit(repo)
+
+    def config(name, text):
+        path = tmp_path / f"gitconfig {name}"
+        path.write_text(text, encoding="utf-8")
+        # No system config: Git for Windows' own autocrlf would decide the answer.
+        return {**os.environ, "GIT_CONFIG_GLOBAL": str(path), "GIT_CONFIG_NOSYSTEM": "1"}
+
+    def recorded(base, key):
+        found = subprocess.run(["git", "config", "-f", str(base / ".git" / "config"), "--get", key],
+                               capture_output=True, text=True)
+        return found.stdout.strip() if found.returncode == 0 else None
+
+    # A bare key and 2 are what git reads as true.
+    cases = {"autocrlf": ("autocrlf = true", "core.autocrlf", "true"),
+             "bare": ("autocrlf", "core.autocrlf", "true"),
+             "two": ("autocrlf = 2", "core.autocrlf", "true"),
+             "input": ("autocrlf = input", "core.autocrlf", "input"),
+             "eol": ("eol = crlf", "core.eol", "crlf")}
+    for label, (line, key, value) in cases.items():
+        env = config(label, f"[core]\n\t{line}\n")
+        base = tmp_path / f"run {label}" / "base"
+        assert run_script("throwaway", repo, base, env=env).returncode == 0
+        assert recorded(base, key) == value, label
+        result = run_script("throwaway", repo, tmp_path / f"run {label}" / "copy", "--base", base,
+                            env=env)
+        assert result.returncode == 0, result.stderr
+
+        # Moved modification times make git compare contents, as it must on Windows after a
+        # clone, where most files are racily clean.
+        for name in ("src/a.txt", "b.txt", ".gitattributes"):
+            info = os.stat(base / name)
+            os.utime(base / name, ns=(info.st_atime_ns, info.st_mtime_ns + 5 * 10**9))
+        options, pinned = throwaway._pinned(base)
+        status = subprocess.run(["git", "--no-optional-locks", *options, "status", "--porcelain"],
+                                capture_output=True, env=pinned)
+        assert status.returncode == 0 and status.stdout == b"", (label, status.stdout)
+
+    base = tmp_path / "run plain" / "base"
+    assert run_script("throwaway", repo, base, env=config("plain", "")).returncode == 0
+    assert recorded(base, "core.autocrlf") is None and recorded(base, "core.eol") is None
+
+
+def test_a_copy_ignores_the_callers_git_repo_variables(make_repo, tmp_path):
+    repo = make_repo({"src/a.py": "x = 1\n"})
+    commit(repo)
+    other = tmp_path / "other repo"
+    other.mkdir()
+    git(other, "init", "-q")
+    git(other, "remote", "add", "origin", "https://example.invalid/other.git")
+    before = (other / ".git" / "config").read_text(encoding="utf-8")
+    gitconfig = tmp_path / "gitconfig"
+    gitconfig.write_text("[core]\n\tautocrlf = input\n", encoding="utf-8")
+    # Set when throwaway.py runs from inside a git hook or alias of another repo.
+    env = {**os.environ, "GIT_DIR": str(other / ".git"), "GIT_WORK_TREE": str(other),
+           "GIT_INDEX_FILE": str(other / ".git" / "index"), "GIT_CONFIG_GLOBAL": str(gitconfig)}
+    for args in ((repo, tmp_path / "run" / "base"),
+                 (repo, tmp_path / "run" / "copy", "--base", tmp_path / "run" / "base")):
+        result = run_script("throwaway", *args, env=env)
+        assert result.returncode == 0, result.stderr
+    assert (other / ".git" / "config").read_text(encoding="utf-8") == before
+    assert (tmp_path / "run" / "copy" / "src" / "a.py").exists()
+
+
 def test_base_refuses_git_text_changed_after_it_was_made(make_repo, tmp_path):
     repo = make_repo({"src/a.py": "x = 1\n"})
     commit(repo)
