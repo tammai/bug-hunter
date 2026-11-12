@@ -50,6 +50,7 @@ inline, one part; the Windows checks (AC-004) in a short Windows session at the 
 - 2026-11-12 review: round 2 closing check, code review on the round 1 fixes (security passed round 1)
 - 2026-11-12 Stage 2: pass — round 2 mediums fixed; verify PASS
 - 2026-11-12 Stage 3: pass — security-r1 PASS, code-reviewer-r2 PASS; round 2 mediums fixed and verified; AC-004 waits for Windows
+- 2026-11-12 AC-004 (manual, Windows): pass at 86398d4 — full suite 19 failed, all baseline rows; read-only clean test passes and its baseline row is removed; base has core.autocrlf=true, empty pinned status, --base copy after plain git status exits 0
 
 ## Deviations
 - 2026-11-12 task 3 (Windows run and baseline) What: not done on macOS; .sdlc/baseline.md and docs/sdlc/todo.md are unchanged. Why: AC-004 needs Windows (the real rmdir refusal and Git for Windows' system autocrlf). Effect: a Windows session runs the full suite and the base check, then removes the read-only row from the baseline and ticks the todo; until then the row stays.
