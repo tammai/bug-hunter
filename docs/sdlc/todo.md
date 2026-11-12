@@ -2,7 +2,7 @@
 
 ## Open
 
-- [ ] `scratch.py clean` on Windows can't remove a read-only folder: `tests/test_scratch.py::test_clean_reports_size_and_removes_read_only_trees` fails with "Access is denied" on `hunter-1/home/go/pkg/mod/example.com@v1` (Go makes its module cache read-only), on `main` (v0.5.0) too, so a hunt's run folder on Windows is left partly behind. Its own S fix; baselined in 2026-11-09-m-scratch-tickets (2026-11-11)
+- [x] `scratch.py clean` on Windows can't remove a read-only folder: `tests/test_scratch.py::test_clean_reports_size_and_removes_read_only_trees` fails with "Access is denied" on `hunter-1/home/go/pkg/mod/example.com@v1` (Go makes its module cache read-only), on `main` (v0.5.0) too, so a hunt's run folder on Windows is left partly behind. Its own S fix; baselined in 2026-11-09-m-scratch-tickets (2026-11-11). Done in 2026-11-12-m-windows-seal-and-clean; passes on Windows (2026-11-12)
 
 - [ ] Leak check for word-like logins, review tickets left after round 2 of 2026-11-09-s-login-word (2026-11-09)
   - A word after a second word between field and value is missed: `<input name="password" value="member">`, `{"name":"token","value":"member"}`, `the password is member` (round 2, M-2).

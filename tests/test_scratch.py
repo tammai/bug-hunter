@@ -414,3 +414,99 @@ def test_windows_clean_ignores_a_top_level_file_that_vanishes(temp_env, monkeypa
     errors: list[str] = []
     scratch._clean_windows(Path(run), None, errors)
     assert errors == []
+
+
+
+def _windows_rules(monkeypatch):
+    """Make unlink and rmdir refuse an entry without its write bit, as Windows does."""
+    real_unlink, real_rmdir = os.unlink, os.rmdir
+
+    def guard(real):
+        def call(path, *, dir_fd=None):
+            if not os.stat(path, dir_fd=dir_fd, follow_symlinks=False).st_mode & stat.S_IWUSR:
+                raise PermissionError(13, "Access is denied", path)
+            return real(path, dir_fd=dir_fd)
+        return call
+
+    monkeypatch.setattr(os, "unlink", guard(real_unlink))
+    monkeypatch.setattr(os, "rmdir", guard(real_rmdir))
+
+
+def test_windows_tree_removal_clears_read_only_folders(tmp_path, monkeypatch):
+    import scratch
+
+    top = tmp_path / "hunter-1"
+    mod = top / "home" / "go" / "pkg" / "mod" / "example.com@v1"
+    mod.mkdir(parents=True)
+    (top / "home" / "go.sum").write_text("x\n", encoding="utf-8")
+    os.chmod(top / "home" / "go.sum", 0o444)
+    os.chmod(mod, 0o555)
+    _windows_rules(monkeypatch)
+    errors: list[str] = []
+    scratch._remove_tree_windows(str(top), errors)
+    monkeypatch.undo()
+    assert errors == [] and not top.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need Developer Mode or admin on Windows")
+def test_windows_tree_removal_never_changes_modes_through_a_link(tmp_path, monkeypatch):
+    import scratch
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "go.mod").write_text("module x\n", encoding="utf-8")
+    os.chmod(outside / "go.mod", 0o444)
+    os.chmod(outside, 0o555)
+    top = tmp_path / "hunter-1"
+    top.mkdir()
+    os.symlink(outside, top / "link")
+    os.symlink(outside / "go.mod", top / "file-link")
+    # One of the run's own, so clean has read-only to clear beside the links.
+    (top / "own").mkdir()
+    os.chmod(top / "own", 0o555)
+
+    # A link met where a folder or file was seen: swapped in after the check. Only where
+    # chmod can refuse to follow a link (macOS, Windows from 3.13); Linux has no lchmod, and
+    # clean's chmod runs only on Windows.
+    if os.chmod in os.supports_follow_symlinks:
+        real_lstat = os.lstat
+        (tmp_path / "a file").write_text("x", encoding="utf-8")
+        seen = {"link": real_lstat(tmp_path), "file-link": real_lstat(tmp_path / "a file")}
+        monkeypatch.setattr(scratch.os, "lstat", lambda p, *a, **k: seen.get(
+            os.path.basename(str(p))) or real_lstat(p, *a, **k))
+        for name in seen:
+            scratch._clear_read_only(str(top / name))
+        monkeypatch.undo()
+    _windows_rules(monkeypatch)
+    errors: list[str] = []
+    scratch._remove_tree_windows(str(top), errors)
+    monkeypatch.undo()
+    assert errors == [] and not top.exists()
+    assert stat.S_IMODE(os.lstat(outside).st_mode) == 0o555
+    assert stat.S_IMODE(os.lstat(outside / "go.mod").st_mode) == 0o444
+    os.chmod(outside, 0o755)
+
+
+def test_windows_clear_read_only_skips_only_links_among_reparse_points(tmp_path, monkeypatch):
+    import scratch
+
+    # A deduplicated or cloud-placeholder file has a reparse point but is a plain file to
+    # remove; a symlink or junction (a name surrogate) leads elsewhere.
+    files = {"placeholder": 0x80000013, "linked": 0xA000000C}
+    real_lstat = os.lstat
+    fakes = {}
+    for name, tag in files.items():
+        path = tmp_path / name
+        path.write_text("x", encoding="utf-8")
+        os.chmod(path, 0o444)
+        info = real_lstat(path)
+        fakes[str(path)] = type("Stat", (), {
+            "st_mode": info.st_mode, "st_reparse_tag": tag,
+            "st_file_attributes": stat.FILE_ATTRIBUTE_REPARSE_POINT})()
+    monkeypatch.setattr(scratch.os, "lstat", lambda p, *a, **k: fakes.get(str(p))
+                        or real_lstat(p, *a, **k))
+    for path in fakes:
+        scratch._clear_read_only(path)
+    monkeypatch.undo()
+    assert os.lstat(tmp_path / "placeholder").st_mode & stat.S_IWUSR
+    assert not os.lstat(tmp_path / "linked").st_mode & stat.S_IWUSR

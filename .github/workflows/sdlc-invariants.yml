@@ -1,4 +1,4 @@
-# Managed by the sdlc plugin v3.1.0 (seeded: replaced on upgrade only while unedited).
+# Managed by the sdlc plugin v3.5.0 (seeded: replaced on upgrade only while unedited).
 # Checks the record and the baseline of active features: see .sdlc/ci/invariants.py.
 name: sdlc invariants
 
