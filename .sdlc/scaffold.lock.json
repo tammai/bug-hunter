@@ -6,7 +6,7 @@
   "files": {
     ".github/workflows/sdlc-verify.yml": {
       "class": "seeded",
-      "sha256": "b125ecf9efddc7187dc7fbe38ae2ae93aa60ebae674779463ccf1a60d5aded1e",
+      "sha256": "4dd983da69d839f79b5640bd12ef1cdebf6fb10880ad704422b594a2b60705c6",
       "template": "builtin:ci"
     },
     ".sdlc/ci/invariants.py": {
