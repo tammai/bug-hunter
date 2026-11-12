@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 0.5.2 — 2026-11-12
+
+Every agent in a run copies one shared base clone. Since 0.5.0 an agent's repro could change that base and every later copy would run the change. The base is now sealed. Two Windows bugs are also fixed: copies read every text file, and clean left read-only folders behind.
+
+### Fixed
+
+- **A sealed base** ([change](docs/sdlc/changes/2026-11-09-m-scratch-tickets.md)).
+  - `throwaway.py` seals the base it makes. `--base` refuses a base that changed after it was made, with one line telling you to make a new one: an edited, added or deleted file, a moved `HEAD` or ref, a hook, `core.hooksPath`, `core.fsmonitor` or any other text under `.git`, or a `.git`, pipe or device planted anywhere in the tree.
+  - Git runs on the base only after its `.git` files and its tree match, so a planted `core.fsmonitor` or clean filter never runs. Config keys that name a command are refused outright.
+- **`isolate.py --cache`** prints one `error:` line, not a traceback, when the cache's parent can't be searched or the marker is a link or folder.
+- **`scratch.py clean`:**
+  - It removes trees deeper than the default open-file and recursion limits.
+  - It names the real reason when a folder can't be opened.
+  - On Windows it no longer reports a top-level file that vanished mid-clean as an error.
+- **Windows: a base no longer reads every text file on each copy** ([change](docs/sdlc/changes/2026-11-12-m-windows-seal-and-clean.md)). The clone now gets the caller's `core.autocrlf` and `core.eol`, so the checkout and the seal agree, and a plain `git status` in the base no longer gets it refused.
+- **Windows: `scratch.py clean` removes read-only folders** such as Go's module cache. It never goes through a link or junction.
+- **`throwaway.py` ignores the caller's `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and the other repo-locating variables.** If you ran it from inside another repo's git hook or alias, they sent the clone into that repo.
+
+### Upgrading
+
+A run folder made by an older version and resumed after upgrading has its base refused ("make a new base"). Start a new run. Drafts, `posted.json` and the drafts folder layout are unchanged.
+
 ## 0.5.1 — 2026-11-11
 
 The shared contracts move to 1.3.0: a criterion's level 1 now needs a source, and the lock check enforces it. Nothing bug-hunter writes or reads changes.
