@@ -2,7 +2,7 @@
 paths:
   - "**/*.{tsx,jsx,vue,svelte,astro,html,css,scss,sass,less}"
 ---
-<!-- Managed by the sdlc plugin v3.1.0; regenerated on upgrade. Change paths via "areas.ui" in .sdlc/config.json. -->
+<!-- Managed by the sdlc plugin v3.5.0; regenerated on upgrade. Change paths via "areas.ui" in .sdlc/config.json. -->
 # UI (sdlc policy)
 
 Design system

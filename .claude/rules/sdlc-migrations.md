@@ -4,7 +4,7 @@ paths:
   - "**/migrate/**"
   - "**/prisma/schema.prisma"
 ---
-<!-- Managed by the sdlc plugin v3.1.0; regenerated on upgrade. Change paths via "areas.migrations" in .sdlc/config.json. -->
+<!-- Managed by the sdlc plugin v3.5.0; regenerated on upgrade. Change paths via "areas.migrations" in .sdlc/config.json. -->
 # Schema migrations (sdlc policy)
 
 - Any migration is a hard stop: describe it and get the user's go-ahead before creating or running it.
