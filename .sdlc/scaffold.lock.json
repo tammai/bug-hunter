@@ -11,12 +11,12 @@
     },
     ".sdlc/ci/invariants.py": {
       "class": "seeded",
-      "sha256": "eef64f3401e131389b02008c2b3ee6ce479aedc8e2970d1e24540065c53a8d79",
+      "sha256": "39f3ee9ea6398758fbd83b909022cc8f75debf4604c8cbc7ad7c009b0fa9b654",
       "template": "templates/project/ci/invariants.py"
     },
     ".github/workflows/sdlc-invariants.yml": {
       "class": "seeded",
-      "sha256": "730ad6df777ce9d53a59a47885da7253e4d98eab243b640912d4712e507082b8",
+      "sha256": "7d51f78b140b6b54e0738a92ada79e722e040b62d7cf16fe6b31e4a24bb2d10b",
       "template": "builtin:invariants"
     },
     ".claude/rules/sdlc.md": {
@@ -131,7 +131,7 @@
     },
     ".sdlc/lint/ruff.sdlc.toml": {
       "class": "seeded",
-      "sha256": "c6367a7b12f79e1423a6e5c2dfa6c97f34aee39ffb34756d348f79fc9c532341",
+      "sha256": "00b74e2b62123c6ac12829e4ecd4b94078ddb945cd7969ab11ce06b4500c8c83",
       "template": "templates/project/lint/ruff.sdlc.toml"
     }
   },

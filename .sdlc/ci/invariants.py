@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the shared sdlc files, whichever agent or person changed them (seeded by the sdlc plugin v3.1.0).
+"""Check the shared sdlc files, whichever agent or person changed them (seeded by the sdlc plugin v3.5.0).
 
 Only active features count (`Status: active` in their state file):
   - the record matches the phase reached: past Define (Stage 1), the change file (<docs>/changes/<feature>.md) has its
