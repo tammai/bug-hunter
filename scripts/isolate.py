@@ -280,6 +280,14 @@ def _check_folder(scratch: Path, folder: Path) -> None:
                           "refusing to write through it")
 
 
+def _is_run_folder(folder: Path) -> bool:
+    """Whether folder holds scratch.py's marker as a plain file, never a link to one."""
+    try:
+        return stat.S_ISREG(os.lstat(folder / ".bug-hunter-run").st_mode)
+    except OSError:
+        return False
+
+
 def _make_folder(scratch: Path, folder: Path) -> None:
     if DIR_FD:
         os.close(_open_folder(scratch, folder))
@@ -461,7 +469,7 @@ def _main(argv: list[str] | None = None) -> int:
             return 1
         # Only inside a run folder scratch.py made, so a wrong path can't point every
         # agent's downloads at the owner's own folders.
-        if not (cache.parent / ".bug-hunter-run").is_file():
+        if not _is_run_folder(cache.parent):
             print(f"error: the cache {cache} isn't in a run folder made by scratch.py",
                   file=sys.stderr)
             return 1

@@ -30,7 +30,10 @@ Every row passes on Linux CI and fails only on Windows, because of how the test 
 | (root) | tests/test_secrets_scan.py › test_finds_secrets_without_printing_them | Windows only: the fixture writes `\r\n` in text mode, which Windows turns into `\r\r\n`, so the line number moves. | 2026-11-06 |
 | (root) | tests/test_stacks.py › test_install_steps_are_exact_and_unsafe_folders_get_none | Windows only: the fixture's folder names have characters Windows forbids (such as `"`). | 2026-11-06 |
 | (root) | tests/test_scope.py › test_skips_names_that_are_not_utf8 | Windows only: Windows file names can't hold non-UTF-8 bytes; git's index entry can't be checked out or decoded there. | 2026-11-06 |
-| (root) | tests/test_throwaway.py › test_refuses_symlinks_out_of_the_copy_and_a_used_dest | Windows only: creating a symlink on Windows needs Developer Mode or admin (WinError 1314). | 2026-11-06 |
+| (root) | tests/test_throwaway.py › test_refuses_symlinks_out_of_the_copy_and_a_used_dest | Windows only: creating a symlink on Windows needs Developer Mode or admin (WinError 1314); with Developer Mode on, Git for Windows' `core.symlinks=false` checks the committed link out as a plain file, so the copy has no link to refuse. | 2026-11-06 |
+| (root) | tests/test_throwaway.py › test_copy_from_a_base_is_independent_and_checked | Windows only: `core.symlinks=false`, as above, so the base's `src/inside.py` is a plain file and `is_symlink()` fails. Fails on `main` too. Added with the owner's OK in docs/sdlc/changes/2026-11-09-m-scratch-tickets.md. | 2026-11-11 |
+| (root) | tests/test_throwaway.py › test_copy_from_a_base_falls_back_when_cp_fails | Windows only: `core.symlinks=false`, as above. Fails on `main` too; added with the owner's OK, as above. | 2026-11-11 |
+| (root) | tests/test_scratch.py › test_clean_reports_size_and_removes_read_only_trees | Windows only, a real bug: `scratch.py clean` can't remove a read-only folder (Go's module cache) on Windows, "Access is denied". Fails on `main` too; a todo in docs/sdlc/todo.md. Added with the owner's OK, as above. | 2026-11-11 |
 
 ## Lint and type errors
 
