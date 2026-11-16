@@ -67,6 +67,17 @@ def test_registry_is_read_and_checked(tmp_path):
     assert got.returncode == 1 and "departures.yaml" in got.stderr, got.stderr
 
 
+def test_registry_with_an_equivalence_trace_is_read_and_never_matches(tmp_path):
+    # product-rebuild's equiv.py writes this entry when a person accepts a red equivalence trace.
+    trace = ('- id: D-002\n  kind: deliberate-change\n  summary: accepted trace\n'
+             '  match:\n    - {runner: http, rule: "equiv-trace:invoices-total"}\n'
+             '  decided_by: "Tam"\n')
+    got = classify_departure_draft(tmp_path, spec_with(tmp_path / "s", trace + ENTRY
+                                                       + '  decided_by: "Tam"\n'))
+    assert got.returncode == 0, got.stderr
+    assert json.loads(got.stdout)["departure"] == "D-001"
+
+
 def test_departure_matches_by_pointer_and_rule():
     from finding_v1 import matching_departure
 

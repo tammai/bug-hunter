@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **`/hunt --oracle` reads a departures registry with an accepted equivalence trace** ([#36](https://github.com/tammai/bug-hunter/issues/36), [change](docs/sdlc/changes/2026-11-16-s-gh-36-equiv-trace-departures.md)). Shared contracts 1.3.1, vendored from product-rebuild, accept the match rule `equiv-trace:<name>` that product-rebuild's `equiv.py accept` writes; before, `finding_v1.py` stopped with `unknown rule equiv-trace:…`. Such an entry never drops a finding.
+
 ## 0.5.2 — 2026-11-12
 
 Every agent in a run copies one shared base clone. Since 0.5.0 an agent's repro could change that base and every later copy would run the change. The base is now sealed. Two Windows bugs are also fixed: copies read every text file, and clean left read-only folders behind.
