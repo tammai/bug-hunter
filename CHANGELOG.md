@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.3 — 2026-11-16
+
+The shared contracts move to 1.3.1, so `/hunt --oracle` runs on a product-rebuild workbench that has accepted an equivalence trace.
+
 ### Fixed
 
 - **`/hunt --oracle` reads a departures registry with an accepted equivalence trace** ([#36](https://github.com/tammai/bug-hunter/issues/36), [change](docs/sdlc/changes/2026-11-16-s-gh-36-equiv-trace-departures.md)). Shared contracts 1.3.1, vendored from product-rebuild, accept the match rule `equiv-trace:<name>` that product-rebuild's `equiv.py accept` writes; before, `finding_v1.py` stopped with `unknown rule equiv-trace:…`. Such an entry never drops a finding.
