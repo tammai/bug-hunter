@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 0.6.0 — 2026-11-17
+
+Live targets can mint their own tokens. Short-lived bearer tokens no longer have to be pasted into `targets.json` before every `/hunt --target`.
+
+### Added
+
+- **A `refresh` command per target in `targets.json`** ([change](docs/sdlc/changes/2026-11-17-m-token-refresh.md)). Give a target `"refresh": ["python3", "mint.py"]`. The command prints the accounts as JSON in the same shape as `accounts`.
+  - The proxy runs it at start, on `--check`, and when the target answers 401 to a request that used a minted account.
+  - After a 401 it mints once and retries the request once, at most one mint every 30 s.
+  - The command runs as an argument list with no shell, from the folder `targets.json` is in, with your environment, for at most 60 s. On timeout its process tree is stopped.
+  - A bare program name is looked up on PATH only. A program found inside the hunted repo or the current folder is refused.
+  - Minted values, and every value they replace, are masked in what agents see. Errors never repeat the command's output.
+
+### Changed
+
+- **The proxy log marks each request that used a budget slot with `"forwarded": true`.** `/hunt` lowers a restarted proxy's budget by these lines. Its clean-up list of writes now lists those noted `target unreachable` apart, as "may have reached the target; check", instead of leaving them out.
+
+### Known issues
+
+- `drafts.py check` and `finding_v1.py write` don't run the refresh command, so they can't look for minted tokens in a draft. The proxy's masking keeps those tokens away from agents.
+- On Windows, a `.cmd` or `.bat` refresh program found on PATH runs through `cmd.exe`.
+
 ## 0.5.3 — 2026-11-16
 
 The shared contracts move to 1.3.1, so `/hunt --oracle` runs on a product-rebuild workbench that has accepted an equivalence trace.
