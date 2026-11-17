@@ -14,5 +14,15 @@
     "typecheck": null,
     "build": null
   },
-  "prd": "docs/sdlc/prd.md"
+  "prd": "docs/sdlc/prd.md",
+  "deploy": {
+    "target": "other",
+    "environments": [
+      {
+        "name": "github-release",
+        "routine": false
+      }
+    ],
+    "runbook": "knowledge/runbooks/release.md"
+  }
 }
