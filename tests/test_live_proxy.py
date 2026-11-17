@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import re
@@ -504,3 +505,269 @@ def test_no_short_password_warning_for_key_only_basic(make_repo, tmp_path):
     ok = run_script("live_proxy", "--repo", repo, "--target", "uat", "--log",
                     tmp_path / "l.jsonl", "--check", env=env)
     assert ok.returncode == 0 and "warning" not in ok.stdout + ok.stderr
+
+
+MINT = """import json, pathlib, sys, time
+count = pathlib.Path("count.txt")
+n = int(count.read_text()) + 1 if count.exists() else 1
+count.write_text(str(n))
+time.sleep({sleep})
+if n >= {fail_at}:
+    print("sign-in failed for alice: Hh7Jj8Kk", file=sys.stderr)
+    print("Hh7Jj8Kk")
+    sys.exit(3)
+print(json.dumps({{"alice": {{"X-Seat": f"sess-Kq9{{n}}Zx"}}}}))
+"""
+
+
+def mint_target(targets: Path, url: str, fail_at: int = 99, sleep: float = 0,
+                **extra) -> Path:
+    """A target whose refresh command mints sess-Kq9<n>Zx on its n-th run; returns its counter."""
+    targets.parent.mkdir(parents=True, exist_ok=True)
+    (targets.parent / "mint.py").write_text(MINT.format(fail_at=fail_at, sleep=sleep),
+                                            encoding="utf-8")
+    write_targets(targets, {"uat": {"url": url, "refresh": [sys.executable, "mint.py"],
+                                    **extra}})
+    return targets.parent / "count.txt"
+
+
+def runs(counter: Path) -> int:
+    return int(counter.read_text()) if counter.exists() else 0
+
+
+def sent_seats(stub_log: Path) -> list:
+    return [{k.lower(): v for k, v in e["headers"].items()}.get("x-seat")
+            for e in entries(stub_log)]
+
+
+def test_refresh_mints_accounts_at_start(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    stub, stub_base, stub_log = start_stub(tmp_path, [{"path": "/me", "responses": [
+        {"body": "your old key static-Aa1Dd2"}]}])
+    short = "Basic " + base64.b64encode(b"carol:abc").decode()
+    # A static Alice that the minted alice replaces: one account, its old value still masked.
+    counter = mint_target(targets, stub_base, accounts={
+        "Alice": {"X-Seat": "static-Aa1Dd2"}, "bob": {"X-Seat": "static-Bb5Cc6"},
+        "carol": {"Authorization": short}})
+    check = run_script("live_proxy", "--repo", repo, "--target", "uat", "--log",
+                       tmp_path / "l.jsonl", "--check", env=env)
+    assert check.returncode == 0, check.stderr
+    assert "alice" in check.stdout and "bob" in check.stdout and "Kq9" not in check.stdout
+    assert "Alice" not in check.stdout
+    assert check.stdout.count("shorter than 6") == 1 and "account 's" not in check.stdout
+    assert runs(counter) == 1
+    proxy, base = start_proxy(repo, "uat", env, tmp_path / "proxy.jsonl")
+    try:
+        status, _, body = call(base + "/me", headers={"X-Bug-Hunter-Account": "alice"})
+        assert status == 200 and "static-Aa1Dd2" not in body
+        assert call(base + "/me", headers={"X-Bug-Hunter-Account": "bob"})[0] == 200
+    finally:
+        stop(proxy, stub)
+    assert sent_seats(stub_log) == ["sess-Kq92Zx", "static-Bb5Cc6"]
+
+
+def test_401_refreshes_and_retries_once(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    stub, stub_base, stub_log = start_stub(tmp_path, [
+        {"path": "/me", "responses": [
+            {"status": 401}, {"status": 401},
+            {"body": "old sess-Kq91Zx new sess-Kq92Zx", "headers": {"X-Echo": "sess-Kq91Zx"}},
+            {"status": 401}, {"status": 401}]},
+        {"path": "/bob", "responses": [{"status": 401}]}])
+    counter = mint_target(targets, stub_base, accounts={"bob": {"X-Seat": "static-Bb5Cc6"}})
+    proxy_log = tmp_path / "proxy.jsonl"
+    proxy, base = start_proxy(repo, "uat", env, proxy_log, "--max-requests", "4",
+                              "--refresh-gap", "1")
+    alice = {"X-Bug-Hunter-Account": "alice"}
+    try:
+        # Just minted at start: a 401 now is not an expired token.
+        assert call(base + "/me", headers=alice)[0] == 401 and runs(counter) == 1
+        time.sleep(1.2)
+        # A static account's 401 can't be fixed by minting.
+        assert call(base + "/bob", headers={"X-Bug-Hunter-Account": "bob"})[0] == 401
+        assert runs(counter) == 1
+        status, headers, body = call(base + "/me", headers=alice)
+        assert status == 200 and runs(counter) == 2
+        assert "Kq9" not in body and "Kq9" not in json.dumps(headers)
+        # Within the gap since the last refresh: no new mint; the retry's 401 is passed through.
+        assert call(base + "/me", headers=alice)[0] == 401 and runs(counter) == 2
+        # Four slots used by four requests, the retry included in its request's.
+        assert call(base + "/me", headers=alice)[0] == 429
+    finally:
+        output = stop(proxy, stub)
+    assert sent_seats(stub_log) == ["sess-Kq91Zx", "static-Bb5Cc6", "sess-Kq91Zx",
+                                    "sess-Kq92Zx", "sess-Kq92Zx"]
+    logged = entries(proxy_log)
+    assert [(e["status"], e.get("note", ""), e.get("forwarded", False)) for e in logged] == [
+        (401, "", True), (401, "", True), (200, "retried after token refresh", True),
+        (401, "", True), (429, "request budget used up", False)]
+    assert "Kq9" not in proxy_log.read_text(encoding="utf-8") and "Kq9" not in output
+
+
+def test_concurrent_401s_share_one_refresh(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    echo = {"headers": {"X-Echo": "sess-Kq92Zx"}, "body": "sess-Kq92Zx"}
+    stub, stub_base, _ = start_stub(tmp_path, [{"path": "/me", "responses": [
+        {"status": 401}, {"status": 401}, echo]}])
+    counter = mint_target(targets, stub_base, sleep=0.3)
+    proxy, base = start_proxy(repo, "uat", env, tmp_path / "proxy.jsonl", "--refresh-gap",
+                              "0", "--rate", "2")
+    results = []
+    started = time.monotonic()
+    threads = [threading.Thread(target=lambda: results.append(
+        call(base + "/me", headers={"X-Bug-Hunter-Account": "alice"}))) for _ in range(2)]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(20)
+    finally:
+        stop(proxy, stub)
+    elapsed = time.monotonic() - started
+    assert sorted(r[0] for r in results) == [200, 200] and runs(counter) == 2
+    assert not any("Kq9" in r[2] or "Kq9" in json.dumps(r[1]) for r in results)
+    # Four sends at 2 a second: the retries wait their turn under the rate.
+    assert elapsed >= 1.4
+
+
+def without_cwd_lookup_guard(env: dict) -> dict:
+    return {k: v for k, v in env.items() if k.lower() != "nodefaultcurrentdirectoryinexepath"}
+
+
+def test_refresh_failures_are_one_line(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    folder = targets.parent
+    folder.mkdir(parents=True, exist_ok=True)
+    scripts = {
+        "exits.py": "import sys; print('Hh7Jj8Kk'); print('Hh7Jj8Kk', file=sys.stderr); "
+                    "sys.exit(2)",
+        "notjson.py": "print('token Hh7Jj8Kk')",
+        "deep.py": "print('[' * 200000)",
+        "badkey.py": "import json; print(json.dumps({'Hh7Jj8Kk.x': {}}))",
+    }
+    for name, code in scripts.items():
+        (folder / name).write_text(code, encoding="utf-8")
+    # A program planted in the hunted repo, which is the proxy's current folder.
+    planted = Path(repo) / ("plantedpy" + Path(sys.executable).suffix)
+    planted.write_bytes(Path(sys.executable).read_bytes())
+    planted.chmod(0o755)  # PATH lookup on POSIX skips files that aren't executable
+    entries_ = {name.removesuffix(".py"): {"url": "https://uat.example.com",
+                                           "refresh": [sys.executable, name]}
+                for name in scripts}
+    entries_["missing"] = {"url": "https://uat.example.com",
+                           "refresh": ["no-such-program-Hh7Jj8Kk"]}
+    entries_["planted"] = {"url": "https://uat.example.com",
+                           "refresh": ["plantedpy", "-c", "open('ran', 'w')"]}
+    entries_["folder"] = {"url": "https://uat.example.com", "refresh": [str(folder)]}
+    write_targets(targets, entries_)
+    # The repo on PATH, as an activated virtualenv puts it, and the proxy run from elsewhere.
+    on_path = dict(without_cwd_lookup_guard(env),
+                   PATH=str(repo) + os.pathsep + env.get("PATH", ""))
+    for name in entries_:
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "live_proxy.py"), "--repo", str(repo), "--target",
+             name, "--log", str(tmp_path / "l.jsonl"), "--check"],
+            capture_output=True, text=True, timeout=90,
+            env=on_path if name == "planted" else without_cwd_lookup_guard(env),
+            cwd=tmp_path if name == "planted" else repo)
+        assert result.returncode == 1, (name, result.stdout)
+        assert result.stderr.startswith(f"error: {name}: ") and result.stderr.count("\n") == 1
+        assert "Traceback" not in result.stderr, name
+        assert "Hh7Jj8Kk" not in result.stderr + result.stdout, name
+        assert ("hunted repo" in result.stderr) == (name == "planted"), (name, result.stderr)
+    assert not (Path(repo) / "ran").exists() and not (tmp_path / "ran").exists()
+
+
+def test_failed_refresh_mid_run_passes_401_through(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    stub, stub_base, _ = start_stub(tmp_path, [{"path": "/me", "responses": [
+        {"status": 401}, {"status": 401}, {}]}])
+    counter = mint_target(targets, stub_base, fail_at=2)
+    proxy_log = tmp_path / "proxy.jsonl"
+    proxy, base = start_proxy(repo, "uat", env, proxy_log, "--refresh-gap", "1")
+    alice = {"X-Bug-Hunter-Account": "alice"}
+    try:
+        time.sleep(1.2)  # past the gap since the start-up mint, so the first 401 mints; it fails
+        assert call(base + "/me", headers=alice)[0] == 401
+        assert call(base + "/me", headers=alice)[0] == 401  # throttled: the last mint failed
+        assert call(base + "/me", headers=alice)[0] == 200
+    finally:
+        output = stop(proxy, stub)
+    assert runs(counter) == 2
+    assert [(e["status"], e.get("note", "")) for e in entries(proxy_log)] == [
+        (401, "token refresh failed"), (401, "token refresh failed"), (200, "")]
+    assert "Hh7Jj8Kk" not in proxy_log.read_text(encoding="utf-8") + output
+
+
+def test_refresh_shape_checked_and_not_run_by_load(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    counter = mint_target(targets, "https://uat.example.com")
+    draft = tmp_path / "draft.md"
+    draft.write_text("# A draft\n", encoding="utf-8")
+    checked = run_script("drafts", "check", draft, "--repo", repo, "--target", "uat", env=env)
+    assert "Traceback" not in checked.stderr and runs(counter) == 0
+    same = run_script("live_proxy", "--repo", repo, "--target", "uat", "--reference", "uat",
+                      "--log", tmp_path / "l.jsonl", "--check", env=env)
+    assert same.returncode == 1 and runs(counter) == 0
+    for bad in ("mint.py", [], [sys.executable, 3], None):
+        write_targets(targets, {"uat": {"url": "https://uat.example.com", "refresh": bad}})
+        result = run_script("live_proxy", "--repo", repo, "--target", "uat", "--log",
+                            tmp_path / "l.jsonl", "--check", env=env)
+        assert result.returncode == 1 and result.stderr.startswith("error: uat: refresh"), bad
+        assert "Traceback" not in result.stderr
+
+
+def test_slow_refresh_command_is_stopped_with_its_child(tmp_path, monkeypatch):
+    import live_proxy
+    monkeypatch.setattr(live_proxy, "REFRESH_TIMEOUT", 1)
+    marker = tmp_path / "child-alive"
+    child = f"import time, pathlib; time.sleep(3); pathlib.Path({str(marker)!r}).write_text('x')"
+    code = f"import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', {child!r}]); " \
+           "time.sleep(60)"
+    target = {"refresh": {"argv": [sys.executable, "-c", code], "dir": str(tmp_path),
+                          "name": "uat", "repo": str(tmp_path / "repo")}}
+    started = time.monotonic()
+    try:
+        live_proxy.mint(target)
+    except live_proxy.BadTarget as exc:
+        assert str(exc) == "uat: refresh command took longer than 1 s"
+    else:
+        raise AssertionError("mint returned")
+    assert time.monotonic() - started < 10
+    time.sleep(4)
+    assert not marker.exists()  # the command's child was stopped with it
+
+
+PARTIAL_MINT = """import json, pathlib
+count = pathlib.Path("count.txt")
+n = int(count.read_text()) + 1 if count.exists() else 1
+count.write_text(str(n))
+seats = {"bob": {"X-Seat": f"bob-Kq9{n}Zx"}}
+if n == 1:
+    seats["alice"] = {"X-Seat": "alice-Kq91Zx"}
+print(json.dumps(seats))
+"""
+
+
+def test_account_left_out_of_a_later_mint_keeps_its_token(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    stub, stub_base, stub_log = start_stub(tmp_path, [
+        {"path": "/bob", "responses": [{"status": 401}, {}]},
+        {"path": "/alice", "responses": [{}]}])
+    targets.parent.mkdir(parents=True, exist_ok=True)
+    (targets.parent / "mint.py").write_text(PARTIAL_MINT, encoding="utf-8")
+    write_targets(targets, {"uat": {"url": stub_base, "refresh": [sys.executable, "mint.py"]}})
+    proxy, base = start_proxy(repo, "uat", env, tmp_path / "proxy.jsonl", "--refresh-gap", "0")
+    try:
+        assert call(base + "/bob", headers={"X-Bug-Hunter-Account": "bob"})[0] == 200
+        assert call(base + "/alice", headers={"X-Bug-Hunter-Account": "alice"})[0] == 200
+    finally:
+        stop(proxy, stub)
+    assert sent_seats(stub_log) == ["bob-Kq91Zx", "bob-Kq92Zx", "alice-Kq91Zx"]
