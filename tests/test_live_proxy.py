@@ -654,6 +654,7 @@ def test_refresh_failures_are_one_line(make_repo, tmp_path):
     # A program planted in the hunted repo, which is the proxy's current folder.
     planted = Path(repo) / ("plantedpy" + Path(sys.executable).suffix)
     planted.write_bytes(Path(sys.executable).read_bytes())
+    planted.chmod(0o755)  # PATH lookup on POSIX skips files that aren't executable
     entries_ = {name.removesuffix(".py"): {"url": "https://uat.example.com",
                                            "refresh": [sys.executable, name]}
                 for name in scripts}
