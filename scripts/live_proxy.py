@@ -7,8 +7,13 @@ import html
 import http.client
 import json
 import math
+import os
 import re
+import shutil
+import signal
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,6 +42,9 @@ HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 ACCOUNT_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 # Frameworks that honour these turn a GET into a write.
 METHOD_OVERRIDES = {"x-http-method-override", "x-http-method", "x-method-override"}
+# A hunter probing auth sends 401s on purpose; each must not mint a token.
+REFRESH_GAP = 30.0
+REFRESH_TIMEOUT = 60
 
 
 class BadTarget(Exception):
@@ -75,7 +83,7 @@ def load_target(repo: str, target: str) -> dict:
         if not _local_url(target):
             raise BadTarget(f"{target} isn't a localhost URL with a port; "
                             "name a target from targets.json instead")
-        return {"url": target.rstrip("/"), "writes": True, "accounts": {}}
+        return {"url": target.rstrip("/"), "writes": True, "accounts": {}, "refresh": None}
     if not target:
         raise BadTarget("no target named")
     try:
@@ -100,28 +108,141 @@ def load_target(repo: str, target: str) -> dict:
     if not isinstance(writes, bool):
         raise BadTarget(f"{target}: writes must be true or false")
     accounts = entry.get("accounts", {})
+    _check_accounts(target, accounts)
+    refresh = entry.get("refresh")
+    if "refresh" in entry and not (isinstance(refresh, list) and refresh
+                                   and all(isinstance(arg, str) and arg for arg in refresh)):
+        raise BadTarget(f"{target}: refresh must be a command as a list of text arguments, "
+                        'like ["python3", "mint.py"]')
+    return {"url": entry["url"].rstrip("/"), "writes": writes, "accounts": accounts,
+            "refresh": refresh and {"argv": refresh, "dir": str(path.parent), "name": target,
+                                    "repo": str(Path(repo).absolute())}}
+
+
+class _InRepo(Exception):
+    pass
+
+
+def _check_accounts(target: str, accounts: object, minted: bool = False) -> None:
+    """BadTarget unless `accounts` maps shell-safe names to objects of sendable headers."""
     if not isinstance(accounts, dict) or not all(
         isinstance(name, str) and isinstance(headers, dict)
         and all(isinstance(k, str) and isinstance(v, str) for k, v in headers.items())
         for name, headers in accounts.items()
     ):
         raise BadTarget(f"{target}: accounts must map names to objects of text headers")
-    for name, headers in accounts.items():
+    for i, (name, headers) in enumerate(accounts.items(), 1):
+        # A command's output may hold a token in any field, so its items are named by position.
+        account = f"account {i}" if minted else f"account {name}"
         if not ACCOUNT_NAME.fullmatch(name):
-            raise BadTarget(f"{target}: account name {name!r} must be letters, digits and _, "
-                            "starting with a letter")
-        for header, value in headers.items():
+            raise BadTarget(f"{target}: " + (f"{account}'s name" if minted else
+                                             f"account name {name!r}")
+                            + " must be letters, digits and _, starting with a letter")
+        for j, (header, value) in enumerate(headers.items(), 1):
             # Never echo the value: it is a login.
             if not HEADER_NAME.fullmatch(header):
-                raise BadTarget(f"{target}: account {name} has a header name that isn't valid")
+                raise BadTarget(f"{target}: {account} has a header name that isn't valid")
+            header = f"header {j}" if minted else header
             try:
                 value.encode("latin-1")
             except UnicodeEncodeError:
-                raise BadTarget(f"{target}: account {name}'s {header} value has characters "
+                raise BadTarget(f"{target}: {account}'s {header} value has characters "
                                 "HTTP headers can't carry") from None
             if any(c in value for c in "\r\n\0"):
-                raise BadTarget(f"{target}: account {name}'s {header} value has a line break")
-    return {"url": entry["url"].rstrip("/"), "writes": writes, "accounts": accounts}
+                raise BadTarget(f"{target}: {account}'s {header} value has a line break")
+
+
+def _program(name: str, folder: str, repo: str) -> str:
+    """The refresh program's path: relative to targets.json's folder, else from PATH only."""
+    if os.path.isabs(name):
+        return name
+    if "/" in name or os.sep in name:
+        return str(Path(folder) / name)
+    # Windows' lookup tries the current folder first unless this is set, and /hunt runs from
+    # the hunted repo: a python3.exe it commits would run with the owner's logins.
+    os.environ["NoDefaultCurrentDirectoryInExePath"] = "1"
+    found = shutil.which(name)
+    if found is None:
+        raise FileNotFoundError(name)
+    # PATH can lead into the repo too (an activated virtualenv); check the path as found and
+    # with links resolved, against the repo and the folder the proxy runs in.
+    places = {Path(found).absolute(), Path(found).resolve()}
+    if any(p.is_relative_to(root) for p in places for root in {
+            Path(repo), Path(repo).resolve()}) or Path(found).absolute().parent == Path.cwd():
+        raise _InRepo(name)
+    return found
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    if os.name == "nt":
+        taskkill = Path(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe")
+        try:
+            subprocess.run([str(taskkill), "/T", "/F", "/PID", str(proc.pid)],
+                           capture_output=True)
+        except OSError:
+            pass  # the direct child is still killed below
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    proc.kill()
+    proc.wait()
+
+
+def mint(target: dict) -> dict:
+    """The accounts the target's refresh command prints; BadTarget, never its output, if not."""
+    refresh = target["refresh"]
+    what = f"{refresh['name']}: refresh command"
+    # An argument list and no shell. Output goes to a file, not a pipe, so a child the command
+    # leaves running can't hold the read open past the timeout; none of it is ever echoed.
+    group = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" \
+        else {"start_new_session": True}
+    try:
+        with tempfile.TemporaryFile() as out:
+            try:
+                proc = subprocess.Popen(
+                    [_program(refresh["argv"][0], refresh["dir"], refresh["repo"]),
+                     *refresh["argv"][1:]], cwd=refresh["dir"], stdin=subprocess.DEVNULL,
+                    stdout=out, stderr=subprocess.DEVNULL, **group)
+            except _InRepo:
+                raise BadTarget(f"{what}'s program was found inside the hunted repo or the "
+                                "current folder; give its full path") from None
+            except (OSError, ValueError) as exc:
+                raise BadTarget(f"{what} can't start ({type(exc).__name__})") from None
+            try:
+                code = proc.wait(timeout=REFRESH_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                _kill_tree(proc)
+                raise BadTarget(f"{what} took longer than {REFRESH_TIMEOUT} s") from None
+            out.seek(0)
+            printed = out.read()
+    except OSError as exc:
+        raise BadTarget(f"{what} can't run ({type(exc).__name__})") from None
+    if code != 0:
+        raise BadTarget(f"{what} exited with {code}")
+    try:
+        accounts = json.loads(printed)
+    except (ValueError, RecursionError):
+        raise BadTarget(f"{what} didn't print a JSON object of accounts") from None
+    _check_accounts(f"{what} printed bad accounts", accounts, minted=True)
+    return accounts
+
+
+def _apply(target: dict, minted: dict) -> None:
+    """Put minted accounts over the current ones; every value they replace stays masked."""
+    names = {name.lower() for name in minted}
+    history = target.setdefault("history", [])
+    for name, headers in target["accounts"].items():
+        if name.lower() in names and headers not in history:
+            history.append(headers)
+    # Names match case-insensitively, as requests name them; an account a mint leaves out
+    # keeps its last value and can still trigger the next mint.
+    kept = {n: h for n, h in target["accounts"].items() if n.lower() not in names}
+    target["accounts"] = {**kept, **minted}
+    target["minted"] = target.get("minted", set()) | names
+    target["minted_at"] = time.monotonic()
+    target["mint_failed"] = False
 
 
 def _place(target: dict) -> tuple:
@@ -156,10 +277,15 @@ def _forms(value: str) -> set[str]:
         | encoded | entities
 
 
-def _basic_passwords(target: dict) -> list[tuple[str, str]]:
+def _every_login(target: dict) -> list[dict]:
+    """The headers of each account now and every value one replaced: all of them masked."""
+    return [*target["accounts"].values(), *target.get("history", [])]
+
+
+def _basic_passwords(logins: list[tuple[str, dict]]) -> list[tuple[str, str]]:
     """(account, decoded user:password) for each Basic login, as UTF-8 and as Latin-1."""
     found = []
-    for name, headers in target["accounts"].items():
+    for name, headers in logins:
         for value in headers.values():
             scheme, _, credential = value.strip().partition(" ")
             if scheme.lower() != "basic":
@@ -179,11 +305,11 @@ def _basic_passwords(target: dict) -> list[tuple[str, str]]:
 def _pieces(target: dict) -> set[str]:
     """Every account value, and the parts a response might echo alone, stripped."""
     pieces = set()
-    for headers in target["accounts"].values():
+    for headers in _every_login(target):
         for value in headers.values():
             pieces |= {value, value.strip().partition(" ")[2]}
             pieces |= {cookie.partition("=")[2] for cookie in value.split(";")}
-    for _, decoded in _basic_passwords(target):
+    for _, decoded in _basic_passwords([("", h) for h in _every_login(target)]):
         pieces |= {decoded, decoded.partition(":")[2]}
     return {p.strip() for p in pieces}
 
@@ -199,7 +325,7 @@ def _secrets(target: dict) -> list[str]:
 def _password_warnings(target: dict) -> list[str]:
     """What the owner should know about Basic passwords the masking handles poorly."""
     warnings = set()
-    for name, decoded in _basic_passwords(target):
+    for name, decoded in _basic_passwords(list(target["accounts"].items())):
         password = decoded.partition(":")[2]
         if not password:
             continue  # a key sent as the user name, masked whole; nothing short to warn about
@@ -260,18 +386,48 @@ def _masker(target: dict, proxy_url: str, others: tuple = ()):
 
 
 def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, proxy_url: list,
-             label: str | None = None, shared: dict | None = None, others: tuple = ()):
+             label: str | None = None, shared: dict | None = None, others: tuple = (),
+             gap: float = REFRESH_GAP):
     """A handler for one listener; `others` are masked too, `shared` holds the joint budget."""
     base = urlsplit(target["url"])
     https = base.scheme == "https"
     connection = http.client.HTTPSConnection if https else http.client.HTTPConnection
-    accounts = {name.lower(): headers for name, headers in target["accounts"].items()}
     state = shared if shared is not None else {"lock": threading.Lock(), "sent": 0, "next": 0.0,
                                                "refused": 0}
+    state.setdefault("logins", 0)  # bumped on every refresh, so each masker is rebuilt
     lock = state["lock"]
+    refreshing = threading.Lock()
     # Beside another target, headers a front end may route by could reach the other one.
     dropped = NOT_FORWARDED | (ROUTING_HEADERS if others else set())
-    masker: list = [None]  # built on first use, once the proxies' own URLs are known
+    masker: list = [None, -1]  # built on first use, once the proxies' own URLs are known
+
+    def accounts() -> dict:
+        with lock:
+            return {name.lower(): headers for name, headers in target["accounts"].items()}
+
+    def refresh(account: str, sent: dict) -> tuple[dict | None, str]:
+        """New headers for `account` after its 401, or None and the note to log."""
+        with refreshing:
+            now = accounts().get(account.lower())
+            if now is not None and now != sent:
+                return now, ""  # another request's refresh already replaced them
+            with lock:
+                if account.lower() not in target.get("minted", set()):
+                    return None, ""
+                if time.monotonic() - target.get("minted_at", -math.inf) < gap:
+                    return None, "token refresh failed" if target.get("mint_failed") else ""
+                target["minted_at"] = time.monotonic()  # a failing command is throttled too
+            try:
+                minted = mint(target)
+            except Exception:  # whatever went wrong, the hunter still gets the target's 401
+                with lock:
+                    target["mint_failed"] = True
+                return None, "token refresh failed"
+            with lock:
+                _apply(target, minted)
+                state["logins"] += 1
+            now = accounts().get(account.lower())
+            return (now, "") if now is not None and now != sent else (None, "")
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args: object) -> None:
@@ -319,7 +475,8 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
             if self.command != "HEAD":
                 self.wfile.write(data)
 
-        def _record(self, account: str, status: int, body: bytes, note: str = "") -> None:
+        def _record(self, account: str, status: int, body: bytes, note: str = "",
+                    forwarded: bool = False) -> None:
             url = urlsplit(self.path)
             entry = {
                 "time": round(time.time(), 3), "method": self.command, "path": url.path,
@@ -329,17 +486,19 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
             }
             if note:
                 entry["note"] = note
+            if forwarded:
+                entry["forwarded"] = True  # it took a budget slot; it may have reached the target
             if label:
                 entry["target"] = label
             with lock, log.open("a", encoding="utf-8") as out:
                 out.write(json.dumps(entry) + "\n")
 
-        def _take_slot(self) -> bool:
+        def _take_slot(self, counted: bool = True) -> bool:
             """Count this request against the budget and wait for its turn under the rate."""
             with lock:
-                if state["sent"] >= budget:
+                if counted and state["sent"] >= budget:
                     return False
-                state["sent"] += 1
+                state["sent"] += counted
                 now = time.monotonic()
                 slot = max(now, state["next"])
                 state["next"] = slot + 1 / rate
@@ -396,7 +555,8 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
                 return self._reply(400, "bad Content-Length")
             body = self.rfile.read(length) if length else b""
             account = self.headers.get(ACCOUNT_HEADER, "").strip()
-            if account and account.lower() not in accounts:
+            known = accounts()
+            if account and account.lower() not in known:
                 self._record(account, 400, body, note="unknown account")
                 return self._reply(400, f"no account named {account} for this target")
             if self.command in WRITES and not target["writes"]:
@@ -411,41 +571,36 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
                 self._record(account, 429, body, note="request budget used up")
                 return self._reply(429, "the run's request budget is used up")
 
-            headers = {k: v for k, v in self.headers.items() if k.lower() not in dropped}
-            if account:
-                chosen = accounts[account.lower()]
-                headers = {k: v for k, v in headers.items()
-                           if k.lower() not in {name.lower() for name in chosen}}
-                headers.update(chosen)
-            headers["Host"] = base.netloc
-            # Uncompressed, so account values and the target's address can be masked.
-            headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
-            headers["Accept-Encoding"] = "identity"
-            if body or self.command in WRITES:
-                headers["Content-Length"] = str(len(body))
+            chosen = known[account.lower()] if account else {}
             try:
-                upstream = connection(base.hostname, base.port, timeout=60)
-                upstream.request(self.command, base.path + self.path, body=body or None,
-                                 headers=headers)
-                response = upstream.getresponse()
-                data = response.read(MAX_BODY + 1)[:MAX_BODY]
-                upstream.close()
+                response, data = self._send(body, chosen)
+                note = ""
+                if response.status == 401 and account and target["refresh"]:
+                    fresh, note = refresh(account, chosen)
+                    if fresh is not None:
+                        self._take_slot(counted=False)  # the retry keeps to the rate
+                        response, data = self._send(body, fresh)
+                        note = "retried after token refresh"
             except (OSError, http.client.HTTPException, ValueError) as exc:
-                self._record(account, 502, body, note=f"target unreachable: {type(exc).__name__}")
+                self._record(account, 502, body, note=f"target unreachable: {type(exc).__name__}",
+                             forwarded=True)
                 return self._reply(502, f"target unreachable: {type(exc).__name__}")
             encoding = (response.getheader("Content-Encoding") or "identity").strip().lower()
             bodiless = self.command == "HEAD" or response.status in (204, 304)
             if encoding not in ("", "identity") and not bodiless:
                 # Asked for identity; a compressed body can't be checked for logins. The
                 # target's own value isn't echoed: it is text the agent shouldn't need.
-                self._record(account, 502, body, note="target sent a compressed body")
+                self._record(account, 502, body, note="target sent a compressed body",
+                             forwarded=True)
                 return self._reply(502, "the target sent a compressed body although asked "
                                         "not to, so it can't be checked for logins")
-            self._record(account, response.status, body)
-            if masker[0] is None:
-                masker[0] = _masker(target, proxy_url[0],
-                                    tuple((other, url[0]) for other, url in others))
-            mask = masker[0]
+            self._record(account, response.status, body, note=note, forwarded=True)
+            # Built under the lock that swaps accounts in, so it knows every value sent so far.
+            with lock:
+                if masker[1] != state["logins"]:
+                    masker[:] = [_masker(target, proxy_url[0], tuple(
+                        (other, url[0]) for other, url in others)), state["logins"]]
+                mask = masker[0]
             data = mask(data)
             # send_response_only: no Server or Date of the proxy's own beside the target's.
             self.send_response_only(response.status, response.reason)
@@ -461,6 +616,27 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(data)
+
+        def _send(self, body: bytes, chosen: dict) -> tuple:
+            headers = {k: v for k, v in self.headers.items() if k.lower() not in dropped}
+            if chosen:
+                headers = {k: v for k, v in headers.items()
+                           if k.lower() not in {name.lower() for name in chosen}}
+                headers.update(chosen)
+            headers["Host"] = base.netloc
+            # Uncompressed, so account values and the target's address can be masked.
+            headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
+            headers["Accept-Encoding"] = "identity"
+            if body or self.command in WRITES:
+                headers["Content-Length"] = str(len(body))
+            upstream = connection(base.hostname, base.port, timeout=60)
+            try:
+                upstream.request(self.command, base.path + self.path, body=body or None,
+                                 headers=headers)
+                response = upstream.getresponse()
+                return response, response.read(MAX_BODY + 1)[:MAX_BODY]
+            finally:
+                upstream.close()
 
         do_GET = do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = _respond
 
@@ -495,6 +671,8 @@ def _main(argv: list[str] | None = None) -> int:
                         help="exit after this many seconds without a request")
     parser.add_argument("--reference",
                         help="a second target, the reference, served on its own listener")
+    parser.add_argument("--refresh-gap", type=_positive(0, float), default=REFRESH_GAP,
+                        help=argparse.SUPPRESS)
     parser.add_argument("--check", action="store_true",
                         help="only check the target is allowed and well formed, then exit")
     args = parser.parse_args(argv)
@@ -507,6 +685,13 @@ def _main(argv: list[str] | None = None) -> int:
     if reference and (args.reference == args.target or _place(reference) == _place(target)):
         print("error: --reference is on the same origin (scheme, host and port) as --target; "
               "the reference must be another server", file=sys.stderr)
+        return 1
+    try:
+        for chosen in (target, reference):
+            if chosen and chosen["refresh"]:
+                _apply(chosen, mint(chosen))
+    except BadTarget as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 1
     listeners = [("target", args.target, target)]
     if reference:
@@ -535,7 +720,7 @@ def _main(argv: list[str] | None = None) -> int:
         label = None if not reference else ("rebuild" if kind == "target" else "reference")
         others = tuple((o, urls[j]) for j, (_, _, o) in enumerate(listeners) if j != i)
         handler = _handler(chosen, Path(args.log), args.max_requests, args.rate, seen, urls[i],
-                           label, shared, others)
+                           label, shared, others, args.refresh_gap)
         try:
             # Loopback only: the hunters on this machine are the only clients.
             servers.append(ThreadingHTTPServer(("127.0.0.1", 0), handler))
