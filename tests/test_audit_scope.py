@@ -168,3 +168,356 @@ def test_scope_reports_coverage_gaps(make_repo):
     assert scope(repo, "--focus", "security")["coverage"]["dirty"] is True
     narrowed = scope(repo, "src", "--focus", "security")["coverage"]
     assert narrowed["paths"] == ["src"]
+
+
+def test_git_calls_and_inventory_cells_cant_be_steered(make_repo, tmp_path):
+    import os
+    import subprocess
+    stripe = "sk_" + "live_" + "a1" * 12
+    repo = make_repo({"src/app.js": "x\n", "config.js": f'const k = "{stripe}";\n'})
+    commit(repo)
+    other = tmp_path / "other"
+    other.mkdir()
+    subprocess.run(["git", "init", "-q", str(other)], check=True)
+    env = {**os.environ, "GIT_DIR": str(other / ".git"), "GIT_WORK_TREE": str(other),
+           "GIT_INDEX_FILE": str(other / ".git" / "index")}
+    result = run_script("scope", repo, "--focus", "security", env=env)
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert any("src/app.js" in part["files"] for part in data["parts"])
+    assert data["coverage"]["commit"] and data["coverage"]["dirty"] is False
+    result = run_script("secrets_scan", repo, env=env)
+    assert result.returncode == 0, result.stderr
+    assert any(f["path"] == "config.js" for f in json.loads(result.stdout))
+
+    audit = tmp_path / "audit"
+    audit.mkdir()
+    blocks = tmp_path / "blocks.txt"
+    blocks.write_text("=== PII INVENTORY ===\n"
+                      "| field | defined | logged | returned | sent to | stored | deletion |\n"
+                      "| email\x1b[2J | src/a.js:1 | no\x07 | yes\x9b | - | db\u200bx | - |\n"
+                      "=== END ===\n", encoding="utf-8")
+    assert run_script("findings", "inventory", blocks, audit).returncode == 0
+    report_run = run_script("findings", "report", audit)
+    assert report_run.returncode == 0, report_run.stderr
+    for name in ("inventory.md", "REPORT.md"):
+        text = (audit / name).read_text(encoding="utf-8")
+        assert "email" in text
+        assert not any(not c.isprintable() and c not in "\n" for c in text), name
+
+
+def test_the_dirty_check_runs_no_program_from_the_target_config(make_repo, tmp_path):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    import pytest
+    if os.name == "nt":
+        pytest.skip("filter commands here are POSIX shell")
+    marker = tmp_path / "ran"
+    gitconfig = tmp_path / "global.gitconfig"
+    gitconfig.write_text('[filter "g"]\n\tclean = tr a b\n', encoding="utf-8")
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": str(gitconfig)}
+
+    def git(repo, *args):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                       env=env)
+
+    def run(repo):
+        result = subprocess.run([sys.executable, str(Path(__file__).parent.parent / "scripts"
+                                                     / "scope.py"), str(repo), "--focus",
+                                 "security"], capture_output=True, text=True, env=env)
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)["coverage"]["dirty"]
+
+    def make(name, attributes, config):
+        repo = tmp_path / name
+        repo.mkdir()
+        git(repo, "init", "-q")
+        (repo / ".gitattributes").write_text(attributes, encoding="utf-8")
+        (repo / "app.js").write_text("x\n", encoding="utf-8")
+        for file in ("a.txt", "b.dat", "c.g"):
+            (repo / file).write_text("a\n", encoding="utf-8")
+        git(repo, "add", "-A")
+        git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i")
+        for key, value in config:
+            git(repo, "config", key, value)
+        later = os.stat(repo / "a.txt").st_mtime + 5
+        for file in ("a.txt", "b.dat", "c.g"):
+            os.utime(repo / file, (later, later))
+        return repo
+
+    hostile = make("hostile", "*.txt filter=a=b.c\n*.dat filter=p.q\n*.g filter=g\n",
+                   [("filter.a=b.c.clean", f"touch {marker}; cat"),
+                    ("filter.p.q.process", f"touch {marker}")])
+    # Blanked, its filters change nothing here, so the files read as they were committed.
+    assert run(hostile) is False
+    assert not marker.exists()
+
+    required = make("required", "*.txt filter=r\n",
+                    [("filter.r.clean", f"touch {marker}; cat"), ("filter.r.required", "true")])
+    assert run(required) is None
+    assert not marker.exists()
+
+    owners = make("owners", "*.g filter=g\n", [])
+    assert run(owners) is False
+
+    # A treeless partial clone fetches missing trees on demand, through the target's config.
+    src = tmp_path / "src"
+    src.mkdir()
+    git(src, "init", "-q")
+    (src / "d").mkdir()
+    (src / "d" / ".env").write_text("x\n", encoding="utf-8")
+    git(src, "add", "-A")
+    git(src, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i")
+    git(src, "config", "uploadpack.allowFilter", "true")
+    git(src, "config", "uploadpack.allowAnySHA1InWant", "true")
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", "--no-checkout", "--filter=tree:0",
+                    src.as_uri(), str(clone)], check=True, capture_output=True, env=env)
+    upload = tmp_path / "upload.sh"
+    upload.write_text(f'#!/bin/sh\ntouch "{marker}"\nexec git-upload-pack "$@"\n',
+                      encoding="utf-8")
+    upload.chmod(0o755)
+    git(clone, "config", "remote.origin.uploadpack", str(upload))
+    import secrets_scan
+    # Without the trees git can't answer, which reads as "maybe in history", never as "not".
+    assert secrets_scan.in_history(str(clone), "d/.env") is not False
+    assert not marker.exists()
+
+
+def test_an_old_git_fails_closed_and_no_transport_runs(make_repo, tmp_path, monkeypatch):
+    import os
+    import subprocess
+
+    import pytest
+    import scope as scope_module
+    import secrets_scan
+    if os.name == "nt":
+        pytest.skip("the upload-pack stand-in is a POSIX shell script")
+
+    def git(repo, *args):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    repo = make_repo({"app.js": "x\n"})
+    commit(repo)
+    assert scope_module._blank_filters(str(repo)) == {}
+    git(repo, "config", "filter.x.clean", "cat")
+    assert scope_module._blank_filters(str(repo)) == {
+        "filter.x.clean": "", "filter.x.smudge": "", "filter.x.process": ""}
+
+    # Before 2.31 git ignores GIT_CONFIG_COUNT, so a blanked driver would still run.
+    for module in (scope_module, secrets_scan):
+        monkeypatch.setattr(module, "git_version", lambda: (2, 30, 9), raising=False)
+    assert scope_module._blank_filters(str(repo)) is None
+    git(repo, "config", "--unset", "filter.x.clean")
+    assert scope_module._blank_filters(str(repo)) == {}
+
+    marker = tmp_path / "ran"
+    src = tmp_path / "src"
+    src.mkdir()
+    git(src, "init", "-q")
+    (src / ".env").write_text("x\n", encoding="utf-8")
+    git(src, "add", "-A")
+    git(src, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i")
+    git(src, "config", "uploadpack.allowFilter", "true")
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", "--no-checkout", "--filter=tree:0", src.as_uri(),
+                    str(clone)], check=True, capture_output=True)
+    upload = tmp_path / "upload.sh"
+    upload.write_text(f'#!/bin/sh\ntouch "{marker}"\nexec git-upload-pack "$@"\n',
+                      encoding="utf-8")
+    upload.chmod(0o755)
+    git(clone, "config", "remote.origin.uploadpack", str(upload))
+    # Before 2.45.1 GIT_NO_LAZY_FETCH is ignored: a partial clone can't be asked at all.
+    monkeypatch.setattr(secrets_scan, "git_version", lambda: (2, 45, 0))
+    assert secrets_scan.in_history(str(clone), ".env") is None
+    assert secrets_scan.in_history(str(repo), "app.js") is True
+    # On any git, no transport runs: a fetch is refused before it starts the remote's program.
+    monkeypatch.setattr(secrets_scan, "git_version", lambda: (2, 50, 1))
+    assert secrets_scan.run_git(str(clone), "fetch", "-q", "origin").returncode != 0
+    assert not marker.exists()
+    # Even when the target's own config allows the transport by name.
+    for name in ("file", "ext"):
+        git(clone, "config", f"protocol.{name}.allow", "always")
+    assert secrets_scan.run_git(str(clone), "fetch", "-q", "origin").returncode != 0
+    assert not marker.exists()
+
+    # browser.py stays standalone, but its one git call is hardened the same way.
+    import browser
+    other = tmp_path / "other"
+    other.mkdir()
+    git(other, "init", "-q")
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+    assert browser._tracked(str(repo)) == ["app.js"]
+
+
+def test_submodules_are_a_gap_and_their_filters_never_run(make_repo, tmp_path):
+    import os
+    import subprocess
+
+    import pytest
+    if os.name == "nt":
+        pytest.skip("filter commands here are POSIX shell")
+
+    def git(repo, *args):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    git(sub, "init", "-q")
+    (sub / ".gitattributes").write_text("* filter=evil\n", encoding="utf-8")
+    (sub / "lib.js").write_text("x\n", encoding="utf-8")
+    git(sub, "add", "-A")
+    git(sub, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i")
+    repo = make_repo({"app.js": "x\n"})
+    git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(sub), "sub")
+    commit(repo)
+    marker = tmp_path / "ran"
+    git(repo / "sub", "config", "filter.evil.clean", f"touch {marker}; cat")
+    later = os.stat(repo / "sub" / "lib.js").st_mtime + 5
+    os.utime(repo / "sub" / "lib.js", (later, later))
+    cover = scope(repo, "--focus", "security")["coverage"]
+    assert not marker.exists()
+    assert cover["submodules"] == ["sub"]
+
+    audit = tmp_path / "audit"
+    audit.mkdir()
+    facts = tmp_path / "scope.json"
+    facts.write_text(json.dumps({"parts": [], "skipped": [], "audits": [],
+                                 "coverage": cover}), encoding="utf-8")
+    assert run_script("findings", "report", audit, "--scope", facts).returncode == 0
+    report = (audit / "REPORT.md").read_text(encoding="utf-8")
+    assert "submodule not checked for uncommitted changes: sub" in report
+
+
+def test_an_unknown_history_for_a_local_secret_is_a_gap(tmp_path, monkeypatch, capsys):
+    import subprocess
+
+    import secrets_scan
+
+    def git(repo, *args):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    stripe = "sk_" + "live_" + "a1" * 12
+    src = tmp_path / "src"
+    src.mkdir()
+    git(src, "init", "-q")
+    (src / ".env").write_text(f"STRIPE={stripe}\n", encoding="utf-8")
+    (src / "app.js").write_text("x\n", encoding="utf-8")
+    git(src, "add", "-A")
+    git(src, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i")
+    git(src, "rm", "-q", "--cached", ".env")
+    (src / ".gitignore").write_text(".env\n", encoding="utf-8")
+    git(src, "add", ".gitignore")
+    git(src, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "untrack")
+    git(src, "config", "uploadpack.allowFilter", "true")
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", "--filter=blob:none", src.as_uri(), str(clone)],
+                   check=True, capture_output=True)
+    (clone / ".env").write_text(f"STRIPE={stripe}\n", encoding="utf-8")
+    monkeypatch.setattr(secrets_scan, "git_version", lambda: (2, 45, 0))
+    assert secrets_scan._main([str(clone)]) == 0
+    [item] = [f for f in json.loads(capsys.readouterr().out) if f["path"] == ".env"]
+    assert item["committed"] is False and item["history_unknown"] is True
+
+    audit = tmp_path / "audit"
+    audit.mkdir()
+    meta = tmp_path / "meta.json"
+    meta.write_text(json.dumps({"secrets_scanned": True, "history_unknown": [".env"]}),
+                    encoding="utf-8")
+    assert run_script("findings", "report", audit, "--meta", meta).returncode == 0
+    report = (audit / "REPORT.md").read_text(encoding="utf-8")
+    assert "couldn't tell whether git history holds .env" in report
+
+
+def test_a_shallow_clone_cant_say_a_path_was_never_committed(tmp_path, capsys):
+    import subprocess
+
+    import secrets_scan
+
+    def git(repo, *args):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    stripe = "sk_" + "live_" + "a1" * 12
+    src = tmp_path / "src"
+    src.mkdir()
+    git(src, "init", "-q")
+    (src / ".env").write_text(f"STRIPE={stripe}\n", encoding="utf-8")
+    (src / "app.js").write_text("x\n", encoding="utf-8")
+    git(src, "add", "-A")
+    git(src, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i")
+    git(src, "rm", "-q", "--cached", ".env")
+    (src / ".gitignore").write_text(".env\n", encoding="utf-8")
+    git(src, "add", ".gitignore")
+    git(src, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "untrack")
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", "--depth", "1", src.as_uri(), str(clone)],
+                   check=True, capture_output=True)
+    (clone / ".env").write_text(f"STRIPE={stripe}\n", encoding="utf-8")
+    assert secrets_scan.in_history(str(clone), ".env") is None
+    assert secrets_scan._main([str(clone)]) == 0
+    [item] = [f for f in json.loads(capsys.readouterr().out) if f["path"] == ".env"]
+    assert item["committed"] is False and item["history_unknown"] is True
+    data = tmp_path / "s.json"
+    data.write_text(json.dumps([item]), encoding="utf-8")
+    out = tmp_path / "out"
+    assert run_script("findings", "from-secrets-scan", data, out).returncode == 0
+    [text] = [p.read_text(encoding="utf-8") for p in out.glob("*.md")]
+    assert "not committed" not in text.splitlines()[0]
+    impact = text.split("## Impact\n")[1].split("\n")[0]
+    assert impact.startswith("Maybe in git history already (git couldn't say)")
+    assert ".env:1 pattern=stripe-live-key" in text and "committed=false" in text
+
+
+def test_replaced_history_cant_say_a_path_was_never_committed(make_repo):
+    import subprocess
+
+    import secrets_scan
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
+                        *args], check=True, capture_output=True)
+
+    repo = make_repo({".env": "x\n", "app.js": "x\n"})
+    commit(repo)
+    git("rm", "-q", "--cached", ".env")
+    git("commit", "-qm", "untrack")
+    assert secrets_scan.in_history(str(repo), ".env") is True
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True,
+                          text=True).stdout.strip()
+    # A graft that makes HEAD a root hides the commit that held .env from a plain rev-list.
+    git("replace", "--graft", head)
+    assert secrets_scan.in_history(str(repo), ".env") is not False
+    git("replace", "-d", head)
+    (repo / ".git" / "info").mkdir(exist_ok=True)
+    (repo / ".git" / "info" / "grafts").write_text(head + "\n", encoding="utf-8")
+    assert secrets_scan.in_history(str(repo), ".env") is None
+
+
+def test_a_git_timeout_is_cant_say_never_clean(make_repo, monkeypatch, capsys):
+    import subprocess
+
+    import browser
+    import scope as scope_module
+    import secrets_scan
+    import throwaway
+    assert browser._REPO_VARS == frozenset(throwaway._REPO_VARS)
+
+    repo = make_repo({"app.js": "x\n"})
+    commit(repo)
+
+    def slow(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], kwargs.get("timeout") or 1)
+
+    monkeypatch.setattr(secrets_scan, "git_version", lambda: (2, 50, 1))
+    monkeypatch.setattr(subprocess, "run", slow)
+    assert secrets_scan.run_git(str(repo), "status").returncode == 124
+    assert secrets_scan.in_history(str(repo), "app.js") is None
+    assert browser._tracked(str(repo)) is None
+    for main in (secrets_scan._main, scope_module._main):
+        assert main([str(repo)]) == 1
+        err = capsys.readouterr().err
+        assert err.startswith(f"error: git timed out on {repo}"), err

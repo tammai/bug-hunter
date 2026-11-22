@@ -30,6 +30,14 @@
   - trailing dots or whitespace;
   - `%u` escapes, overlong UTF-8 (`%c0%ae`, `%e0%80%ae`), NUL and fullwidth dots.
 - **`finding_v1.py`** gives one error line, never a traceback, for deeply nested JSON or YAML. It writes a finding whole or not at all.
+- **`/audit` verdict follow-ups** ([change](docs/sdlc/changes/2026-11-22-m-audit-verdict-followups.md)):
+  - The Accepted list shows each finding's current severity, and when a later run raised it.
+  - A secret committed since its first sighting reads "(since committed)"; an advisory whose fix was released later stops saying "no fix known".
+  - A local `.env` whose path git history holds counts as committed; one whose history git can't read (a shallow, partial or grafted clone, or a timeout) is a coverage gap, never "never committed".
+  - npm advisories are one finding each, so `via`'s order can't change a number. Pre-id secrets pair one to one, never when accepted `rotated`, and one kept open by a same-shape sibling is never marked fixed.
+  - `recheck` without `--repo` never fixes a local secret. `secret-id.key` works on filesystems without hard links.
+  - Every git call the audit scripts make ignores inherited repo variables, can't use any transport (`GIT_ALLOW_PROTOCOL`), runs no lazy fetch, and times out; `scope.py` blanks the target's own filter drivers before `git status` and doesn't enter submodules, listing each as a gap. On git older than 2.31 or 2.45.1 those guards fail closed. PII inventory cells are escaped.
+  - **New `findings.py seal`** and `--seal` on `recheck`, `dedupe` and `report`: `/audit` seals `accepted.md`, `policy.md` and the findings after your yes and refuses to write if an agent changed them during the run.
 - **Live hunts: the proxy hides every address the draft check refuses** ([change](docs/sdlc/changes/2026-11-22-m-leak-scan-limits.md)):
   - The proxy's masker and `drafts.py check` share one set of address patterns (every IP spelling, loopback included), so an agent never sees a host spelling that would later get its finding refused. A dotted host inside a longer word is now masked too.
   - Links under any spelling of the target's host still go to the proxy's listener; a link followed by userinfo (`@`, as an entity or escape) or a non-ASCII letter is masked instead.

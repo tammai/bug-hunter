@@ -49,11 +49,28 @@ def browsers_dir(env: dict[str, str]) -> Path:
     return Path(env.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "ms-playwright"
 
 
+# Twin of throwaway._REPO_VARS, copied because this file stays standalone: set by a hook or
+# alias of another repo, these would point git at that repo instead.
+_REPO_VARS = frozenset({
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE", "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
+})
+
+
 def _tracked(repo: str) -> list[str] | None:
+    # Standalone, so hardened here: no repo variables from the caller, no fsmonitor hook or
+    # transport from the target's config.
+    env = {k: v for k, v in os.environ.items() if k.upper() not in _REPO_VARS}
+    env["GIT_ALLOW_PROTOCOL"] = "none-allowed"  # no transport has this name, so none is allowed
     try:
-        out = subprocess.run(["git", "-C", repo, "-c", "core.quotepath=off", "ls-files", "-z"],
-                             capture_output=True, check=True).stdout
-    except (OSError, subprocess.CalledProcessError):
+        out = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false",
+                              "-c", "protocol.allow=never", "-C", repo, "-c",
+                              "core.quotepath=off", "ls-files", "-z"],
+                             capture_output=True, check=True, env=env, stdin=subprocess.DEVNULL,
+                             timeout=300).stdout
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
     return [name.decode("utf-8", "replace") for name in out.split(b"\0") if name]
 

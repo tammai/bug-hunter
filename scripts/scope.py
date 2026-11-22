@@ -4,12 +4,11 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path, PurePosixPath
 
 import browser
-from throwaway import _REPO_VARS
+from secrets_scan import CONFIG_BY_VARIABLE, TIMED_OUT, git_version, run_git
 
 PART_SIZE = 5
 TOKENS_PER_HUNTER = 100_000
@@ -42,7 +41,9 @@ def _is_test(path: PurePosixPath) -> bool:
 
 def _tracked_files(repo: str) -> tuple[list[str], int] | None:
     """Tracked file names, and how many were skipped for not being UTF-8."""
-    result = subprocess.run(["git", "-C", repo, "ls-files", "-z"], capture_output=True)
+    result = run_git(repo, "ls-files", "-z")
+    if result.returncode == TIMED_OUT:
+        raise TimeoutError(repo)
     if result.returncode != 0:
         return None
     names, skipped = [], 0
@@ -291,17 +292,35 @@ def _checklists(part: dict, root: Path, tracked: set[str]) -> tuple[list[str], l
     return found, missing
 
 
-def _git_out(repo: str, *args: str) -> bytes | None:
+def _git_out(repo: str, *args: str, config: dict[str, str] | None = None) -> bytes | None:
     """A git command's output, or None when it fails or git is missing."""
     try:
-        # No optional index writes, and no fsmonitor hook from the target's own config.
-        result = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false",
-                                 "-C", repo, *args], capture_output=True,
-                                env={k: v for k, v in os.environ.items()
-                                     if k.upper() not in _REPO_VARS})
+        result = run_git(repo, *args, config=config)
     except OSError:
         return None
     return result.stdout if result.returncode == 0 else None
+
+
+def _blank_filters(repo: str) -> dict[str, str] | None:
+    """Config that turns off every filter driver the target's own config defines; None if unread."""
+    try:
+        # Reading config runs nothing; includes are followed, and an include keeps its scope.
+        result = run_git(repo, "config", "--show-scope", "-z", "--name-only", "--get-regexp",
+                         r"^filter\.")
+    except OSError:
+        return None
+    if result.returncode not in (0, 1):
+        return None
+    fields = result.stdout.split(b"\0")
+    blank = {}
+    for scope, key in zip(fields[::2], fields[1::2], strict=False):
+        # The owner's own drivers (git-lfs in ~/.gitconfig) are trusted; the repo's aren't.
+        if scope in (b"local", b"worktree") and key.count(b".") >= 2:
+            driver = key.decode("utf-8", "surrogateescape")[len("filter."):].rsplit(".", 1)[0]
+            for command in ("clean", "smudge", "process"):
+                blank[f"filter.{driver}.{command}"] = ""
+    # Older git ignores config passed by variable, so the drivers would run after all.
+    return None if blank and git_version() < CONFIG_BY_VARIABLE else blank
 
 
 def _coverage(repo: str, files: list[str], paths: list[str], parts: list[dict],
@@ -329,9 +348,23 @@ def _coverage(repo: str, files: list[str], paths: list[str], parts: list[dict],
             manifests.append(name)
     audited = {a["lockfile"] for a in _installs(files, STACKS["audits"])}
     commit = _git_out(repo, "rev-parse", "--verify", "-q", "HEAD^{commit}")
-    status = _git_out(repo, "status", "--porcelain=v1", "-z", "--untracked-files=normal",
-                      "--ignore-submodules=none")
+    # Status re-hashes changed files through their clean filter, a program the target's config
+    # can name: blanked, a filtered file reads dirty or a required one fails, both a gap.
+    blank = _blank_filters(repo)
+    # A submodule's own config can name filters too, which nothing here blanks: status doesn't
+    # enter submodules, and each one is a gap instead.
+    status = None if blank is None else _git_out(
+        repo, "status", "--porcelain=v1", "-z", "--untracked-files=normal",
+        "--ignore-submodules=all", config=blank)
+    stage = _git_out(repo, "ls-files", "-z", "--stage")
+    # A conflicted submodule has one index entry per stage: listed once.
+    submodules = [] if stage is None else list(dict.fromkeys(
+        entry.split(b"\t", 1)[1].decode("utf-8", "replace")
+        for entry in stage.split(b"\0") if entry.startswith(b"160000 ") and b"\t" in entry))
+    if stage is None:
+        status = None
     return {
+        "submodules": submodules,
         "paths": paths,
         "commit": commit.decode("ascii", "replace").strip() or None if commit else None,
         "dirty": None if status is None else bool(status),
@@ -374,6 +407,9 @@ def _main(argv: list[str] | None = None) -> int:
         tracked = _tracked_files(args.repo)
     except FileNotFoundError:
         print("error: git is not installed", file=sys.stderr)
+        return 1
+    except TimeoutError:
+        print(f"error: git timed out on {args.repo}", file=sys.stderr)
         return 1
     if tracked is None:
         print(f"error: not a git repo: {args.repo}", file=sys.stderr)

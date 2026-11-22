@@ -7,7 +7,7 @@ Risk: high   (untrusted input: request paths and headers at the proxy that holds
 Top model: opus   (fable only if the user chose it)
 Commands: test: `uv run pytest`
 Started: 2026-11-22
-Base: 5eea35f
+Base: 5e8289f
 Owner: tam.mai@bigin.vn
 Tool: claude-code
 Verified: 7b99ff2 tree 026357f484dd9bfb934ed164244e6e48ff3f3cd3
@@ -56,6 +56,8 @@ inline in this session
 - 2026-11-22 CI fix (PR 47): verify PASS head 24f427a tree d2776a32b5968acc2344ecd7c1fb09be5eae3dc5
 - 2026-11-22 merged origin/main e333ca6 (PR 48, isolate.py) into the PR branch; conflict only in docs/sdlc/recurring-defects.md, both lanes' lines kept; Base moved from fdd1072 so drift counts only this change
 - 2026-11-22 merged origin/main 5eea35f (PR 49, leak-scan limits) too; conflicts in CHANGELOG.md (both entries kept) and docs/sdlc/todo.md (theirs' new leak-scan item, ours' tick and open item; both old items dropped as each lane replaced its own); scripts/finding_v1.py, scripts/live_proxy.py, tests/test_live_proxy.py auto-merged; Base moved to 5eea35f
+- 2026-11-22 merged origin/main 5e8289f (PR 50, /audit follow-ups); conflicts in CHANGELOG.md and docs/sdlc/recurring-defects.md, both lanes' lines kept; Base moved to 5e8289f
+- 2026-11-22 verify after merging 5e8289f: PASS head a8e1250 tree e1c9ff4a6dfb1aada5d4be2395e9657b4c3f7049
 
 ## Deviations
 - 2026-11-22 test-change tests/test_reference.py What: AC-002's test lists the routing header names itself instead of importing ROUTING_HEADERS; test_replay_reports_pass_fail_and_not_run expects the new check field on its failed value check Why: ROUTING_HEADERS is replaced by the allow-list BESIDE_ANOTHER; a failed equals check now carries check (AC-003)
