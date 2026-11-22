@@ -18,6 +18,19 @@
 - **`findings.py report`** takes `--scope` and `--recheck`. Its `--meta` holds `secrets_scanned`, `audited`, `audit_failures` and `check_failed`; `skipped_parts`, `not_audited` and `dropped` are gone.
 - **`findings.py next`** counts `audit/fixed/` too, so a number is never reused.
 
+### Fixed
+
+- **`/hunt --oracle` scoping and citations** ([change](docs/sdlc/changes/2026-11-22-m-oracle-tickets.md)):
+  - `oracle.py scope` exits 1 when no feature has source files, as `scope.py` does.
+  - A criterion whose story line changed since the lock (`text_sha256`) ranks at level 0.
+  - Only commits that name a change file the way sdlc does (`Record: <change>`, `… (<change>)`) count, merge commits included.
+  - A change file links criteria only from its Acceptance criteria.
+  - File names git would quote now match.
+  - Headings in code fences are skipped, struck-through criteria ignored, and standalone `AC-nnn` IDs read.
+  - `scope.py`'s install warnings are printed.
+  - History is read in three `git` calls.
+  - Expected may cite `` `domain.md` §X `` or `domain.md, §X`; a bold or backticked `Oracle: spec-gap` counts; a spec-gap draft that cites a criterion or rule is a `build-defect`.
+
 ## 0.6.0 — 2026-11-17
 
 Live targets can mint their own tokens. Short-lived bearer tokens no longer have to be pasted into `targets.json` before every `/hunt --target`.
