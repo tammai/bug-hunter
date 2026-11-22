@@ -278,14 +278,14 @@ def _plan(scratch: Path, env: dict[str, str],
         if _is_shell_name(k):
             continue
         function = re.fullmatch(r"BASH_FUNC_([A-Za-z_][\w.:-]*)(?:%%|\(\))", k, re.A)
-        # bash imports only a value starting "() {"; any other stays a plain variable.
-        if function and env[k].startswith("() {"):
-            functions.add(function[1])
-        # A name bash can't unset that holds no credential (ProgramFiles(x86), a JetBrains
-        # "PyCharm Community Edition" in the profile) passes through, as it always has.
-        elif k in credentials or k in secrets or fold(k) in always or fold(k).startswith(
+        if k in credentials or k in secrets or fold(k) in always or fold(k).startswith(
                 GIT_PREFIX):
             stuck.add(k)
+        # A function value (bash imports only one starting "() {") goes with unset -f. Any
+        # other name bash can't unset that holds no credential (ProgramFiles(x86), a JetBrains
+        # "PyCharm Community Edition" in the profile) passes through, as it always has.
+        elif function and env[k].startswith("() {"):
+            functions.add(function[1])
     unset = {k for k in unset if _is_shell_name(k)}
     return sorted(unset), sorted(functions), exports, sorted(stuck)
 
@@ -300,31 +300,10 @@ def _shown(name: str) -> str:
 
 
 def _without_credentials(value: str) -> str:
-    """value with every user and password removed; list entries kept where that is certain."""
-    # A list (GOPROXY) is split only where the next entry starts with a scheme. That split
-    # is trusted only when every entry before the one holding the last @ is a plain URL
-    # (no @, no : but a port's): otherwise the split may fall inside a password, so one
-    # cut at the last @ mis-routes rather than leaving part of it behind.
-    pieces = re.split(r"([,|]\s*)(?=[A-Za-z][A-Za-z0-9+.-]*://)", value)
-    entries = pieces[0::2]
-    last = max((i for i, entry in enumerate(entries) if "@" in entry), default=None)
-    if last is None:
-        return value
-    if not all(_plain_entry(entry) for entry in entries[:last]):
-        return _entry_without_credentials(value)
-    pieces[2 * last] = _entry_without_credentials(pieces[2 * last])
-    return "".join(pieces)
-
-
-def _plain_entry(entry: str) -> bool:
-    return re.fullmatch(r"\s*(?:[A-Za-z][A-Za-z0-9+.-]*://)?(?:\[[^\]@]*\]|[^:/?#@\[\]]*)"
-                        r"(?::\d*)?(?:[/?#][^:@]*)?", entry) is not None
-
-
-def _entry_without_credentials(value: str) -> str:
+    """value with everything between its scheme and its last @ removed."""
     scheme, rest = re.fullmatch(r"(\s*[A-Za-z][A-Za-z0-9+.-]*://)?(.*)", value, re.S).groups()
-    # Up to the last @ anywhere, not just in the authority: a raw / or @ in a password must
-    # not leave part of it behind, and a proxy URL has no use for an @ in its path.
+    # One cut at the last @ anywhere: no split of a list (GOPROXY) can tell a separator from
+    # one inside a password, so a credentialed list loses its earlier entries instead.
     if "@" not in rest:
         return value
     return (scheme or "") + rest.rpartition("@")[2]

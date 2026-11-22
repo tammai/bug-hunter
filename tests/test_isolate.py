@@ -1098,24 +1098,30 @@ def test_error_lines_escape_control_characters_in_names(tmp_path, monkeypatch, c
     assert out == "" and len(err.splitlines()) == 1 and "odd\\nname" in err
 
 
+def function_body(real: Path) -> str:
+    """A valid bash function whose body names a path in the real home, so isolation drops it."""
+    return f"() {{  x=1{os.pathsep}{real}/bin\n}}"
+
+
 def test_exported_bash_functions_are_removed_not_refused(tmp_path):
     scratch = tmp_path / "s"
     scratch.mkdir()
-    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "real"),
-           "BASH_FUNC_git_author%%": "() {  git log -1 --format=%an\n}",
-           "BASH_FUNC_f_token%%": "() {  echo s3cr3t\n}"}
+    real = tmp_path / "real"
+    env = {"PATH": os.environ["PATH"], "HOME": str(real),
+           "BASH_FUNC_mkcd%%": function_body(real)}
     if WINDOWS:
         env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
     got = child_env(scratch, env)
-    assert not [k for k in got if "git_author" in k or "f_token" in k]
+    assert not [k for k in got if "mkcd" in k]
 
 
-def test_only_real_functions_skip_the_credential_checks(tmp_path):
+def test_only_real_functions_that_hold_no_credential_skip_the_checks(tmp_path):
     real = tmp_path / "real"
-    # bash imports BASH_FUNC_* only when the value starts with "() {"; anything else stays a
-    # plain variable that unset -f can't remove.
+    # Each could carry a credential: a secret name (function or not) or a proxy URL with a
+    # password. bash can't remove them, so isolation stops.
     for name, value in {"BASH_FUNC_TOKEN%%": "SECRETVALUE",
                         "BASH_FUNC_proxy%%": "http://u:SECRETVALUE@h",
+                        "BASH_FUNC_get_token%%": "() {  echo SECRETVALUE\n}",
                         "corp-proxy": f"{real}/x:http://u:SECRETVALUE@h:8080"}.items():
         env = {"PATH": os.environ["PATH"], "HOME": str(real), name: value}
         if WINDOWS:
@@ -1123,37 +1129,42 @@ def test_only_real_functions_skip_the_credential_checks(tmp_path):
         result = run_script("isolate", tmp_path / "s", env=env)
         assert result.returncode == 1 and result.stdout == "", name
         assert "SECRETVALUE" not in result.stderr, name
-    # The older BASH_FUNC_name() form (bash 4.2 with the 2014 patches) is removed the same way.
-    env = {"PATH": os.environ["PATH"], "HOME": str(real),
-           "BASH_FUNC_x_token()": "() {  echo hi\n}"}
+    # The older BASH_FUNC_name() form (bash 4.2 with the 2014 patches): no function of that
+    # name is left in the isolated shell, whether this bash imported it or not.
+    scratch = tmp_path / "s2"
+    scratch.mkdir()
+    env = {"PATH": os.environ["PATH"], "HOME": str(real), "BASH_FUNC_greet()": function_body(real)}
     if WINDOWS:
         env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
-    result = run_script("isolate", tmp_path / "s", env=env)
+    command = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch)])
+    script = (f'ISO="$({command})" && eval "$ISO" || exit 1; '
+              'bash -c "declare -F greet" || echo gone')
+    result = subprocess.run([BASH, "-c", script], env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert result.stdout.startswith("unset -f x_token; ")
+    assert result.stdout.strip() == "gone"
 
 
-def test_proxy_lists_keep_every_entry(tmp_path):
+SENTINEL = "4711"
+
+
+def test_proxy_values_never_keep_part_of_a_password(tmp_path):
     scratch = tmp_path / "s"
     scratch.mkdir()
-    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "real"),
-           "GOPROXY": "https://proxy.golang.org,https://u:hunter2@athens.corp"
-                      "|https://b.corp,direct",
-           "npm_config_proxy": "https://proxy.golang.org,https://u2:hun,ter2@b.corp,direct",
-           # Where the split could fall inside a password, it falls back to one cut at the
-           # last @: routing may suffer, the password never survives.
-           "https_proxy": "http://u:pa,b://x@h",
-           "http_proxy": "http://u:p|x://y@h",
-           "all_proxy": "http://u:p,x://@h",
-           "ftp_proxy": "https://u:p@a,https://u2:hunter2@b"}
+    shapes = [f"http://u:{SENTINEL}{{sep}}b://x@h", f"u:{SENTINEL}{{sep}}x://y@proxy:3128",
+              f"http://u:{{sep}}x://{SENTINEL}@h", f"http://u:{SENTINEL}/q{{sep}}b://x@h",
+              f"http://[u:{SENTINEL}]{{sep}}x://y@h",
+              f"https://proxy.golang.org{{sep}}https://u:{SENTINEL}@athens.corp"]
+    cases = {f"PROXY_CASE_{i}_{j}": shape.format(sep=sep)
+             for i, shape in enumerate(shapes) for j, sep in enumerate([",", "|", " "])}
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "real"), **cases,
+           "GOPROXY": "https://proxy.golang.org,https://athens.corp|direct"}
     if WINDOWS:
         env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
     got = child_env(scratch, env)
-    assert got["GOPROXY"] == "https://proxy.golang.org,https://athens.corp|https://b.corp,direct"
-    assert got["npm_config_proxy"] == "https://proxy.golang.org,https://b.corp,direct"
-    for name in ("https_proxy", "http_proxy", "all_proxy"):
-        assert got[name] == "http://h", name
-    assert got["ftp_proxy"] == "https://b"
+    folded = {k.upper(): v for k, v in got.items()}
+    for name, given in cases.items():
+        assert SENTINEL not in folded[name] and "@" not in folded[name], (given, folded[name])
+    assert got["GOPROXY"] == "https://proxy.golang.org,https://athens.corp|direct"
 
 
 def test_proxy_credentials_are_dropped_and_routing_kept(tmp_path):
