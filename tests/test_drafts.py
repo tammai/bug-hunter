@@ -267,3 +267,75 @@ def test_login_value_that_is_a_common_word_only_counts_as_a_credential():
     # A short token still counts in its longer encoded forms, as the proxy masks them.
     assert leaks("got a%2Fb%2Bc back", {"url": target["url"], "accounts": {
         "guest": {"Authorization": "Bearer a/b+c"}}})
+
+
+def _target(url: str, value: str = "Bearer 9fK2xQ7vL0pR3sT8") -> dict:
+    return {"url": url, "accounts": {"member": {"Authorization": value}}}
+
+
+def test_word_login_after_a_value_key_or_is_is_a_credential():
+    from drafts import leaks
+
+    target = _target("http://127.0.0.1:5000", "Bearer member")
+    for text in ('<input name="password" value="member">', '{"name":"token","value":"member"}',
+                 "the password is member", "The token was `member`."):
+        assert leaks(text, target), text
+    for text in ('{"token": "x", "role": "member"}', "A basic member gets 201. Author: a member.",
+                 "The token is member-scoped."):
+        assert leaks(text, target) == [], text
+
+
+def test_lowercase_random_token_login_counts_anywhere():
+    from drafts import leaks
+
+    assert leaks("The server answered qwxzkvbnmt in the body.",
+                 _target("http://127.0.0.1:5000", "Bearer qwxzkvbnmt"))
+    for word in ("member", "admin1", "editor"):
+        assert leaks(f"A {word} gets 201.", _target("http://127.0.0.1:5000", f"Bearer {word}")) \
+            == [], word
+
+
+def test_host_behind_upper_cased_escapes_is_found():
+    from drafts import leaks
+
+    target = _target("http://ref")
+    for text in (r"curl http:\X2F\X2Fref/x", r"curl http:\U002F\U002Fref/x"):
+        assert leaks(text, target), text
+
+
+def test_zero_padded_ipv4_host_is_found():
+    from drafts import leaks
+
+    target = _target("http://10.0.0.1:8080")
+    for text in ("curl http://10.0.0.01:8080/x", "host 010.000.000.001"):
+        assert leaks(text, target), text
+    assert leaks("curl http://10.0.0.12:8080/x", target) == []
+
+
+def test_other_spellings_of_an_ipv6_host_are_found():
+    from drafts import leaks
+
+    target = _target("http://[2001:db8::1]:8080")
+    for text in ("host 2001:0db8:0:0:0:0:0:1", "curl http://[2001:db8:0::0001]:8080/x",
+                 "seen a2001:db8::1 here"):
+        assert leaks(text, target), text
+    assert leaks("curl http://[2001:db8::12]:8080/x", target) == []
+
+
+def test_other_loopback_spellings_with_the_port_are_found():
+    from drafts import leaks
+
+    target = _target("http://127.0.0.1:5000")
+    for text in ("curl http://127.1:5000/x", "curl http://127.000.000.001:5000/x",
+                 "curl http://[0:0:0:0:0:0:0:1]:5000/x", "curl http://0.0.0.0:5000/x"):
+        assert leaks(text, target), text
+    for text in ("the proxy at 127.0.0.1:50003", "curl http://127.1:5001/x"):
+        assert leaks(text, target) == [], text
+
+
+def test_default_port_loopback_target_is_found_either_way():
+    from drafts import leaks
+
+    assert leaks("curl http://localhost:80/x", _target("http://localhost"))
+    assert leaks("curl http://localhost/api", _target("http://localhost:80"))
+    assert leaks("curl http://localhost/api", _target("http://localhost:3000")) == []

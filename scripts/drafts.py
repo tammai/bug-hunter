@@ -2,6 +2,7 @@
 
 import argparse
 import html
+import ipaddress
 import re
 import subprocess
 import sys
@@ -10,8 +11,9 @@ from urllib.parse import unquote, urlsplit
 
 JSON_LETTERS = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r",
                 "t": "\t"}
-JSON_ESCAPE = re.compile(r'\\(u[0-9a-fA-F]{4}|["\\/bfnrt])')
-HEX_ESCAPE = re.compile(r"\\x([0-9a-fA-F]{2})")
+# Either case of `u` and `x`: an escape upper-cased after escaping (`\U002F`, `\X2F`) still decodes.
+JSON_ESCAPE = re.compile(r'\\([uU][0-9a-fA-F]{4}|["\\/bfnrt])')
+HEX_ESCAPE = re.compile(r"\\[xX]([0-9a-fA-F]{2})")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")  # terminal colour and cursor codes
 MAX_DECODE_ROUNDS = 8
 MAX_SPELLINGS = 256
@@ -173,7 +175,25 @@ def leaks(text: str, target: dict, variable: str = "BASE", replay: bool = False)
 # counts next to what makes it a credential. Long letter runs are random tokens, not words.
 WORDLIKE = re.compile(r"[A-Z]?[a-z]+\d{0,3}")  # lower or Capitalized: mixed case is random
 WORDLIKE_MAX = 15
+# Letter pairs that are rare in English words (under 1 in 10,000 pairs of /usr/share/dict/words):
+# a lowercase run holding one (qwxzkvbnmt) is a random token, not a word, so it counts anywhere.
+RARE_PAIRS = frozenset("""
+aa aj aq bf bg bh bj bk bm bn bp bq bv bw bx bz cb cd cf cg cj cm cn cp cq cv cw cx cz db
+dc dj dk dp dq dt dx dz fb fc fd fg fh fj fk fm fn fp fq fs fv fw fx fz gb gc gd gf gj gk
+gp gq gt gv gw gx gz hb hc hd hg hh hj hk hp hq hs hv hx hz ii ij iw iy jb jc jd jf jg jh
+ji jj jk jl jm jn jp jq jr js jt jv jw jx jy jz kb kc kd kf kg kj kk km kp kq kr kt kv kx
+kz lh lj lq lr lx lz mc md mf mg mh mj mk mq mr mt mv mw mx mz nx oj pb pc pd pf pg pj pk
+pm pq pv pw px pz qa qb qc qd qe qf qg qh qi qj qk ql qm qn qo qp qq qr qs qt qv qw qx qy
+qz rj rq rx rz sd sg sj sr sv sx sz td tg tj tk tq tv tx tz uh uj uq uu uw uy uz vb vc vd
+vf vg vh vj vk vl vm vn vp vq vr vs vt vv vw vx vy vz wb wc wd wf wg wj wk wm wp wq wt wu
+wv ww wx wy wz xb xd xf xg xh xj xk xl xm xn xq xr xs xu xv xw xx xz yf yh yj yk yq yu yv
+yx yy yz zb zc zd zf zg zh zj zk zl zm zn zp zq zr zs zt zu zv zw zx
+""".split())
 CREDENTIAL_FIELDS = r"password|passwd|pwd|pass|token|secret|api[_-]?key|key|auth"
+# In prose ("the password is …") only names that mean a credential: "key is" and "auth is" are
+# ordinary sentences.
+PROSE_FIELDS = r"password|passwd|pwd|token|secret|api[_-]?key"
+PROSE_TWO_WORDS = r"(?<![\w-])(?i:api|secret|access)\s++(?i:key|token)(?![\w-])"
 # Where a name starts or ends inside an identifier: its edge, `_`/`-`, or a camelCase hump.
 SEGMENT_START = r"(?:(?<![\w-])|(?<=[_-])|(?<=[a-z0-9])(?=[A-Z]))"
 SEGMENT_END = r"(?=[_-]|(?<=[a-z0-9])[A-Z]|[^\w-]|\Z)"
@@ -186,7 +206,14 @@ def _holds_login(text: str, account: str, headers: dict, url: str) -> bool:
     # Every form the proxy masks: as sent, JSON-escaped, percent-encoded, HTML entities and a
     # Basic login decoded; forms under 6 characters would match ordinary words.
     pieces = _pieces({"url": url, "accounts": {"_": headers}})
-    words = {p for p in pieces if WORDLIKE.fullmatch(p) and 6 <= len(p) <= WORDLIKE_MAX}
+    letters = {p for p in pieces if WORDLIKE.fullmatch(p) and len(p) >= 6}
+    words = {p for p in letters if len(p) <= WORDLIKE_MAX and _reads_as_word(p)}
+    # A random letters-only token counts anywhere and in any case, as a credential word does.
+    # The placeholders this check tells drafts to write (MEMBER_AUTH) are not credentials.
+    own = "|".join(re.escape(p) for p in (f"{account}_AUTH", f"ACCEPT_ACCOUNT_{account}"))
+    lowered = re.sub(rf"(?i)(?<![\w-])(?:{own})(?![\w-])", " ", text).lower()
+    if any(p.lower() in lowered for p in letters - words):
+        return True
     if any(len(form) >= 6 and form in text for p in pieces - words for form in _forms(p)):
         return True
     if not words:
@@ -203,15 +230,27 @@ def _holds_login(text: str, account: str, headers: dict, url: str) -> bool:
     # One start per identifier and possessive runs: drafts and echoed responses are untrusted,
     # and a backtracking field match is cubic on a long run like "authauth…".
     # Then punctuation before the value (`: "`, `>`, `=`, `": ["`), or only spaces after a flag.
-    # The placeholders this check tells drafts to write (MEMBER_AUTH) are not credentials.
-    own = "|".join(re.escape(p) for p in (f"{account}_AUTH", f"ACCEPT_ACCOUNT_{account}"))
-    name = (rf"(?<![\w-])(?!(?i:{own})(?![\w-]))"
-            rf"(?=[\w-]*?{SEGMENT_START}(?i:{context}){SEGMENT_END})[\w-]++")
-    field = (rf"(?:{name}\s*+[^\w\s]\W*+|(?=-){name}\s++)"
+    def named(fields: str) -> str:
+        return (rf"(?<![\w-])(?!(?i:{own})(?![\w-]))"
+                rf"(?=[\w-]*?{SEGMENT_START}(?i:{fields}){SEGMENT_END})[\w-]++")
+    name = named(context)
+    prose = named("|".join([*(re.escape(n) for n in names if n), PROSE_FIELDS]))
+    # After the punctuation, one `value` key or element may stand between (name="password"
+    # value="…", "name":"token","value":"…", <password><value>…); in prose, "is" or "was"
+    # (the password is: …, the token value was …, the API key is …).
+    punct = r"[^\w\s]\W*+"
+    field = (rf"(?:{name}\s*+{punct}(?:(?i:value)[\"']?\s*+[:=>][\s\"'\[]*+)?|(?=-){name}\s++"
+             rf"|(?:{prose}|{PROSE_TWO_WORDS})\s++(?:(?i:value)\s++)?(?i:is|was)(?![\w-])"
+             rf"[ \t:\"'`—]*+)"
              rf"{f'(?:{scheme})?' if scheme else ''}")
     before = f"(?:{field}|\\b{scheme})" if scheme else field
     word = "|".join(map(re.escape, words))
     return re.search(rf"{before}(?i:{word})(?![\w-])", text) is not None
+
+
+def _reads_as_word(piece: str) -> bool:
+    letters = piece.rstrip("0123456789").lower()
+    return not any(letters[i:i + 2] in RARE_PAIRS for i in range(len(letters) - 1))
 
 
 def _spellings(text: str) -> set[str]:
@@ -232,7 +271,7 @@ def _spellings(text: str) -> set[str]:
 
 def _json_unescaped(text: str) -> str:
     # One left-to-right pass, as a JSON parser reads a string: `\\n` is a backslash then n.
-    return JSON_ESCAPE.sub(lambda m: chr(int(m[1][1:], 16)) if m[1][0] == "u"
+    return JSON_ESCAPE.sub(lambda m: chr(int(m[1][1:], 16)) if m[1][0] in "uU"
                            else JSON_LETTERS[m[1]], text)
 
 
@@ -243,15 +282,47 @@ def _host_patterns(url, local_hosts: set[str]) -> list[str]:
     # boundary only after a digit, so a longer port or address (the proxy's own listener at
     # 127.0.0.1:50003, 10.0.0.12) isn't the target.
     host, port = (url.hostname or "").lower(), url.port
-    scheme = r"[a-z][a-z0-9+.-]*://(?:[^\s/@]*@)?"  # a URL's host position, with any user@
+    # A URL's host position, with any user@. The scheme starts only where its run of scheme
+    # characters starts, so a long run of letters stays linear.
+    def at(schemes: str) -> str:
+        # Also behind a +-joined prefix (git+http://).
+        return rf"(?<![a-z0-9+.-])(?:[a-z0-9.-]*+\+)*+{schemes}://(?:[^\s/@]*@)?"
+    scheme = at(r"[a-z0-9+.-]++")
     if host in local_hosts:
-        # Any loopback spelling with exactly the target's port; a bare "localhost" gives
-        # nothing away.
-        alias = r"(?:localhost|127\.0\.0\.1|\[::1\]|::1)"
-        if port:
-            return [rf"{alias}:{port}(?!\d)"]
-        return [rf"{scheme}{alias}(?![\w.-]|:\d)"]
-    if "." in host or ":" in host:  # a domain, IPv4 or IPv6: anywhere, subdomains included
+        # Any loopback spelling with exactly the target's port, the scheme's default when the
+        # URL names none; a bare "localhost" gives nothing away. 127.1 and 127.0.1 are
+        # 127.0.0.1, and 0.0.0.0 reaches the same server.
+        v6 = _ipv6_pattern(ipaddress.IPv6Address("::1"))
+        mapped = _ipv6_pattern(ipaddress.IPv6Address("::ffff:127.0.0.1"))
+        # A leading 0* starts only at a run's first zero, so a long run of zeros stays linear.
+        # The short forms and 0.0.0.0 need a boundary, or they match inside 192.168.127.1.
+        # The lookahead fails at once where no spelling can start; there are about 100.
+        alias = (rf"(?=[l0-9\[:])(?:localhost|(?<!0)0*127\.0*0\.0*0\.0*1"
+                 rf"|(?<![\d.])0*127(?:\.0*0)?\.0*1|(?<![\d.])0*0(?:\.0*0){{3}}"
+                 rf"|\[(?:{v6}|{mapped})\]|{v6})")
+        port = port or {"http": 80, "ws": 80, "https": 443, "wss": 443}.get(url.scheme)
+        if port is None:
+            return [rf"{scheme}{alias}(?![\w.-]|:\d)"]
+        # A URL leaves out its own scheme's default port, whatever the target's scheme is.
+        found = [rf"{alias}:{port}(?!\d)"]
+        prefix = {80: at("(?:http|ws)"), 443: at("(?:https|wss)")}.get(port)
+        if prefix:
+            found.append(rf"{prefix}{alias}(?![\w.-]|:\d)")
+        return found
+    try:  # a zone (fe80::1%25eth0) names an interface, not another address
+        address = ipaddress.ip_address(host.partition("%")[0])
+    except ValueError:
+        address = None
+    if address and address.version == 4:  # zero-padded octets too (10.0.0.01)
+        return [r"(?<!0)" + r"\.".join(f"0*{octet}" for octet in address.packed) + r"(?!\d)"]
+    if address:  # every IPv6 spelling: compressed or not, zero-padded, with a dotted tail
+        found = [_ipv6_pattern(address) + r"(?![0-9a-f])"]
+        if address.ipv4_mapped:
+            port = f":{url.port}" if url.port else ""
+            found += _host_patterns(urlsplit(f"{url.scheme}://{address.ipv4_mapped}{port}"),
+                                    local_hosts)
+        return found
+    if "." in host or ":" in host:  # a domain: anywhere, subdomains included
         tail = r"(?![0-9a-f])" if ":" in host else r"(?!\d)" if host[-1].isdigit() else ""
         return [re.escape(host) + tail]
     # A plain name ("ref") only after a scheme (and any user@) or with its port: elsewhere
@@ -262,6 +333,47 @@ def _host_patterns(url, local_hosts: set[str]) -> list[str]:
     if port:
         found.append(rf"{name}:{port}(?!\d)")
     return found
+
+
+def _ipv6_pattern(address: ipaddress.IPv6Address) -> str:
+    """Every way to write `address`: groups zero-padded or not, any run of zeros as `::`, and
+    the last 32 bits as a dotted IPv4 tail."""
+    groups = [int(address) >> (112 - 16 * i) & 0xFFFF for i in range(8)]
+
+    def group(value: int) -> str:
+        return "0{1,4}" if value == 0 else f"0{{0,{4 - len(f'{value:x}')}}}{value:x}"
+
+    def atoms(part: list[int]) -> list[str]:
+        return [a for i, v in enumerate(part) for a in ([":"] if i else []) + [group(v)]]
+
+    def compressed(part: list[int]) -> list[list[str]]:
+        found = [atoms(part)]
+        for start in range(len(part)):
+            for end in range(start + 1, len(part) + 1):
+                if not any(part[start:end]):
+                    found.append(atoms(part[:start]) + ["::"] + atoms(part[end:]))
+        return found
+
+    quad = r"\.".join(f"0*{octet}" for octet in address.packed[12:])
+    spellings = compressed(groups) + [head + ([] if head[-1] == "::" else [":"]) + [quad]
+                                      for head in compressed(groups[:6])]
+    # The spellings share their prefixes in one tree, so a hostile run of zeros and colons
+    # walks one branch per position instead of trying each of about 100 spellings.
+    tree: dict = {}
+    for spelling in spellings:
+        node = tree
+        for atom in spelling:
+            node = node.setdefault(atom, {})
+        node[""] = {}
+
+    def render(node: dict) -> str:
+        branches = [atom + render(child) for atom, child in node.items() if atom]
+        if "" in node:
+            branches.append("")
+        return branches[0] if len(branches) == 1 else "(?:" + "|".join(branches) + ")"
+
+    # Every spelling starts with a zero, a `::` or the first group's first digit.
+    return f"(?=[0:{groups[0]:x}])" + render(tree)
 
 
 def expected_body(text: str) -> str:
