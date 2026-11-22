@@ -47,6 +47,8 @@ inline
 - 2026-11-22 Stage 1: pass — plan not stopped for approval: low-risk M
 - 2026-11-22 review r1 (run by the coordinator at the end): code FAIL CR-1, no highs; back in Build (already at Stage 2) to fix CR-1 to CR-8 and CR-11 test-first; CR-9, CR-10 tickets
 - 2026-11-22 tickets from review r1: CR-9 (every commit message read even when no record names a change), CR-10 (a named merge and its named branch commits counted twice)
+- 2026-11-22 review r2 (coordinator): code PASS; low bugs R2-1, R2-2 and cheap R2-7, R2-8 fixed test-first without another round
+- 2026-11-22 tickets from review r2: R2-3 (log.showRoot, log.diffMerges, diff.algorithm, GIT_DIR not pinned in _git), R2-4 (all-history numstat cost), R2-5 (brief from the first story file only), R2-6 (check_lock vs check_criteria reading)
 
 ## Deviations
 - 2026-11-22 tests/test_oracle_followups.py What: a new test file with a second AC-003 test (write --rebuild/--reference on a spec-gap draft citing a criterion) and a docs_dir '.' guard. Why: AC-003's first test didn't reach with_reference's covered= rule; seen failing with the old rule. Effect: AC-003 has two rows.
@@ -56,6 +58,7 @@ inline
 - 2026-11-22 review r1 fixes What: CR-1 to CR-7 and CR-11 fixed in scripts/oracle.py with tests in a new file tests/test_oracle_review.py (each fix's test seen failing first; the hash-type, CRLF and two citation cases passed before as guards); README.md and commands/hunt.md reworded. Why: code review r1 (FAIL CR-1, no highs). Effect: _git raises BadOracle on a git failure and pins log.showSignature/log.follow; named commits use -m --first-parent; the all-history walk has no pathspec; stories read per criterion file as contracts reads them.
 - 2026-11-22 AC-014 What: reworded to count _git calls, not git runs. Why: review r1 CR-8; the test counts _git calls. Effect: AC wording only, same test.
 - 2026-11-22 Public Surface What: also STORY_LINE removed from oracle.py, and build() returns a warnings key (printed and dropped by _main). Why: review r1 CR-11. Effect: none for callers in this repo; drafts.py and finding_v1 never used either.
+- 2026-11-22 review r2 fixes What: _git runs git with LC_ALL=C and treats a log on a branch with no commits as empty history (no extra call); it reports git's fatal:/error: line and turns an OSError into BadOracle; _numstat resets on a bad header; rule citations need a left boundary before domain.md. The CR-1 failure test now corrupts the HEAD commit object; new tests for an unborn repo, a bad second header and names ending in domain.md, in tests/test_oracle_review.py. Why: code review r2 R2-1, R2-2, R2-7, R2-8. Effect: a repo with staged files and no commits scopes from its state files again.
 
 ## Open questions
 -

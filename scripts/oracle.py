@@ -37,14 +37,25 @@ class BadOracle(ValueError):
 def _git(repo: str, *args: str, stdin: str | None = None) -> str:
     # Pinned so a user's config can't change what is parsed (quoting, renames, colour,
     # signatures, rename following).
-    result = subprocess.run(
-        ["git", "-C", repo, "-c", "core.quotepath=off", "-c", "color.ui=never",
-         "-c", "log.showSignature=false", "-c", "log.follow=false", *args],
-        input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace",
-    )
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo, "-c", "core.quotepath=off", "-c", "color.ui=never",
+             "-c", "log.showSignature=false", "-c", "log.follow=false", *args],
+            input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env={**os.environ, "LC_ALL": "C"},  # untranslated, so the unborn case is known
+        )
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise BadOracle(f"git can't be run ({exc.strerror or type(exc).__name__})") from None
     if result.returncode != 0:
-        # An empty answer would read as "no history": refuse rather than rank on nothing.
-        why = (result.stderr.strip().splitlines() or ["no message"])[0]
+        # Staged files and no commit yet is an empty history, not a failure.
+        if args[0] == "log" and "does not have any commits yet" in result.stderr:
+            return ""
+        # Any other empty answer would read as "no history": refuse rather than rank on nothing.
+        lines = result.stderr.strip().splitlines()
+        why = next((line for line in lines if line.startswith(("fatal:", "error:"))),
+                   lines[0] if lines else "no message")
         raise BadOracle(f"git {args[0]} failed: {why}")
     return result.stdout
 
@@ -114,7 +125,8 @@ def rule_citations(text: str, headings: list[str]) -> tuple[list[str], int]:
     found, unknown = set(), 0
     # Between the file name and § only markup and punctuation: `domain.md`, **domain.md**,
     # `domain.md: §`, `domain.md (§`, `domain.md — §`.
-    for match in re.finditer(r"domain\.md[`*_\s,:(\-–—]*§\s*", lowered):
+    # Not the end of another name (`docs/domain.md`, `mydomain.md`); `_` may be markup.
+    for match in re.finditer(r"(?<![^\W_])(?<![./-])domain\.md[`*_\s,:(\-–—]*§\s*", lowered):
         rest = lowered[match.end():]
         # The longest heading that ends at a word boundary: `§Roles-admin` isn't `§Roles`.
         fits = [h for h, k in keys.items() if k and rest.startswith(k)
@@ -245,8 +257,8 @@ def _numstat(repo: str, *args: str, stdin: str | None = None,
     for chunk in out.split("\0"):
         chunk = chunk.lstrip("\n")
         if chunk.startswith("\x01"):
-            if HASH.fullmatch(chunk[1:].strip()):
-                lines = per.setdefault(chunk[1:].strip(), {})
+            header = chunk[1:].strip()
+            lines = per.setdefault(header, {}) if HASH.fullmatch(header) else {}
             continue
         fields = chunk.split("\t", 2)
         if len(fields) == 3 and (keep is None or fields[2] in keep):
