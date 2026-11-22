@@ -117,10 +117,12 @@ def test_beside_a_second_target_only_allowed_headers_cross(make_repo, tmp_path):
         "solo": {"url": c_base}})
     unlisted = {"X-Real-IP": "10.0.0.1", "X-Forwarded-For": "10.0.0.1",
                 "X-Envoy-Original-Path": "/other", "X-Custom-Route": "b",
+                "Sec-Route-Target": "b",
                 **{name: "/who" for name in routing}}
     listed = {"Accept": "application/json", "Content-Type": "application/json",
               "Cookie": "s=1", "Origin": "http://127.0.0.1", "Referer": "http://127.0.0.1/",
-              "User-Agent": "test", "X-CSRF-Token": "t", "Sec-Fetch-Mode": "cors"}
+              "User-Agent": "test", "X-CSRF-Token": "t", "Sec-Fetch-Mode": "cors",
+              "Sec-CH-UA": "x", "Sec-GPC": "1", "Sec-WebSocket-Protocol": "chat"}
     log = tmp_path / "p.jsonl"
     proxy, base, ref_base = start_pair(repo, "uat", "ref", env, log)
     try:
@@ -360,6 +362,25 @@ def test_replay_reports_the_failed_check(tmp_path):
     assert got["equals"]["check"] == {"pointer": "/n", "value": 1}
     for name in ("status", "missing", "text", "shared", "big"):
         assert got[name]["result"] == "fail" and "check" not in got[name], (name, got[name])
+
+
+def test_replay_survives_a_nested_body_and_a_bad_base(tmp_path):
+    nested = "[" * 100000 + "]" * 100000
+    stub, base, _ = start_stub(tmp_path, [
+        {"path": "/deep", "responses": [{"headers": {"Content-Type": "application/json"},
+                                         "body": nested}]}])
+    draft = http_draft([{"request": {"method": "GET", "path": "/deep"},
+                         "expect": {"status": 200, "json": [{"pointer": "/0", "equals": 1}]}}])
+    try:
+        deep = replay(tmp_path, draft, base)
+    finally:
+        stop(stub)
+    assert deep.returncode == 0, deep.stderr
+    assert json.loads(deep.stdout)["result"].startswith("not run: "), deep.stdout
+    for bad in ("http://[bad", "http://127.0.0.1:99999"):
+        got = replay(tmp_path, draft, bad)
+        assert got.returncode == 1 and got.stderr.startswith("error:"), (bad, got.stderr)
+        assert got.stderr.count("\n") == 1 and "Traceback" not in got.stderr, got.stderr
 
 
 def test_replay_restores_the_global_opener(tmp_path):

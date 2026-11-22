@@ -60,6 +60,10 @@ The rest are small:
 - **AC-007** — S2-7: after `replay` returns (pass, fail, refused or unreachable), urllib's global opener is the one that was installed before the call.
 - **AC-008** — CR-6: Given a `departures.yaml` with a `status: proposed` entry, `classify` and `write` each print one `warning: departures.yaml: D-001 is proposed…` line on stderr, exit 0, and never match that entry.
 - **AC-009** — CR-9: Given a `departures.yaml` entry whose ID has more than 9 digits, `classify` and `write` exit 1 with one `error:` line naming `departures.yaml`, and write no finding.
+- **AC-011** — (review r1, CR-1) `finding_v1.py departures --oracle <spec>` checks the registry exactly as `write` reads it, and `/hunt` runs it before the cost question:
+  - no file, or a valid one: exit 0;
+  - a proposed entry: one `warning:` line, exit 0;
+  - an invalid registry or an ID over 9 digits: one `error:` line, exit 1.
 - **AC-010** — End to end: the reference-pair fixture is still classified as before, now through a replay result that carries `check` (`test_fixture_pair_is_classified`, with the departure draft's rebuild result taken from a real `replay` run).
 
 ## Acceptance tests
@@ -76,6 +80,7 @@ The rest are small:
 | AC-008 | tests/test_departures.py › test_a_proposed_entry_is_warned_about | `uv run pytest tests/test_departures.py -k test_a_proposed_entry_is_warned_about` |
 | AC-009 | tests/test_departures.py › test_a_departure_id_over_nine_digits_is_refused | `uv run pytest tests/test_departures.py -k test_a_departure_id_over_nine_digits_is_refused` |
 | AC-010 | tests/test_reference.py › test_fixture_pair_is_classified | `uv run pytest tests/test_reference.py -k test_fixture_pair_is_classified` |
+| AC-011 | tests/test_departures.py › test_departures_command_checks_the_registry_before_the_run | `uv run pytest tests/test_departures.py -k test_departures_command_checks_the_registry_before_the_run` |
 
 ## Must never break
 

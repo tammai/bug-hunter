@@ -124,6 +124,73 @@ def test_a_departure_id_over_nine_digits_is_refused(make_repo, tmp_path):
     assert nine.returncode == 0 and json.loads(nine.stdout)["departure"] == "D-000000001"
 
 
+@pytest.mark.parametrize("registry", [
+    ENTRY.replace("D-001", "D-0000000001"),  # no decided_by: contracts would name the ID
+    DECIDED.replace("D-001", "D-0000000001") + DECIDED.replace("D-001", "D-0000000001"),
+    DECIDED.replace("D-001", '"D-001\\n"'),
+    DECIDED.replace("D-001", '"D-0٠1"'),
+])
+def test_a_bad_departure_id_is_refused_without_echoing_it(tmp_path, registry):
+    got = classify_departure_draft(tmp_path, spec_with(tmp_path, registry))
+    assert got.returncode == 1 and got.stderr.startswith("error:"), got.stderr
+    assert got.stderr.count("\n") == 1 and "departures.yaml" in got.stderr, got.stderr
+    assert "0000000001" not in got.stderr and "٠" not in got.stderr, got.stderr
+
+
+def test_departures_command_checks_the_registry_before_the_run(tmp_path):
+    def check(registry):
+        return run_script("finding_v1", "departures", "--oracle",
+                          spec_with(tmp_path / str(abs(hash(str(registry)))), registry))
+    for registry in (None, DECIDED):
+        got = check(registry)
+        assert got.returncode == 0 and got.stderr == "", (registry, got.stderr)
+    proposed = check(ENTRY + "  status: proposed\n")
+    assert proposed.returncode == 0, proposed.stderr
+    assert proposed.stderr.startswith("warning: departures.yaml: D-001 is proposed")
+    assert proposed.stderr.count("\n") == 1, proposed.stderr
+    for registry in (DECIDED.replace("D-001", "D-0000000001"), ENTRY, "- id: [unclosed\n"):
+        bad = check(registry)
+        assert bad.returncode == 1 and bad.stderr.startswith("error:"), registry
+        assert bad.stderr.count("\n") == 1 and "departures.yaml" in bad.stderr, bad.stderr
+
+
+def test_a_check_matches_only_a_value_that_fails_the_last_check():
+    from finding_v1 import matching_departure
+
+    loose = {**D1, "match": [{"runner": "http", "pointer": "/key", "rule": "regex:^TSK-"}]}
+    passing = {**KEY_FAIL, "check": {"pointer": "/key", "value": "TSK-3"}}
+    assert matching_departure([loose], HTTP, passing) is None
+    assert matching_departure([loose], HTTP, KEY_FAIL) == "D-001"
+    equals = {"runner": "http", "steps": [{**STEPS[0], "expect": {
+        "status": 201, "json": [{"pointer": "/key", "equals": "TSK-0003"}]}}]}
+    assert matching_departure([D1], equals, KEY_FAIL) is None
+    capture_only = {"runner": "http", "steps": [{**STEPS[0], "expect": {
+        "status": 201, "json": [{"pointer": "/key", "capture": "k"}]}}]}
+    same_as = {"runner": "http", "steps": [{**STEPS[0], "expect": {
+        "status": 201, "json": [{"pointer": "/key", "rule": "same-as:k"}]}}]}
+    for repro in (capture_only, same_as):
+        assert matching_departure([D1], repro, KEY_FAIL) is None, repro
+
+
+def test_deeply_nested_json_is_one_error_line(tmp_path):
+    spec = spec_with(tmp_path / "s", DECIDED)
+    nested = "[" * 100000 + "]" * 100000
+    draft = tmp_path / "departure.md"
+    shutil.copy(PAIR / "drafts" / "departure.md", draft)
+    r1, r2 = results_for(tmp_path)
+    r1.write_text(nested, encoding="utf-8")
+    got = run_script("finding_v1", "classify", "--draft", draft, "--oracle", spec,
+                     "--rebuild", r1, "--reference", r2)
+    deep = tmp_path / "deep.md"
+    head, rest = draft.read_text(encoding="utf-8").split("## Observed (finding-v1)\n", 1)
+    deep.write_text(f"{head}## Observed (finding-v1)\n```json\n{nested}\n```\n\n"
+                    + rest.split("```\n", 1)[1], encoding="utf-8")
+    rendered = run_script("finding_v1", "render", "--draft", deep)
+    for result in (got, rendered):
+        assert result.returncode == 1 and result.stderr.startswith("error:"), result.stderr
+        assert result.stderr.count("\n") == 1 and "Traceback" not in result.stderr
+
+
 def test_registry_with_an_equivalence_trace_is_read_and_never_matches(tmp_path):
     # product-rebuild's equiv.py writes this entry when a person accepts a red equivalence trace.
     trace = ('- id: D-002\n  kind: deliberate-change\n  summary: accepted trace\n'

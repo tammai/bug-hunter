@@ -158,6 +158,19 @@ def test_a_path_that_climbs_after_repeated_decoding_is_refused(make_repo, tmp_pa
     assert len(entries(stub_log)) == 1
 
 
+def test_every_spelling_of_a_dot_segment_leaves_the_base():
+    # Servers end a segment's name at `;`, `?` or `#`, and some trim trailing dots and spaces.
+    from live_proxy import _leaves_base
+
+    for path in ("/..;/x", "/..;a=b/x", "/%2e%2e%3b/x", "/..%3fx", "/..%23x",
+                 "/%252e%252e%253fx", "/.../x", "/.. /x", "/..%20/x", "/.%20/x", "/..\t/x",
+                 "/%u002e%u002e/x", "/%U002E%U002E/x", "/a/%252e%252e%252e/x"):
+        assert _leaves_base(path), path
+    for path in ("/items/100%25", "/items/a;b", "/v1.2/x", "/file.tar.gz", "/.well-known/x",
+                 "/a/b?q=..", "/", "/a..b/c", "/..a/x"):
+        assert not _leaves_base(path), path
+
+
 def call_no_redirect(url):
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):

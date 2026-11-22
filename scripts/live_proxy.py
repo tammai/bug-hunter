@@ -33,14 +33,18 @@ REFUSALS = "/.bug-hunter/refusals"  # the proxy's own path: how many requests it
 NOT_FORWARDED = {"connection", "keep-alive", "proxy-connection", "proxy-authorization", "te",
                  "trailer", "transfer-encoding", "upgrade", "host", "content-length",
                  ACCOUNT_HEADER, REFUSED_HEADER.lower()}
-# Beside another target, only these cross (and every `sec-` name a browser adds): a front end
-# may route by any other header, and no list of routing headers is ever complete.
+# Beside another target, only these cross (and the browser's own `Sec-` families below): a
+# front end may route by any other header, and no list of routing headers is ever complete.
 BESIDE_ANOTHER = {"accept", "accept-encoding", "accept-language", "authorization",
                   "cache-control", "content-type", "cookie", "dnt", "if-match",
                   "if-modified-since", "if-none-match", "if-range", "if-unmodified-since",
                   "origin", "pragma", "priority", "range", "referer", "upgrade-insecure-requests",
-                  "user-agent", "x-csrf-token", "x-requested-with", "x-xsrf-token"}
+                  "sec-gpc", "user-agent", "x-csrf-token", "x-requested-with", "x-xsrf-token"}
+BROWSER_FAMILIES = ("sec-fetch-", "sec-ch-", "sec-websocket-")
 MAX_DECODES = 10
+# A segment whose name, up to `;`, `?` or `#`, is only dots and whitespace.
+DOT_SEGMENT = re.compile(r"(?:^|[/\\])\.[.\s]*(?:[;?#/\\]|$)")
+UNICODE_ESCAPE = re.compile(r"%u[0-9a-f]{4}", re.I)  # IIS-style `%u002e`
 MAX_BODY = 50 * 1024 * 1024
 HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 # Drafts write an account as "$<NAME>_AUTH", so its name must be a shell variable name.
@@ -260,13 +264,14 @@ def _place(target: dict) -> tuple:
 
 
 def _leaves_base(path: str) -> bool:
-    """Whether a request path could climb out of the target's base path, decoded any number
-    of times: a target or front end that decodes twice reads `%252e%252e` as `..`."""
+    """Whether a request path could climb out of the target's base path, however decoded."""
+    # A target or front end may decode more than once (`%252e%252e` is `..`), end a segment's
+    # name at `;`, `?` or `#` (`..;/`), or trim trailing dots and spaces (`.../`, `.. /`).
     if not path.startswith("/"):
         return True
     current = path.split("?", 1)[0]
     for _ in range(MAX_DECODES):
-        if any(segment in (".", "..") for segment in current.replace("\\", "/").split("/")):
+        if DOT_SEGMENT.search(current) or UNICODE_ESCAPE.search(current):
             return True
         decoded = unquote(current)
         if decoded == current:
@@ -413,7 +418,7 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
     def crosses(name: str) -> bool:
         name = name.lower()
         return name not in NOT_FORWARDED and (
-            not others or name in BESIDE_ANOTHER or name.startswith("sec-"))
+            not others or name in BESIDE_ANOTHER or name.startswith(BROWSER_FAMILIES))
 
     masker: list = [None, -1]  # built on first use, once the proxies' own URLs are known
 
@@ -502,7 +507,7 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
             }
             held = sorted({k.lower() for k in self.headers if not crosses(k)} - NOT_FORWARDED)
             if forwarded and held:
-                # So the hunter sees which of its headers never reached the target.
+                # Names only, for the run's Report: a header the app needed never arrived.
                 note = "; ".join(filter(None, (note, "headers not forwarded beside the "
                                                      f"reference: {', '.join(held)}")))
             if note:

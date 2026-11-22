@@ -31,6 +31,7 @@ PLAYWRIGHT_FILE = "bh-repro.spec.ts"
 PLAYWRIGHT_END = "BH_TEST_END"
 DEFECT = re.compile(r"^Defect:[ \t]*yes[ \t]*$", re.M | re.I)
 REGISTRY = "departures.yaml"
+DEPARTURE_ID = re.compile(rf"D-[0-9]{{3,{len(str(MAX_NUMBER))}}}", re.ASCII)
 LABEL = "repro"
 MAX_MESSAGE = 500
 SIDES = ("rebuild", "reference")
@@ -58,7 +59,7 @@ def _fenced_json(sections: dict[str, str], where: str):
              if in_fence]
     try:
         return json.loads("\n".join(inner[1:-1])) if len(inner) >= 2 else None
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
 
 
@@ -344,6 +345,8 @@ def replay(steps: list[dict], base: str, env: dict) -> dict:
         contracts._run_steps(steps, LABEL, base, env)
     except _Refused as exc:
         return {"result": f"not run: the proxy refused a request: {exc}"}
+    except RecursionError:
+        return {"result": "not run: a response is nested too deeply to read"}
     except contracts._Fail as exc:
         message = str(exc)
         # Anchored: the rest of the message holds values the target sent.
@@ -454,14 +457,16 @@ def load_departures(spec: Path) -> list[dict]:
         data = contracts.parse_yaml(text)
     except ValueError as exc:  # YamlError
         raise BadDraft(f"{REGISTRY}: {exc}") from None
+    # Before contracts' checks, whose messages quote the ID: a bad one is never echoed.
+    if isinstance(data, list) and any(
+            isinstance(entry, dict) and isinstance(entry.get("id"), str)
+            and not DEPARTURE_ID.fullmatch(entry["id"]) for entry in data):
+        raise BadDraft(f"{REGISTRY}: a departure ID is not D- and 3 to "
+                       f"{len(str(MAX_NUMBER))} digits")
     issues = contracts.check_departures(data)
     errors = [m for s, m in issues if s == "error"]
     if errors:
         raise BadDraft(f"{REGISTRY}: {errors[0]}")
-    digits = len(str(MAX_NUMBER))
-    if any(len(entry["id"]) > len("D-") + digits for entry in data):
-        # Not echoed: the ID itself is what is too long.
-        raise BadDraft(f"{REGISTRY}: a departure ID has more than {digits} digits")
     for message in (m for s, m in issues if s == "blocked"):
         print(f"warning: {REGISTRY}: {message}", file=sys.stderr)
     return data
@@ -499,6 +504,15 @@ def _in_scope(entry: dict, criterion: str | None) -> bool:
     return True
 
 
+def _fails(check: dict, value) -> bool:
+    """Whether `value` fails this check; a `same-as:` rule needs captures, so never proven."""
+    if "equals" in check:
+        return not contracts._same(value, check["equals"])
+    rule = str(check.get("rule", ""))
+    return bool(rule) and not rule.startswith("same-as:") \
+        and not contracts._rule_ok(rule, value, {})
+
+
 def matching_departure(departures: list[dict], repro: dict, rebuild: dict,
                        criterion: str | None = None) -> str | None:
     """The first accepted, in-scope departure whose HTTP match holds for the failed check."""
@@ -517,6 +531,8 @@ def matching_departure(departures: list[dict], repro: dict, rebuild: dict,
     if not checks or checks[-1]["pointer"] != pointer \
             or any(c.get("pointer") == pointer for c in checks[:-1]):
         return None
+    if not _fails(checks[-1], check["value"]):
+        return None  # the result file claims a failure the value doesn't show
     for entry in departures:
         # C5: a proposed entry blocks its gate until a person decides it; it never matches.
         if entry.get("status") == "proposed" or not _in_scope(entry, criterion):
@@ -551,7 +567,7 @@ def with_reference(record: dict, text: str, oracle: Path | None,
 def load_result(path: Path, flag: str) -> dict:
     try:
         result = json.loads(path.read_text(encoding="utf-8"))
-    except ValueError:
+    except (ValueError, RecursionError):
         raise BadDraft(f"{flag} is not JSON") from None
     except (OSError, UnicodeDecodeError) as exc:
         raise BadDraft(f"{flag} can't be read ({type(exc).__name__})") from None
@@ -644,6 +660,8 @@ def _main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("replay", help="run a draft's HTTP repro against one base")
     p.add_argument("--draft", required=True, type=Path)
     p.add_argument("--base", required=True, help="a proxy listener: $BASE or $REF_BASE")
+    d = sub.add_parser("departures", help="check the spec's departures.yaml as write reads it")
+    d.add_argument("--oracle", required=True, type=Path, help="the spec folder")
     args = parser.parse_args(argv)
     try:
         results = None
@@ -659,7 +677,15 @@ def _main(argv: list[str] | None = None) -> int:
             # The same checks as write, so a draft write would refuse never reaches a verifier.
             text = finding(args.draft.read_text(encoding="utf-8"))["draft"]
             args.draft.write_text(text, encoding="utf-8", newline="")
+        elif args.command == "departures":
+            load_departures(args.oracle)
         elif args.command == "replay":
+            try:
+                port = urlsplit(args.base).port
+            except ValueError:
+                port = -1
+            if port == -1:
+                raise BadDraft("--base is not a URL with a valid host and port")
             steps = repro_steps(_sections(args.draft.read_text(encoding="utf-8")))
             if not is_http(steps):
                 raise BadDraft("replay runs an HTTP repro (a list of C4 steps); "
