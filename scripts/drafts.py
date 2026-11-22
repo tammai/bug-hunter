@@ -208,14 +208,17 @@ def _holds_login(text: str, account: str, headers: dict, url: str) -> bool:
     # Every form the proxy masks: as sent, JSON-escaped, percent-encoded, HTML entities and a
     # Basic login decoded; forms under 6 characters would match ordinary words.
     pieces = _pieces({"url": url, "accounts": {"_": headers}})
-    # A cookie that isn't a session or auth cookie (device=desktop) holds no secret on its own:
-    # its value counts only as a credential, like a word login.
-    plain = {c.partition("=")[2].strip() for h, v in headers.items() if h.lower() == "cookie"
-             for c in v.split(";") if "=" in c and not SESSION_LIKE.search(c.partition("=")[0])}
-    plain = {p for p in plain - _whole_values(headers) if len(p) >= 6}
+    # A word-shaped value of a cookie that isn't a session or auth cookie (device=desktop)
+    # holds no secret on its own: it counts only as a credential, like a word login.
+    cookies = [(c.partition("=")[0], c.partition("=")[2].strip())
+               for h, v in headers.items() if h.lower() == "cookie" for c in v.split(";")
+               if "=" in c]
+    plain = {v for n, v in cookies if not SESSION_LIKE.search(n) and WORDLIKE.fullmatch(v)}
+    plain = {p for p in plain - _whole_values(headers) - {v for n, v in cookies
+                                                          if SESSION_LIKE.search(n)}
+             if len(p) >= 6}
     letters = {p for p in pieces - plain if WORDLIKE.fullmatch(p) and len(p) >= 6}
     words = {p for p in letters if len(p) <= WORDLIKE_MAX and _reads_as_word(p)} | plain
-    pieces = pieces | plain
     # A random letters-only token counts anywhere and in any case, as a credential word does.
     # The placeholders this check tells drafts to write (MEMBER_AUTH) are not credentials.
     own = "|".join(re.escape(p) for p in (f"{account}_AUTH", f"ACCEPT_ACCOUNT_{account}"))

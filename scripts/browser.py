@@ -151,7 +151,8 @@ def _message(text: str) -> str:
     # behaviours don't read the same; never the stack.
     lines = [line.strip() for line in ANSI.sub("", text).split("\n")]
     kept = [line for line in lines if line and not line.startswith("at ")][:MAX_LINES]
-    return cut_whole("\n".join(kept), MAX_MESSAGE)
+    # Never empty: an empty message would read as no failure.
+    return cut_whole("\n".join(kept), MAX_MESSAGE) or "(error message too long to show)"
 
 
 def _first_failure(suites: list) -> str | None:
