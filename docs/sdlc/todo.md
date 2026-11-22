@@ -2,7 +2,7 @@
 
 ## Open
 
-- [ ] Leak check for word-like logins, review tickets left after round 2 of 2026-11-09-s-login-word (2026-11-09)
+- [x] Leak check for word-like logins, review tickets left after round 2 of 2026-11-09-s-login-word (2026-11-09). Done in 2026-11-22-m-leak-check-followups (2026-11-22)
   - A word after a second word between field and value is missed: `<input name="password" value="member">`, `{"name":"token","value":"member"}`, `the password is member` (round 2, M-2).
   - A lowercase-only random token of 6–15 letters (`qwxzkvbnmt`) is treated as a word and counts only in credential context (round 2, L-2).
 
@@ -33,13 +33,10 @@
     - `cited_rules` is a one-line wrapper;
     - `_repo_path` duplicates `scope._relative`.
 - [ ] Leak scan (`drafts.leaks`) known limits and tickets, from the follow-up reviews: 2026-11-08-m-review-followups (2026-11-08)
-  - `localhost:80` for a portless loopback target (C4-7);
   - a host or login cut by the 500-character message cap leaves a prefix (C4-8, S-7);
   - a trailing-dot host;
   - `_host_patterns` and `live_proxy._masker` are two sources of truth for an address (C4-6); the masker still uses word boundaries, so the scan catches more than it masks;
   - a spec folder reached by an 8.3 short path skips the link guard; the folder links that `scope._any_matches` doesn't check (S-5);
-  - escapes upper-cased after escaping (`\X2F`, `\U002F`) aren't decoded, so a plain-name host can hide behind them (R6-1);
-  - other spellings of one address: expanded or zero-padded IPv6, `10.0.0.01`, `127.1`, `0.0.0.0` (R6-2);
 - [ ] Part 3 review tickets, in docs/sdlc/changes/2026-11-08-m-reference-classify.md's Review: 2026-11-08-m-reference-classify (2026-11-08)
   - an allow-list of forwarded headers, and `%252e` double decoding (S2-5);
   - the hunter writes its draft through a quoted heredoc (S2-6);

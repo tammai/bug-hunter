@@ -1,5 +1,5 @@
 # 2026-11-22-m-leak-check-followups
-Status: active
+Status: done
 Process: 3
 Change: docs/sdlc/changes/2026-11-22-m-leak-check-followups.md   (this feature's record for people)
 Track: M   (sized up because: —; footprint: 2 files)
@@ -10,13 +10,13 @@ Started: 2026-11-22
 Base: 635113a
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: 635113a tree fcfb9ff47b4eec1dbd5e0fdc236238c98f9a9caf
-Current: Stage 3 – Review
+Verified: 06e2ea1 tree bd2fed87f2f48c9f76a0d76b928d9f6fbe54c390
+Current: Stage 4 – Ship
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
 - [x] 2 Build
-- [ ] 3 Review   — the change file's ## Review
+- [x] 3 Review   — the change file's ## Review
 - [ ] 4 Ship     — PR: (Learn: knowledge, recurring-defects.md)
 
 ## How the build runs
@@ -48,6 +48,7 @@ inline, one part
 - 2026-11-22 Stage 2: pass
 - 2026-11-22 Stage 3: fail — review r3: security PASS, code FAIL CR3-1 CR3-2; user chose one more fix round
 - 2026-11-22 Stage 2: pass
+- 2026-11-22 Stage 3: pass
 
 ## Deviations
 - 2026-11-22 AC-003 What: its target is http://ref with no port, not http://ref:3000. Why: a plain name with its port already matches anywhere, so the first test passed before the code; only the URL form shows the escape fix. Effect: same behaviour proved, change file updated before red was recorded.
@@ -58,6 +59,7 @@ inline, one part
 - 2026-11-22 Review r1 code review What: ran as sdlc:code-reviewer, not the built-in code-review skill the flow names for M. Why: dispatched with the security review in one step. Effect: round 2 uses the built-in skill for the code check.
 - 2026-11-22 scripts/drafts.py review round 3 What: IPv6 spellings render as one prefix-shared tree; a mapped target's IPv4 form keeps its scheme and port; port 80 adds http:// and ws:// without a port and 443 adds https:// and wss://, whatever the target's scheme; prose takes 'API key', 'secret key', 'access token'; a value element (<value>) counts; letters-only random tokens of any length match in any case. Why: round 2 CR2-1, CR2-2/R2-5, CR2-3, R2-6, R2-7, CR2-7. Effect: 1 MB of hostile '0:' or '::' now scans in about 1 s against 0.35 s on base (was 5.4 s against 0.78 s); still linear. Tests in tests/test_drafts_leak_spellings.py.
 - 2026-11-22 scripts/drafts.py review round 4 What: the account's own placeholders are blanked before the anywhere-match of random tokens; a scheme may carry +-joined prefixes (git+http://); after is/was only spaces, a colon, quotes, backticks or a dash may stand before the value, and after a value key only spaces, quotes or [; ws and wss targets get default ports 80 and 443. Why: round 3 CR3-1, CR3-2/R3-2, CR3-3, R3-3. Effect: tests in tests/test_drafts_leak_spellings.py; timing unchanged.
+- 2026-11-22 waived round 4: CR4-1, CR4-2, CR4-4 — the owner chose to fold them into 2026-11-22-m-leak-scan-limits, which is built on this change, fixes them test-first under its own review, and ships right after it
 
 ## Open questions
 -

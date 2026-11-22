@@ -62,3 +62,23 @@
 - C4-8 (prefixes cut by the 500-character cap), trailing-dot hosts, S-5 (8.3 spec paths and folder links): still open in `todo.md`.
 - Short IPv4 forms for non-loopback hosts, integer or hex IPv4, `::` and a bare `0` (see Decisions).
 - The `isolate.py` follow-ups.
+
+## Review
+
+- **Recommended and chosen:** security + code, because `Risk: high` (secrets and hosts into public issue drafts) fired both rows; chosen by the user.
+- **Verdicts:** round 1 → `.sdlc/.work/findings/2026-11-22-m-leak-check-followups/security-r1.md` FAIL (S1–S4; S5 confirmed by repro), `code-reviewer-r1.md` FAIL (C1–C4). Round 2 → `security-r2.md` FAIL (R2-5), `code-reviewer-r2.md` (built-in `code-review`, rated by the orchestrator) FAIL (CR2-1–CR2-3). Round 3 (one more round, the user's choice at the cap) → `security-r3.md` PASS, `code-reviewer-r3.md` FAIL (CR3-1, CR3-2). Round 4 (the user's choice at the cap) → `code-reviewer-r4.md` FAIL (CR4-1 high; CR4-2, CR4-4 medium). Round 4 waived by the user: its three findings are folded into 2026-11-22-m-leak-scan-limits, which is built on this change and ships right after it.
+- **Fixed:**
+  - S1/C1: an IPv4-mapped or zoned IPv6 target crashed `leaks` with a traceback printing the host; groups now come from `int(address)`, zones are dropped, mapped targets also get their IPv4 patterns (`test_mapped_and_zoned_ipv6_targets_are_checked_not_crashed`).
+  - S2/C8: IPv6 spellings with a dotted IPv4 tail (`test_ipv6_spellings_with_a_dotted_ipv4_tail_are_found`).
+  - S3, CR2-7: letters-only random tokens of any length match in any case (`test_random_token_login_is_found_in_any_case`, `test_long_random_token_login_is_found_in_any_case`).
+  - S4/C2, C4, C6, R2-6, R2-7, CR3-3: login context after `is:`/`was`, `value` only as a key or element, prose limited to credential names, two-word fields, no crossing a full stop or an empty value (`test_word_login_after_is_with_punctuation_or_a_value_word`, `test_word_login_after_two_word_fields_and_a_value_element`, `test_is_and_an_empty_value_do_not_reach_the_next_words`).
+  - S5, CR2-3: quadratic scheme prefix and a 5–9x slowdown on hostile runs; the scheme starts only at its run's start and IPv6 spellings render as one prefix-shared tree (`tests/test_drafts_scan_time.py`; 1 MB hostile runs about 2–3x base, linear).
+  - C3: short loopback forms bounded so they don't match inside other addresses (`test_short_loopback_forms_do_not_match_inside_other_addresses`).
+  - C9, CR2-2/R2-5, CR3-2, R3-3: a port-less loopback URL follows the draft's scheme (80: http/ws, 443: https/wss), compound schemes, ws/wss targets' default ports (`test_a_url_without_a_port_follows_the_drafts_scheme`, `test_a_compound_scheme_without_a_port_is_found`, `test_a_websocket_loopback_target_has_a_default_port`).
+  - CR2-1/R2-1: a mapped loopback target keeps its port (`test_mapped_loopback_target_keeps_its_port`).
+  - CR3-1: an account's own placeholders are blanked before the anywhere-match (`test_placeholder_named_after_a_random_looking_login_is_clean`).
+- **Tickets:** carried by 2026-11-22-m-leak-scan-limits: CR4-1 (a literal http/ws prefix behind the scheme lookbehind misses `...http://localhost`), CR4-2, CR4-4, CR4-3, CR4-5, CR3-4–CR3-9, S6–S8, C5, C7, CR2-4–CR2-6, R2-2–R2-4, R2-8, R2-9, R3-1, R3-4 (zero runs about 3x base, linear).
+- **Drift and manual checks:** every Deviations line in `.sdlc/state/2026-11-22-m-leak-check-followups.md`: AC-003's target has no port; the timing test file; the review-fix test file; IPv6 by an enumerating (then tree) regex instead of `ipaddress` parsing (this file's R6-2 Decision row still says parsing); the 2–3x constant on colon runs; round 1's code review ran as `sdlc:code-reviewer`; rounds 3 and 4 fixes; the round-4 waiver. No manual ACs.
+- **Security:** no dependency change (stdlib only), so no dependency audit; no secrets in the diff.
+- **Lessons filed:** `docs/sdlc/recurring-defects.md` (a boundary added to a leak matcher to cut over-refusal or cost hides a value behind a prefix).
+
