@@ -23,11 +23,12 @@ ALWAYS_UNSET = [
     "SSH_AUTH_SOCK", "GOOGLE_APPLICATION_CREDENTIALS", "NETRC",
     "VIRTUAL_ENV", "CONDA_PREFIX", "CONDA_DEFAULT_ENV", "PYTHONHOME",
     "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "JAVA_OPTS", "MAVEN_OPTS", "MAVEN_ARGS", "GRADLE_OPTS",
-    "MAVEN_CONFIG", "NODE_OPTIONS", "MISE_GLOBAL_CONFIG_FILE",
+    "MAVEN_CONFIG", "NODE_OPTIONS", "MISE_GLOBAL_CONFIG_FILE", "SSH_ASKPASS",
 ]
-# git reads config from these as well as from files, so an owner's credential helper or SSH
-# command would survive the config files being hidden.
-GIT_CONFIG_VARS = re.compile(r"GIT_CONFIG_(?:PARAMETERS|COUNT|KEY_[0-9]+|VALUE_[0-9]+)")
+# git takes config, programs to run (SSH, askpass, proxy, pager) and even which repo to act on
+# from GIT_* variables, an open-ended set; every inherited one goes except those exported below
+# and GIT_SSL_CAINFO in KEEP_IF_SET.
+GIT_PREFIX = "GIT_"
 JVM_OPTION_VARS = ["JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "JAVA_OPTS",
                    "MAVEN_OPTS", "GRADLE_OPTS"]
 # Proxy routing survives the JVM option variables being dropped, so Maven and Gradle still
@@ -47,6 +48,7 @@ KEEP_IF_SET = [
     "NVM_HOME", "NVM_SYMLINK", "PYENV", "PYENV_HOME",
 ]
 WINDOWS = os.name == "nt"
+DRIVE_REMOTE = 4
 # Opening each folder relative to its parent's descriptor leaves no gap for a link to be swapped
 # in. Windows Python has none of these calls, so there the checks go by path instead.
 def _dir_fd() -> bool:
@@ -76,15 +78,45 @@ def _toolchains(env: dict[str, str], real: Path) -> dict[str, str]:
     return found
 
 
+def _long_name(path: str) -> str:
+    """path with any 8.3 short folder name (TAMMAI~1) expanded, as far as the folders exist."""
+    # Drive-letter paths only: asking about a UNC or \??\ path, or a mapped network drive,
+    # would make Windows connect to that host with the owner's login, or wait on a dead one.
+    drive = ntpath.splitdrive(path)[0]
+    if "~" not in path or not WINDOWS or len(drive) != 2:
+        return path
+    # Imported here: a POSIX Python built without _ctypes must still isolate.
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    if kernel32.GetDriveTypeW(drive + "\\") == DRIVE_REMOTE:
+        return path
+    buf = ctypes.create_unicode_buffer(32768)
+    head, tail = path, ""
+    # GetLongPathNameW fails on a path whose end doesn't exist yet, so expand the longest
+    # existing prefix and keep the rest as written.
+    while "~" in head:
+        n = kernel32.GetLongPathNameW(head, buf, len(buf))
+        if 0 < n < len(buf):
+            return buf.value + tail
+        parent = ntpath.dirname(head)
+        if parent == head:
+            break
+        tail = head[len(parent):] + tail
+        head = parent
+    return path
+
+
 def _win_path(path: str) -> str:
-    path = path.strip().strip('"')
+    path = path.strip().strip('"').strip()
     # Long-path forms name the same folder: \\?\C:\x is C:\x, \\?\UNC\srv\p is \\srv\p.
     for prefix, plain in (("\\\\?\\UNC\\", "\\\\"), ("//?/UNC/", "//"), ("\\\\?\\", ""),
                           ("//?/", "")):
         if path.upper().startswith(prefix):
             path = plain + path[len(prefix):]
             break
-    return ntpath.normcase(ntpath.normpath(path)).rstrip("\\") if path else ""
+    if not path:
+        return ""
+    return ntpath.normcase(_long_name(ntpath.normpath(path))).rstrip("\\")
 
 
 def _points_into(value: str, root: Path | str) -> bool:
@@ -178,6 +210,10 @@ def _plan(scratch: Path, env: dict[str, str],
         "GIT_CONFIG_GLOBAL": "/dev/null",
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_TERMINAL_PROMPT": "0",
+        # Set, not just dropped: git would fall back to the owner's VISUAL, EDITOR or PAGER, or
+        # start vi with no terminal and hang the call. `true` keeps git's prepared message.
+        "GIT_EDITOR": "true",
+        "GIT_PAGER": "cat",
     }
     if cache is not None:
         exports.update(_shared_caches(cache))
@@ -218,7 +254,7 @@ def _plan(scratch: Path, env: dict[str, str],
     }
     secrets = {k for k in env if SECRET_NAME.search(k)}
     respelled = {k for k in env if fold(k) in exported and k not in exports}
-    named = {k for k in env if fold(k) in always or GIT_CONFIG_VARS.fullmatch(fold(k))}
+    named = {k for k in env if fold(k) in always or fold(k).startswith(GIT_PREFIX)}
     unset = {
         k for k in (*ALWAYS_UNSET, *named, *into_home, *secrets, *respelled)
         if (k in respelled or fold(k) not in exported) and re.fullmatch(r"[A-Za-z_]\w*", k)
@@ -260,10 +296,10 @@ def _open_folder(scratch: Path, folder: Path) -> int:
     return fd
 
 
-def _is_link(path: Path) -> bool:
+def _is_link(st: os.stat_result) -> bool:
     """A symlink, a junction or any other reparse point: each can lead out of scratch."""
-    st = os.lstat(path)
-    return (stat.S_ISLNK(st.st_mode) or path.is_junction()
+    # A junction is always a reparse point, so the attribute covers it.
+    return (stat.S_ISLNK(st.st_mode)
             or bool(getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT))
 
 
@@ -278,7 +314,8 @@ def _check_folder(scratch: Path, folder: Path) -> None:
             path.mkdir()
         except FileExistsError:
             pass
-        if _is_link(path) or not path.is_dir():
+        st = os.lstat(path)
+        if _is_link(st) or not stat.S_ISDIR(st.st_mode):
             raise OSError(f"{folder}: {part} is a symlink, junction or not a folder; "
                           "refusing to write through it")
 
@@ -303,7 +340,7 @@ def _refuse_links(scratch: Path, folder: Path) -> None:
     if not DIR_FD:
         _check_folder(scratch, folder)
         for entry in os.scandir(folder):
-            if _is_link(Path(entry.path)):
+            if _is_link(os.lstat(entry.path)):
                 raise OSError(f"{entry.path} is a symlink or junction; refusing to use this home")
         return
     fd = _open_folder(scratch, folder)
@@ -530,10 +567,35 @@ def _main(argv: list[str] | None = None) -> int:
     # reaches their own shell, so a relative write would land in the repo.
     home_dir = " || ".join(f"cd {shlex.quote(p.as_posix())}"
                            for p in (scratch / "copy", scratch))
-    print("unset " + " ".join(unset) + "; export " + " ".join(
+    line = "unset " + " ".join(unset) + "; export " + " ".join(
         f"{key}={shlex.quote(value)}" for key, value in exports.items()
-    ) + f"; trap {shlex.quote(listing)} EXIT; {{ {home_dir}; }} 2> /dev/null;")
+    ) + f"; trap {shlex.quote(listing)} EXIT; {{ {home_dir}; }} 2> /dev/null;"
+    if not _encodes(line):
+        # A Windows value can hold an unpaired UTF-16 surrogate, which no UTF-8 output carries.
+        print(f"error: {_unwritable(env, exports)} holds text that can't be written out; "
+              "fix or unset it", file=sys.stderr)
+        return 1
+    print(line)
     return 0
+
+
+def _unwritable(env: dict[str, str], exports: dict[str, str]) -> str:
+    """What to name when the shell line can't be written: the owner's variable behind it."""
+    bad = next((k for k, v in exports.items() if not _encodes(k + v)), None)
+    if bad is None:
+        return "the scratch path or Python's own path"
+    if env.get(bad) != exports[bad]:
+        # Built from the owner's variables (RUSTUP_HOME from HOME), so name those instead.
+        bad = " or ".join(k for k, v in env.items() if not _encodes(k + v)) or bad
+    return "the environment variable " + bad.encode("ascii", "backslashreplace").decode()
+
+
+def _encodes(text: str) -> bool:
+    try:
+        text.encode(sys.stdout.encoding or "utf-8", sys.stdout.errors or "strict")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 if __name__ == "__main__":
