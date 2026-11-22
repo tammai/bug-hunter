@@ -114,3 +114,62 @@ The rest are small:
 - **CR-12:** deduplicating the target-independent part of the draft leak check lives in `drafts.py.leaks`, which another change owns. Stays a ticket.
 - **Part 3 R2-13:** render runs twice in reference mode. The first run is what validates the hunter's Observed block before the second replaces it, and it is cheap. Stays a ticket.
 - Contracts' own departure-ID pattern (`^D-[0-9]{3,}$`): upstream.
+
+## Review
+
+- **What fired:** a security review and a code review.
+  - Security fired because `Risk: high`: request paths and headers reach the proxy that holds account tokens, and result files and `departures.yaml` are untrusted.
+  - Code fired because `## Public Surface` isn't `- none`.
+  - The owner deferred every lane's reviews to the end of all builds. The orchestrator ran both on `sdlc:code-reviewer` (opus).
+  - A hook refused the reviewers' own writes, so the reports were saved by the orchestrator or written by the builder from its relay. They are under `.sdlc/.work/findings/2026-11-22-m-replay-departure-tickets/`.
+- **Verdicts:**
+  - Round 1: security FAIL (S-1, S-2), code FAIL (CR-1).
+  - Round 2: security FAIL (S2-1, S2-2), code FAIL (R2-1, R2-2). These were the same two highs, and the owner allowed a third round.
+  - Round 3: security PASS and code PASS. Their medium findings were fixed afterwards, test first, and closed by `verify.py` without another round.
+- **High findings and their fixes**, each with a failing test first:
+  - **S-1:** `_leaves_base` passed `..;/`, `..%3f`, `.../`, `.. /` and `%u002e`. It now refuses, in every decode round, a segment whose name up to `;`, `?` or `#` is only dots and whitespace, plus `%u` escapes.
+  - **S2-2 / R2-1:** a deeply nested `departures.yaml` raised `RecursionError` in contracts' parser. `load_departures` now catches it around `parse_yaml` and `check_departures` and gives one error line.
+  - **S2-1 / R2-2:** registry and draft text (decoded YAML escapes, echoed rules and criteria, YamlError's escape character) reached the `error:` line raw. One `_printable` helper now escapes control and format characters and caps every error and warning line at 500 characters.
+  - **H3-1 (unconfirmed, then confirmed by its test):** `json.dump` raised partway through writing and left a partial `BH-NNNN.json`. `write` now serializes before opening the file, and `_main` catches `RecursionError` as one line.
+- **Medium and low bugs, fixed the same way:**
+  - **Round 1:**
+    - S-2 / S-6: departure IDs are checked as ASCII `D-` plus 3 to 9 digits before contracts' messages can echo them;
+    - CR-1: a new `finding_v1.py departures --oracle <spec>` (AC-011) is run by `/hunt` before the cost question, so the registry is checked the way `write` reads it;
+    - CR-2: hunters and the Report learn which headers are dropped;
+    - S-3 / L-2: `RecursionError` in result files, Observed blocks and replay, and a bad `--base`, each give one line;
+    - S-4: a `check` matches only when its value fails the last check;
+    - S-5 / L-1: only the browser's own `Sec-` families cross.
+  - **Round 2:**
+    - R2-4 / S2-3: either `equals` or `rule` failing counts;
+    - S2-6: an `--oracle` that isn't a folder is refused;
+    - R2-3: `%c0`/`%c1`, NUL and fullwidth dots are refused;
+    - FP-3, FP-A to FP-D: docs and messages.
+  - **Round 3:**
+    - M3-1 / M3-2: each decode round is checked as bytes, refusing overlong UTF-8 lead patterns (`%e0%80%ae`, `%f0%80%80%ae`, mixed depth);
+    - L3-4 and FP3-1.
+- **Tickets** (an open item in `docs/sdlc/todo.md`):
+  - S2-7's private-runner half (contracts upstream);
+  - S2-6, the hunter's heredoc (`drafts.py`);
+  - CR-12 (`drafts.py`);
+  - part 3 R2-13, the double render;
+  - contracts' ID pattern (upstream);
+  - L3-1 / S2-4: NFKC-produced `%`, other slashes and decoder spellings;
+  - L3-2 / S2-5 / L1: rare legitimate paths refused, with no reason given;
+  - R2-6: `oracle.py`'s `json.loads`;
+  - L3-3: `drafts.py`'s origin URL in an error;
+  - L-4: test gaps.
+- **Drift and manual checks:**
+  - **Deviations** (each in the state file):
+    - `matching_departure`'s signature;
+    - `ROUTING_HEADERS` replaced by `BESIDE_ANOTHER`;
+    - `departure.md` unchanged;
+    - CHANGELOG first deferred, then written at Ship;
+    - AC-011 added in review round 1, with the new public command (`state.py` writes `## Public Surface` only at `new`, so it is recorded as a deviation);
+    - docs in `commands/hunt.md`, `agents/bug-hunter.md` and README;
+    - code fixes for each review round;
+    - test-changes in `tests/test_reference.py`, `tests/test_departures.py` and `tests/test_live_proxy.py`, each re-stamped with `verify.py red --at`. AC-011's first red run was recorded with the `departures` branch of `_main` taken out, then put back.
+  - **Rebase:** onto `origin/main` fdd1072 (C3 and oracle merged), with no conflicts; Base moved from 635113a.
+  - **Tests:** `verify.py` passes on the rebased tree (`head 7b99ff2 tree 2e7fd1bd60c6082404d2f973a004314875e1b3d3`), with the full `uv run pytest` and lint. AC-001 to AC-011 failed first, then passed.
+- **Lessons filed:** two lines in [recurring-defects.md](../recurring-defects.md):
+  - a decode check that runs on text after `unquote`, so non-UTF-8 bytes slip past it;
+  - an error line that prints untrusted text without escaping.

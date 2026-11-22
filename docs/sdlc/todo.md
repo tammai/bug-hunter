@@ -25,18 +25,16 @@
   - a trailing-dot host;
   - `_host_patterns` and `live_proxy._masker` are two sources of truth for an address (C4-6); the masker still uses word boundaries, so the scan catches more than it masks;
   - a spec folder reached by an 8.3 short path skips the link guard; the folder links that `scope._any_matches` doesn't check (S-5);
-- [ ] Part 3 review tickets, in docs/sdlc/changes/2026-11-08-m-reference-classify.md's Review: 2026-11-08-m-reference-classify (2026-11-08)
-  - an allow-list of forwarded headers, and `%252e` double decoding (S2-5);
-  - the hunter writes its draft through a quoted heredoc (S2-6);
-  - `replay` depends on contracts' private `_run_steps`, `_Fail` and their wording, plus a process-global opener (S2-7, R2-10);
-  - dedupe the target-independent draft checks (CR-12);
-  - render repeats a heading scan and renders twice (R2-12, R2-13).
-- [ ] Part 5 review tickets, in docs/sdlc/changes/2026-11-08-m-departures.md's Review: 2026-11-08-m-departures (2026-11-08)
-  - departure matching parses contracts' failure wording; a structured value from `replay` would remove it (CR-4, with S2-7);
-  - `classify` and `write` print no warning for a skipped proposed entry (CR-6);
-  - registry IDs have no upper digit bound (CR-9);
-  - `matching_departure` infers the runner from the steps' shape (R2-10);
-  - classify's departure rows sit in two test tables, and the registry test covers several cases (R2-11, R2-12).
+- [x] Part 3 review tickets (S2-5, S2-7's opener and wording half, R2-10, R2-12) and Part 5 review tickets (CR-4, CR-6, CR-9, R2-10, R2-11, R2-12): done in docs/sdlc/changes/2026-11-22-m-replay-departure-tickets.md
+- [ ] Left from the Part 3/5 tickets and their review, in docs/sdlc/changes/2026-11-22-m-replay-departure-tickets.md's Review: 2026-11-22-m-replay-departure-tickets (2026-11-22)
+  - `replay` still calls contracts' private `_run_steps`/`_Fail` and reads their wording, in one place now (S2-7); needs a public structured runner in contracts upstream;
+  - the hunter writes its draft through a quoted heredoc (S2-6); needs a `drafts.py` check or a Write tool for the hunter;
+  - dedupe the target-independent draft checks in `drafts.leaks` (CR-12);
+  - render runs twice in reference mode (part 3 R2-13);
+  - contracts' departure ID pattern (`^D-[0-9]{3,}$`) has no upper bound and allows a trailing newline (upstream);
+  - `_leaves_base`: a `%` produced by NFKC, division and fraction slashes, and other non-standard decoder spellings (L3-1, S2-4); rare legitimate paths now refused (`/a/.../b`, `/x/.;v=1`, `%25u` data), with no reason in the refusal (L3-2, S2-5, L1);
+  - `oracle.py`'s `json.loads` can raise `RecursionError` (R2-6); `drafts.py` puts an origin URL in an error (L3-3);
+  - test gaps: a malformed `check` in an Observed block, the 10-round decode cap, the 500/501 value bound (L-4).
 
 - [ ] Make the test suite pass on Windows: the 19 Windows-only failures in `.sdlc/baseline.md` (fake `gh` that Windows can run without passing titles through `cmd.exe`, `USERPROFILE` in the drafts and findings fixtures, POSIX-mode asserts, read-only git objects, CRLF and forbidden names in fixtures, symlink privilege), then add a `windows-latest` CI runner — left out of the Windows isolation change on purpose; 2026-11-06-m-windows-isolation (2026-11-06)
 - [x] Small `isolate.py` follow-ups from the Windows isolation review:
