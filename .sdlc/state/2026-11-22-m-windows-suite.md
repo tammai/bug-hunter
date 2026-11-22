@@ -7,7 +7,7 @@ Risk: low
 Top model: opus   (fable only if the user chose it)
 Commands: test: `uv run pytest`
 Started: 2026-11-22
-Base: fdd1072
+Base: 5eea35f
 Owner: tam.mai@bigin.vn
 Tool: claude-code
 Verified: 89ba90b tree e8d8906348ab59652abbcd7b5302094e007380ab
@@ -64,6 +64,8 @@ inline
 - 2026-11-22 docs/sdlc/todo.md What: the review r1 L1 ticket (refusal reason lost when cleanup fails) is an open item. Why: the coordinator triaged L1 as a ticket.
 - 2026-11-22 tests/test_oracle.py What: merged origin/main (fdd1072) into the branch; its new test_install_warnings_are_printed_in_oracle_mode put a non-UTF-8 name on a bytes command line, which Windows can't carry (windows-latest run 45023197510). It now writes the index entry through git update-index --index-info on stdin, as test_scope.py does. Why: the PR's merge ref runs main's tests on Windows. Effect: fixture only; oracle.py untouched.
 - 2026-11-22 Base What: moved from 7790f3e to fdd1072 after merging origin/main into the branch. Why: main gained the oracle lane's changes (scripts/oracle.py, scripts/finding_v1.py and their tests), which aren't this feature's and showed as drift against the old Base. Effect: the drift check sees only this feature's files.
+- 2026-11-22 test-change tests/test_isolate.py What: test_a_variable_bash_cant_unset_stops_isolation now reads the child's raw Windows environment block (GetEnvironmentStringsW) and expects the bang-C drive name there under its Windows spelling, equals-C; child_env takes the child code as an optional argument. Why: a windows-latest diagnostic run (45027927588, temporary test since removed) showed MSYS hands that name to native programs as equals-C with the value unchanged, and Python's nt.environ hides names starting with an equals sign, so the old lookup could never succeed; isolate.py exits 0 and leaves the name alone. Effect: POSIX unchanged; isolate.py unchanged. The test came from main (isolate lane, b4d953c) via the merge of origin/main.
+- 2026-11-22 Base What: moved from fdd1072 to 5eea35f after merging origin/main again. Why: main gained other lanes' changes that showed as drift against the old Base. Effect: the drift check sees only this feature's files.
 
 ## Open questions
 -
