@@ -1,5 +1,5 @@
 {
-  "scaffold_version": "3.5.0",
+  "scaffold_version": "3.13.0",
   "hosts": [
     "claude-code"
   ],
@@ -157,7 +157,9 @@
     ]
   },
   "migrations": {
-    "applied": [],
+    "applied": [
+      "3.6.0-deploy-target"
+    ],
     "skipped": {
       "3.5.0-accept-keys": "not spec-backed; the only criteria.lock.json files are test fixtures (tests/fixtures, contracts/v1/fixtures)"
     }
