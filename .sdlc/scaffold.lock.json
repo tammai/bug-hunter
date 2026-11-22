@@ -6,17 +6,17 @@
   "files": {
     ".github/workflows/sdlc-verify.yml": {
       "class": "seeded",
-      "sha256": "4dd983da69d839f79b5640bd12ef1cdebf6fb10880ad704422b594a2b60705c6",
+      "sha256": "7a76f12b66ba453662e9872a1e4dd49eeb3a5d208225f95eb188b8e9dcf94ea3",
       "template": "builtin:ci"
     },
     ".sdlc/ci/invariants.py": {
       "class": "seeded",
-      "sha256": "39f3ee9ea6398758fbd83b909022cc8f75debf4604c8cbc7ad7c009b0fa9b654",
+      "sha256": "2b294a8082c64f035f2b2602ea0f7a00c7414fc16ac0cd8c0afe7d9d501866b9",
       "template": "templates/project/ci/invariants.py"
     },
     ".github/workflows/sdlc-invariants.yml": {
       "class": "seeded",
-      "sha256": "7d51f78b140b6b54e0738a92ada79e722e040b62d7cf16fe6b31e4a24bb2d10b",
+      "sha256": "f2fe5793f191ef2cf0973510ca4e4f88eb9f0fecb68aded6ee3b4a37e4411202",
       "template": "builtin:invariants"
     },
     ".claude/rules/sdlc.md": {
@@ -131,7 +131,7 @@
     },
     ".sdlc/lint/ruff.sdlc.toml": {
       "class": "seeded",
-      "sha256": "00b74e2b62123c6ac12829e4ecd4b94078ddb945cd7969ab11ce06b4500c8c83",
+      "sha256": "f51fb28266817ea1f10c923c0e6cf1b9bc4d4f90e5a1838caab789d2c88f1bb3",
       "template": "templates/project/lint/ruff.sdlc.toml"
     }
   },
