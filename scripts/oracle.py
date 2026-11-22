@@ -25,6 +25,7 @@ BACKTICKED = re.compile(r"`([^`\n]+)`")
 # The forms sdlc names a change file in its commits: `Record: <change>`, or `… (<change>)`.
 RECORD = re.compile(r"^Record: (\S+?)(?: in the workbench \(.*\))?[ \t]*$", re.M)
 SUBJECT = re.compile(r"\(([^()\s]+)\)[ \t]*$")
+HASH = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 NO_FILES = "no source files: no sdlc state or commit names its criteria"
 NO_ROUTES = "its files define no HTTP routes"
 
@@ -34,12 +35,18 @@ class BadOracle(ValueError):
 
 
 def _git(repo: str, *args: str, stdin: str | None = None) -> str:
-    # Pinned so a user's config can't change what is parsed (quoting, renames, colour).
+    # Pinned so a user's config can't change what is parsed (quoting, renames, colour,
+    # signatures, rename following).
     result = subprocess.run(
-        ["git", "-C", repo, "-c", "core.quotepath=off", "-c", "color.ui=never", *args],
+        ["git", "-C", repo, "-c", "core.quotepath=off", "-c", "color.ui=never",
+         "-c", "log.showSignature=false", "-c", "log.follow=false", *args],
         input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
-    return result.stdout if result.returncode == 0 else ""
+    if result.returncode != 0:
+        # An empty answer would read as "no history": refuse rather than rank on nothing.
+        why = (result.stderr.strip().splitlines() or ["no message"])[0]
+        raise BadOracle(f"git {args[0]} failed: {why}")
+    return result.stdout
 
 
 def _section(text: str, heading: str) -> list[str]:
@@ -105,8 +112,9 @@ def rule_citations(text: str, headings: list[str]) -> tuple[list[str], int]:
     lowered = norm(text)
     keys = {h: norm(h) for h in headings}  # casefold can change length (ß → ss)
     found, unknown = set(), 0
-    # The file name may be backticked and followed by a comma: `domain.md`, §Roles.
-    for match in re.finditer(r"domain\.md`?,?\s*§\s*", lowered):
+    # Between the file name and § only markup and punctuation: `domain.md`, **domain.md**,
+    # `domain.md: §`, `domain.md (§`, `domain.md — §`.
+    for match in re.finditer(r"domain\.md[`*_\s,:(\-–—]*§\s*", lowered):
         rest = lowered[match.end():]
         # The longest heading that ends at a word boundary: `§Roles-admin` isn't `§Roles`.
         fits = [h for h, k in keys.items() if k and rest.startswith(k)
@@ -124,20 +132,28 @@ def is_spec_gap(text: str) -> bool:
                           text.split("\n## ", 1)[0], re.M | re.I))
 
 
+def _removed(line: str) -> bool:
+    crit = contracts.CRIT_LINE.match(line.rstrip("\r"))
+    return bool(crit) and crit["body"].startswith("~~")
+
+
 def _story(text: str) -> tuple[dict[str, str], dict[str, str], str]:
-    """Each active criterion's text (tags dropped) and `text_sha256`, and the story without its
-    removed (struck-through) criteria."""
-    texts, hashes, kept = {}, {}, []
-    for line in text.splitlines():
+    """Criteria texts and hashes as the lock's producer reads them; the story minus removed ones."""
+    texts, hashes = {}, {}
+    for _, line in contracts._section(text, "Acceptance criteria"):
         crit = contracts.CRIT_LINE.match(line)
-        if crit and crit["body"].startswith("~~"):
-            continue
-        active = contracts.ACTIVE.match(crit["body"]) if crit else None
-        if active:
+        active = contracts.ACTIVE.match(crit["body"]) if crit and not _removed(line) else None
+        if active and active["id"].strip() not in texts:
             texts[active["id"].strip()] = TAGS.sub("", active["rest"]).strip()
             hashes[active["id"].strip()] = contracts.criterion_text_sha256(line)
-        kept.append(line)
-    return texts, hashes, "\n".join(kept)
+    return texts, hashes, "\n".join(line for line in text.split("\n") if not _removed(line))
+
+
+def _load_story(spec: Path, rel: str) -> tuple[Path | None, tuple[dict, dict, str]]:
+    path = _inside(spec, rel)
+    if path is not None and (_linked(spec, path) or not path.is_file()):
+        path = None
+    return path, _story(_read(path, spec) if path else "")
 
 
 def _inside(spec: Path, rel: str) -> Path | None:
@@ -208,16 +224,20 @@ def _commits_by_change(repo: str) -> dict[str, list[str]]:
     fields = _git(repo, "log", "-z", "--format=%H%x00%B").split("\0")
     named: dict[str, list[str]] = {}
     for commit, message in zip(fields[0::2], fields[1::2], strict=False):
+        commit = commit.strip()
+        if not HASH.fullmatch(commit):
+            continue
         names = set(RECORD.findall(message))
         if subject := SUBJECT.search(message.split("\n", 1)[0]):
             names.add(subject[1])
         for name in names:
-            named.setdefault(name, []).append(commit.strip())
+            named.setdefault(name, []).append(commit)
     return named
 
 
-def _numstat(repo: str, *args: str, stdin: str | None = None) -> dict[str, dict[str, int]]:
-    """Added + deleted lines per file, per commit."""
+def _numstat(repo: str, *args: str, stdin: str | None = None,
+             keep: set[str] | None = None) -> dict[str, dict[str, int]]:
+    """Added + deleted lines per file (only `keep`'s, when given), per commit."""
     out = _git(repo, "log", "-z", "--numstat", "--no-renames", "--format=%x01%H", *args,
                stdin=stdin)
     per: dict[str, dict[str, int]] = {}
@@ -225,10 +245,11 @@ def _numstat(repo: str, *args: str, stdin: str | None = None) -> dict[str, dict[
     for chunk in out.split("\0"):
         chunk = chunk.lstrip("\n")
         if chunk.startswith("\x01"):
-            lines = per.setdefault(chunk[1:].strip(), {})
+            if HASH.fullmatch(chunk[1:].strip()):
+                lines = per.setdefault(chunk[1:].strip(), {})
             continue
         fields = chunk.split("\t", 2)
-        if len(fields) == 3:
+        if len(fields) == 3 and (keep is None or fields[2] in keep):
             lines[fields[2]] = lines.get(fields[2], 0) + sum(
                 int(n) for n in fields[:2] if n.isascii() and n.isdigit() and len(n) < 10)
     return per
@@ -276,12 +297,14 @@ def build(repo: str, spec: Path, live: bool = False) -> dict:
         plans[feature] = (commits, list(dict.fromkeys(
             f for r in mine for f in r["files"] if _hunted(f, tracked))))
     # One walk over every feature's commits (a merge as its first-parent diff), and one over
-    # all history for the files of features no commit names (merges left out: counted once).
+    # all history for the files of features no commit names (merges left out: counted once;
+    # no pathspec, so no file list on the command line).
     walked = sorted({h for commits, _ in plans.values() for h in commits})
-    by_commit = _numstat(repo, "--no-walk", "--diff-merges=first-parent", "--stdin",
+    by_commit = _numstat(repo, "--no-walk", "-m", "--first-parent", "--stdin",
                          stdin="\n".join(walked) + "\n") if walked else {}
-    unnamed = sorted({f for commits, files in plans.values() if not commits for f in files})
-    history = _numstat(repo, "--", *unnamed) if unnamed else {}
+    unnamed = {f for commits, files in plans.values() if not commits for f in files}
+    history = _numstat(repo, keep=unnamed) if unnamed else {}
+    stories: dict[str, tuple] = {}
 
     parts, not_hunted = [], []
     for feature, crits in features.items():
@@ -304,13 +327,14 @@ def build(repo: str, spec: Path, live: bool = False) -> dict:
                 continue
             kept, left_out = [*kept[:-1], route], [kept[-1]] + [f for f in left_out
                                                                 if f != route]
-        story_rel = crits[0]["file"]
-        story_path = _inside(spec, story_rel)
-        if story_path is not None and (_linked(spec, story_path) or not story_path.is_file()):
-            story_path = None
-        texts, hashes, story_text = _story(_read(story_path, spec) if story_path else "")
+        for c in crits:
+            if c["file"] not in stories:
+                stories[c["file"]] = _load_story(spec, c["file"])
+        story_path, (_, _, story_text) = stories[crits[0]["file"]]
+        texts = {c["id"]: stories[c["file"]][1][0].get(c["id"], "") for c in crits}
+        hashes = {c["id"]: stories[c["file"]][1][1].get(c["id"]) for c in crits}
         # C3: a criterion whose line changed since the lock (or can't be read) is at level 0.
-        level = {c["id"]: c["level"] if hashes.get(c["id"]) is not None
+        level = {c["id"]: c["level"] if hashes[c["id"]] is not None
                  and hashes[c["id"]] == c["text_sha256"] else 0 for c in crits}
         failure_modes = [line for line in _section(story_text, "Failure modes")
                          if line.strip().startswith("- ") and line.strip()[2:].strip().casefold()
@@ -322,8 +346,8 @@ def build(repo: str, spec: Path, live: bool = False) -> dict:
             "files_left_out": left_out,
             "story": (f"{spec_rel}/{story_path.relative_to(spec).as_posix()}"
                       if story_path else None),
-            "criteria": [{"id": c["id"], "level": level[c["id"]],
-                          "text": texts.get(c["id"], "")} for c in crits],
+            "criteria": [{"id": c["id"], "level": level[c["id"]], "text": texts[c["id"]]}
+                         for c in crits],
             "domain_rules": rule_citations(story_text, headings)[0],
             "operations": operations.get(feature, []),
             "changed_lines": sum(lines[f] for f in kept),
@@ -337,10 +361,10 @@ def build(repo: str, spec: Path, live: bool = False) -> dict:
     for number, part in enumerate(parts, 1):
         part["id"] = number
     warnings = [f"skipped {listed[1]} tracked files whose names aren't UTF-8"] if listed[1] else []
-    lockfiles = {r["lockfile"] for r in scope.STACKS["installs"] + scope.STACKS["audits"]}
     warnings += [f"no install or audit for {folder!r}: unsafe folder name" for folder in sorted({
         str(PurePosixPath(f).parent) for f in tracked_list
-        if PurePosixPath(f).name in lockfiles and not scope._safe_folder(PurePosixPath(f).parent)
+        if PurePosixPath(f).name in scope.LOCKFILES
+        and not scope._safe_folder(PurePosixPath(f).parent)
     })]
     return {"parts": parts, "not_hunted": not_hunted, "installs": scope._installs(tracked_list),
             "warnings": warnings}
@@ -376,6 +400,9 @@ def _main(argv: list[str] | None = None) -> int:
         return 1
     except FileNotFoundError:
         print("error: git is not installed", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"error: git can't be run ({exc.strerror or type(exc).__name__})", file=sys.stderr)
         return 1
     for warning in out.pop("warnings"):
         print(f"warning: {warning}", file=sys.stderr)

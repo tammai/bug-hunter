@@ -45,12 +45,17 @@ inline
 
 ## Gate log
 - 2026-11-22 Stage 1: pass — plan not stopped for approval: low-risk M
+- 2026-11-22 review r1 (run by the coordinator at the end): code FAIL CR-1, no highs; back in Build (already at Stage 2) to fix CR-1 to CR-8 and CR-11 test-first; CR-9, CR-10 tickets
+- 2026-11-22 tickets from review r1: CR-9 (every commit message read even when no record names a change), CR-10 (a named merge and its named branch commits counted twice)
 
 ## Deviations
 - 2026-11-22 tests/test_oracle_followups.py What: a new test file with a second AC-003 test (write --rebuild/--reference on a spec-gap draft citing a criterion) and a docs_dir '.' guard. Why: AC-003's first test didn't reach with_reference's covered= rule; seen failing with the old rule. Effect: AC-003 has two rows.
 - 2026-11-22 Task 3 (reuse) What: _repo_path kept instead of scope._relative. Why: _relative resolves absolute paths the hunted repo wrote (follows links) and maps docs_dir '.' to the default. Effect: that reuse ticket stays open, recorded in the change file.
 - 2026-11-22 Review What: deferred by the owner's instruction for every parallel lane (relayed by the coordinator); Build commits on the branch after verify, no review, no ship.py, no push. Effect: Stage stays at Build; the coordinator runs reviews at the end.
 - 2026-11-22 is_spec_gap What: same signature, now also matches a bold or backticked marker line. Why: AC-002. Effect: drafts.py check and finding_v1, which import it, accept those spellings without being edited.
+- 2026-11-22 review r1 fixes What: CR-1 to CR-7 and CR-11 fixed in scripts/oracle.py with tests in a new file tests/test_oracle_review.py (each fix's test seen failing first; the hash-type, CRLF and two citation cases passed before as guards); README.md and commands/hunt.md reworded. Why: code review r1 (FAIL CR-1, no highs). Effect: _git raises BadOracle on a git failure and pins log.showSignature/log.follow; named commits use -m --first-parent; the all-history walk has no pathspec; stories read per criterion file as contracts reads them.
+- 2026-11-22 AC-014 What: reworded to count _git calls, not git runs. Why: review r1 CR-8; the test counts _git calls. Effect: AC wording only, same test.
+- 2026-11-22 Public Surface What: also STORY_LINE removed from oracle.py, and build() returns a warnings key (printed and dropped by _main). Why: review r1 CR-11. Effect: none for callers in this repo; drafts.py and finding_v1 never used either.
 
 ## Open questions
 -
