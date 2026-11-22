@@ -267,17 +267,19 @@ def _plan(scratch: Path, env: dict[str, str],
     # Proxy routing survives, as in JAVA_TOOL_OPTIONS; proxy users and passwords never do.
     credentials = set()
     for k, v in env.items():
-        if "PROXY" in k.upper() and k not in unset and fold(k) not in exported:
+        if "PROXY" in k.upper() and fold(k) not in exported:
             bare = _without_credentials(v)
             if bare != v:
                 credentials.add(k)
-                if _is_shell_name(k):
+                if _is_shell_name(k) and k not in unset:
                     exports[k] = bare
     functions, stuck = set(), set()
     for k in unset | credentials:
         if _is_shell_name(k):
             continue
-        if function := re.fullmatch(r"BASH_FUNC_([A-Za-z_][\w.:-]*)(?:%%|\(\))", k, re.A):
+        function = re.fullmatch(r"BASH_FUNC_([A-Za-z_][\w.:-]*)(?:%%|\(\))", k, re.A)
+        # bash imports only a value starting "() {"; any other stays a plain variable.
+        if function and env[k].startswith("() {"):
             functions.add(function[1])
         # A name bash can't unset that holds no credential (ProgramFiles(x86), a JetBrains
         # "PyCharm Community Edition" in the profile) passes through, as it always has.
@@ -298,12 +300,25 @@ def _shown(name: str) -> str:
 
 
 def _without_credentials(value: str) -> str:
-    """value with everything up to each URL's last @ removed, keeping every list entry."""
-    # A list (GOPROXY, curl's comma lists) is split only where the next entry starts with a
-    # scheme, so a raw , in a password stays inside its entry.
+    """value with every user and password removed; list entries kept where that is certain."""
+    # A list (GOPROXY) is split only where the next entry starts with a scheme. That split
+    # is trusted only when every entry before the one holding the last @ is a plain URL
+    # (no @, no : but a port's): otherwise the split may fall inside a password, so one
+    # cut at the last @ mis-routes rather than leaving part of it behind.
     pieces = re.split(r"([,|]\s*)(?=[A-Za-z][A-Za-z0-9+.-]*://)", value)
-    return "".join(_entry_without_credentials(p) if i % 2 == 0 else p
-                   for i, p in enumerate(pieces))
+    entries = pieces[0::2]
+    last = max((i for i, entry in enumerate(entries) if "@" in entry), default=None)
+    if last is None:
+        return value
+    if not all(_plain_entry(entry) for entry in entries[:last]):
+        return _entry_without_credentials(value)
+    pieces[2 * last] = _entry_without_credentials(pieces[2 * last])
+    return "".join(pieces)
+
+
+def _plain_entry(entry: str) -> bool:
+    return re.fullmatch(r"\s*(?:[A-Za-z][A-Za-z0-9+.-]*://)?(?:\[[^\]@]*\]|[^:/?#@\[\]]*)"
+                        r"(?::\d*)?(?:[/?#][^:@]*)?", entry) is not None
 
 
 def _entry_without_credentials(value: str) -> str:

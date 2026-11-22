@@ -999,13 +999,16 @@ def test_git_over_ssh_runs_isolations_ssh_not_the_owners(tmp_path):
     assert set(ISOLATION_SSH_OPTIONS) <= options, got
 
 
-@pytest.mark.skipif(WINDOWS or shutil.which("ssh") is None,
-                    reason="needs OpenSSH and a password database; Windows runs it in its session")
+@pytest.mark.skipif(shutil.which("ssh") is None, reason="needs an OpenSSH client")
 def test_isolations_ssh_finds_nothing_in_the_owners_ssh_folder(tmp_path):
-    import pwd
     scratch = tmp_path / "s"
     scratch.mkdir()
-    owner_home = pwd.getpwuid(os.getuid()).pw_dir
+    try:
+        import pwd
+        owner_home = pwd.getpwuid(os.getuid()).pw_dir
+    except ImportError:
+        # Windows has no password database; its ssh finds ~ through the profile.
+        owner_home = Path.home().as_posix()
     command = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch)])
     script = f'ISO="$({command})" && eval "$ISO" || exit 1; $GIT_SSH_COMMAND -G example.com'
     result = subprocess.run([BASH, "-c", script], capture_output=True, text=True,
@@ -1107,16 +1110,50 @@ def test_exported_bash_functions_are_removed_not_refused(tmp_path):
     assert not [k for k in got if "git_author" in k or "f_token" in k]
 
 
+def test_only_real_functions_skip_the_credential_checks(tmp_path):
+    real = tmp_path / "real"
+    # bash imports BASH_FUNC_* only when the value starts with "() {"; anything else stays a
+    # plain variable that unset -f can't remove.
+    for name, value in {"BASH_FUNC_TOKEN%%": "SECRETVALUE",
+                        "BASH_FUNC_proxy%%": "http://u:SECRETVALUE@h",
+                        "corp-proxy": f"{real}/x:http://u:SECRETVALUE@h:8080"}.items():
+        env = {"PATH": os.environ["PATH"], "HOME": str(real), name: value}
+        if WINDOWS:
+            env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        result = run_script("isolate", tmp_path / "s", env=env)
+        assert result.returncode == 1 and result.stdout == "", name
+        assert "SECRETVALUE" not in result.stderr, name
+    # The older BASH_FUNC_name() form (bash 4.2 with the 2014 patches) is removed the same way.
+    env = {"PATH": os.environ["PATH"], "HOME": str(real),
+           "BASH_FUNC_x_token()": "() {  echo hi\n}"}
+    if WINDOWS:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    result = run_script("isolate", tmp_path / "s", env=env)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("unset -f x_token; ")
+
+
 def test_proxy_lists_keep_every_entry(tmp_path):
     scratch = tmp_path / "s"
     scratch.mkdir()
     env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "real"),
            "GOPROXY": "https://proxy.golang.org,https://u:hunter2@athens.corp"
-                      "|https://u2:hun,ter2@b.corp,direct"}
+                      "|https://b.corp,direct",
+           "npm_config_proxy": "https://proxy.golang.org,https://u2:hun,ter2@b.corp,direct",
+           # Where the split could fall inside a password, it falls back to one cut at the
+           # last @: routing may suffer, the password never survives.
+           "https_proxy": "http://u:pa,b://x@h",
+           "http_proxy": "http://u:p|x://y@h",
+           "all_proxy": "http://u:p,x://@h",
+           "ftp_proxy": "https://u:p@a,https://u2:hunter2@b"}
     if WINDOWS:
         env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
     got = child_env(scratch, env)
     assert got["GOPROXY"] == "https://proxy.golang.org,https://athens.corp|https://b.corp,direct"
+    assert got["npm_config_proxy"] == "https://proxy.golang.org,https://b.corp,direct"
+    for name in ("https_proxy", "http_proxy", "all_proxy"):
+        assert got[name] == "http://h", name
+    assert got["ftp_proxy"] == "https://b"
 
 
 def test_proxy_credentials_are_dropped_and_routing_kept(tmp_path):
