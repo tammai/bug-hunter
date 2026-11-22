@@ -193,7 +193,9 @@ CREDENTIAL_FIELDS = r"password|passwd|pwd|pass|token|secret|api[_-]?key|key|auth
 # In prose ("the password is …") only names that mean a credential: "key is" and "auth is" are
 # ordinary sentences.
 PROSE_FIELDS = r"password|passwd|pwd|token|secret|api[_-]?key"
-PROSE_TWO_WORDS = r"(?<![\w-])(?i:api|secret|access)\s++(?i:key|token)(?![\w-])"
+SESSION_LIKE = re.compile(r"sess|sid|auth|tok|jwt|csrf|xsrf|login|remember|key|secret|pass"
+                          r"|cred|bearer|access|refresh|user|account|identity|id\s*$", re.I)
+PROSE_TWO_WORDS =r"(?<![\w-])(?i:api|secret|access)\s++(?i:key|token)(?![\w-])"
 # Where a name starts or ends inside an identifier: its edge, `_`/`-`, or a camelCase hump.
 SEGMENT_START = r"(?:(?<![\w-])|(?<=[_-])|(?<=[a-z0-9])(?=[A-Z]))"
 SEGMENT_END = r"(?=[_-]|(?<=[a-z0-9])[A-Z]|[^\w-]|\Z)"
@@ -206,8 +208,14 @@ def _holds_login(text: str, account: str, headers: dict, url: str) -> bool:
     # Every form the proxy masks: as sent, JSON-escaped, percent-encoded, HTML entities and a
     # Basic login decoded; forms under 6 characters would match ordinary words.
     pieces = _pieces({"url": url, "accounts": {"_": headers}})
-    letters = {p for p in pieces if WORDLIKE.fullmatch(p) and len(p) >= 6}
-    words = {p for p in letters if len(p) <= WORDLIKE_MAX and _reads_as_word(p)}
+    # A cookie that isn't a session or auth cookie (device=desktop) holds no secret on its own:
+    # its value counts only as a credential, like a word login.
+    plain = {c.partition("=")[2].strip() for h, v in headers.items() if h.lower() == "cookie"
+             for c in v.split(";") if "=" in c and not SESSION_LIKE.search(c.partition("=")[0])}
+    plain = {p for p in plain - _whole_values(headers) if len(p) >= 6}
+    letters = {p for p in pieces - plain if WORDLIKE.fullmatch(p) and len(p) >= 6}
+    words = {p for p in letters if len(p) <= WORDLIKE_MAX and _reads_as_word(p)} | plain
+    pieces = pieces | plain
     # A random letters-only token counts anywhere and in any case, as a credential word does.
     # The placeholders this check tells drafts to write (MEMBER_AUTH) are not credentials.
     own = "|".join(re.escape(p) for p in (f"{account}_AUTH", f"ACCEPT_ACCOUNT_{account}"))
@@ -238,14 +246,46 @@ def _holds_login(text: str, account: str, headers: dict, url: str) -> bool:
     # After the punctuation, one `value` key or element may stand between (name="password"
     # value="…", "name":"token","value":"…", <password><value>…); in prose, "is" or "was"
     # (the password is: …, the token value was …, the API key is …).
+    # Up to three other attributes or keys may stand before that `value` (name="password"
+    # type="text" value="…"); bounded, so a hostile run of them stays linear.
     punct = r"[^\w\s]\W*+"
-    field = (rf"(?:{name}\s*+{punct}(?:(?i:value)[\"']?\s*+[:=>][\s\"'\[]*+)?|(?=-){name}\s++"
+    attr = (r"[\w-]++[\"']?\s*+[:=]\s*+(?:\"[^\"\n]{0,256}+\"|'[^'\n]{0,256}+')"
+            r"[\s,]*+[\"']?")
+    field = (rf"(?:{name}\s*+{punct}(?:(?:{attr}){{0,3}}(?i:value)[\"']?\s*+[:=>]"
+             rf"[\s\"'\[]*+)?|(?=-){name}\s++"
              rf"|(?:{prose}|{PROSE_TWO_WORDS})\s++(?:(?i:value)\s++)?(?i:is|was)(?![\w-])"
              rf"[ \t:\"'`—]*+)"
              rf"{f'(?:{scheme})?' if scheme else ''}")
     before = f"(?:{field}|\\b{scheme})" if scheme else field
     word = "|".join(map(re.escape, words))
-    return re.search(rf"{before}(?i:{word})(?![\w-])", text) is not None
+    if re.search(rf"{before}(?i:{word})(?![\w-])", text):
+        return True
+    # The `value` key first: value="…" name="password", {"value":"…","name":"token"}.
+    return re.search(rf"(?<![\w-])(?i:value)[\"']?\s*+[:=]\s*+[\"']?(?i:{word})(?![\w-])"
+                     rf"[\"']?[\s,]*+[\"']?(?i:name)[\"']?\s*+[:=]\s*+[\"']?{name}",
+                     text) is not None
+
+
+def _whole_values(headers: dict) -> set[str]:
+    """Each header's value and its credential after the scheme, and Basic logins decoded."""
+    from live_proxy import _basic_passwords  # live_proxy imports this module
+
+    found = {p.strip() for v in headers.values() for p in (v, v.strip().partition(" ")[2])}
+    for _, decoded in _basic_passwords([("", headers)]):
+        found |= {decoded.strip(), decoded.partition(":")[2].strip()}
+    return found
+
+
+CUT_AT = re.compile(r"[\s\"'`<>]")
+
+
+def cut_whole(text: str, limit: int) -> str:
+    """`text` cut to at most `limit` characters before a space, quote or angle bracket."""
+    # Hosts, URLs and tokens hold none of those, so one is kept whole or dropped, never left
+    # as a prefix; a run with none of them before the limit is dropped whole.
+    if len(text) <= limit:
+        return text
+    return text[:max((m.start() for m in CUT_AT.finditer(text, 0, limit + 1)), default=0)]
 
 
 def _reads_as_word(piece: str) -> bool:
@@ -275,13 +315,55 @@ def _json_unescaped(text: str) -> str:
                            else JSON_LETTERS[m[1]], text)
 
 
+DEFAULT_PORTS = {"http": 80, "ws": 80, "https": 443, "wss": 443}
+# An IPv6 spelling ends where no longer address goes on: not before a letter, digit or `_`,
+# nor before `:` and another group (2001:db8::1:5, std::vector); "2001:db8::1: timeout" counts.
+V6_END = r"(?!\w|:[\w:])"
+ZONE = r"(?:%[\w.~-]*+)?"
+
+
+def _host(url) -> str:
+    # DNS reads uat.acme.test. as uat.acme.test.
+    return (url.hostname or "").lower().rstrip(".")
+
+
+def _address(host: str):
+    try:  # a zone (fe80::1%25eth0) names an interface, not another address
+        return ipaddress.ip_address(host.partition("%")[0])
+    except ValueError:
+        return None
+
+
+def _octets(address) -> str:
+    # Zero-padded octets too (10.0.0.01).
+    return r"\.".join(f"0*{octet}" for octet in address.packed)
+
+
+def _loopback() -> str:
+    """Every spelling of a loopback host: 127.1 and 127.0.1 are 127.0.0.1, 0.0.0.0 reaches the
+    same server, and ::1 or ::ffff:127.0.0.1 in any IPv6 spelling, zoned in brackets."""
+    v6 = _ipv6_pattern(ipaddress.IPv6Address("::1"))
+    mapped = _ipv6_pattern(ipaddress.IPv6Address("::ffff:127.0.0.1"))
+    # A leading 0* starts only at a run's first zero, so a long run of zeros stays linear.
+    # The short forms and 0.0.0.0 need a boundary, or they match inside 192.168.127.1.
+    # The lookahead fails at once where no spelling can start; there are about 100.
+    return (rf"(?=[l0-9\[:])(?:localhost\.?|(?<!0)0*127\.0*0\.0*0\.0*1"
+            rf"|(?<![\d.])0*127(?:\.0*0)?\.0*1|(?<![\d.])0*0(?:\.0*0){{3}}"
+            rf"|\[(?:{v6}|{mapped}){ZONE}\]|{v6})")
+
+
+def _port(port: int) -> str:
+    # A URL parser reads :05000 as 5000.
+    return rf":0*+{port}(?!\d)"
+
+
 def _host_patterns(url, local_hosts: set[str]) -> list[str]:
-    """Where `url`'s host names the target in decoded text."""
+    """Where `url`'s host names the target: one source for the leak scan and the masker."""
     # No left boundary anywhere: whatever stands before a host (an undecoded escape, `_`, a
-    # letter of another script) must never hide it; over-refusing is the safe side. A right
-    # boundary only after a digit, so a longer port or address (the proxy's own listener at
-    # 127.0.0.1:50003, 10.0.0.12) isn't the target.
-    host, port = (url.hostname or "").lower(), url.port
+    # letter of another script) must never hide it; over-refusing and over-masking are the
+    # safe side. A right boundary only after a digit, so a longer port or address (the
+    # proxy's own listener at 127.0.0.1:50003, 10.0.0.12) isn't the target.
+    host, port = _host(url), url.port
     # A URL's host position, with any user@. The scheme starts only where its run of scheme
     # characters starts, so a long run of letters stays linear.
     def at(schemes: str) -> str:
@@ -290,33 +372,23 @@ def _host_patterns(url, local_hosts: set[str]) -> list[str]:
     scheme = at(r"[a-z0-9+.-]++")
     if host in local_hosts:
         # Any loopback spelling with exactly the target's port, the scheme's default when the
-        # URL names none; a bare "localhost" gives nothing away. 127.1 and 127.0.1 are
-        # 127.0.0.1, and 0.0.0.0 reaches the same server.
-        v6 = _ipv6_pattern(ipaddress.IPv6Address("::1"))
-        mapped = _ipv6_pattern(ipaddress.IPv6Address("::ffff:127.0.0.1"))
-        # A leading 0* starts only at a run's first zero, so a long run of zeros stays linear.
-        # The short forms and 0.0.0.0 need a boundary, or they match inside 192.168.127.1.
-        # The lookahead fails at once where no spelling can start; there are about 100.
-        alias = (rf"(?=[l0-9\[:])(?:localhost|(?<!0)0*127\.0*0\.0*0\.0*1"
-                 rf"|(?<![\d.])0*127(?:\.0*0)?\.0*1|(?<![\d.])0*0(?:\.0*0){{3}}"
-                 rf"|\[(?:{v6}|{mapped})\]|{v6})")
-        port = port or {"http": 80, "ws": 80, "https": 443, "wss": 443}.get(url.scheme)
+        # URL names none; a bare "localhost" gives nothing away.
+        alias = _loopback()
+        port = port or DEFAULT_PORTS.get(url.scheme)
         if port is None:
             return [rf"{scheme}{alias}(?![\w.-]|:\d)"]
         # A URL leaves out its own scheme's default port, whatever the target's scheme is.
-        found = [rf"{alias}:{port}(?!\d)"]
+        found = [rf"{alias}{_port(port)}"]
         prefix = {80: at("(?:http|ws)"), 443: at("(?:https|wss)")}.get(port)
         if prefix:
             found.append(rf"{prefix}{alias}(?![\w.-]|:\d)")
         return found
-    try:  # a zone (fe80::1%25eth0) names an interface, not another address
-        address = ipaddress.ip_address(host.partition("%")[0])
-    except ValueError:
-        address = None
-    if address and address.version == 4:  # zero-padded octets too (10.0.0.01)
-        return [r"(?<!0)" + r"\.".join(f"0*{octet}" for octet in address.packed) + r"(?!\d)"]
+    address = _address(host)
+    if address and address.version == 4:
+        mapped = ipaddress.IPv6Address(f"::ffff:{address}")
+        return [rf"(?<!0){_octets(address)}(?!\d)", _ipv6_pattern(mapped) + V6_END]
     if address:  # every IPv6 spelling: compressed or not, zero-padded, with a dotted tail
-        found = [_ipv6_pattern(address) + r"(?![0-9a-f])"]
+        found = [_ipv6_pattern(address) + V6_END]
         if address.ipv4_mapped:
             port = f":{url.port}" if url.port else ""
             found += _host_patterns(urlsplit(f"{url.scheme}://{address.ipv4_mapped}{port}"),
@@ -328,11 +400,34 @@ def _host_patterns(url, local_hosts: set[str]) -> list[str]:
     # A plain name ("ref") only after a scheme (and any user@) or with its port: elsewhere
     # every draft's own words ($REF_BASE, "reference", a /ref or //ref path, an @ref
     # decorator, qa@ref.com) would match. Known limit: a protocol-relative //ref is missed.
-    name = re.escape(host)
+    name = re.escape(host) + r"\.?"
     found = [rf"{scheme}{name}(?![\w-]|\.\w)"]
     if port:
-        found.append(rf"{name}:{port}(?!\d)")
+        found.append(rf"{name}{_port(port)}")
     return found
+
+
+def _link_pattern(url, local_hosts: set[str]) -> str:
+    """A link to `url`'s origin: its scheme, any spelling of its host, then its port (or none
+    for the scheme's default), never where the host name goes on (uat.acme.test.evil)."""
+    host = _host(url)
+    address = _address(host)
+    if host in local_hosts:
+        spelled = _loopback()
+    elif address and address.version == 4:
+        mapped = _ipv6_pattern(ipaddress.IPv6Address(f"::ffff:{address}"))
+        spelled = rf"(?:{_octets(address)}|\[{mapped}\])"
+    elif address:
+        spelled = rf"\[{_ipv6_pattern(address)}{ZONE}\]"
+    else:
+        spelled = re.escape(host) + r"\.?"
+    default = DEFAULT_PORTS.get(url.scheme)
+    port = url.port if url.port != default else None
+    if port:
+        tail = _port(port)
+    else:
+        tail = (rf"(?:{_port(default)})?" if default else "") + r"(?![\w.-]|:\d)"
+    return rf"(?<![a-z0-9+.-]){re.escape(url.scheme)}://{spelled}{tail}"
 
 
 def _ipv6_pattern(address: ipaddress.IPv6Address) -> str:

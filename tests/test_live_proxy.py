@@ -389,7 +389,8 @@ def test_masks_hosts_only_where_they_stand_alone():
     text = b"/actuator /api/orders https://uat:8443/x uat:8443/y"
     assert short(text) == b"/actuator /api/orders http://127.0.0.1:9/x <target>/y"
     dotted = _masker({"url": "https://uat.acme.test", "accounts": {}}, "http://127.0.0.1:9")
-    assert dotted(b"host=uat.acme.test; xuat.acme.tests") == b"host=<target>; xuat.acme.tests"
+    # The leak scan's patterns, so a host inside a longer word is hidden too.
+    assert dotted(b"host=uat.acme.test; xuat.acme.tests") == b"host=<target>; x<target>s"
 
 
 def test_compressed_responses_are_refused(make_repo, tmp_path):
@@ -478,9 +479,9 @@ def test_masking_round_five_forms():
                       "ab/cd&#x2B;ef&#x3D;Gh12"):
         assert html_form.encode() not in dotted(html_form.encode()), html_form
     v6 = _masker({"url": "https://[fd00::1]", "accounts": {}}, "http://127.0.0.1:9")
-    assert v6(b"at fd00::1 and 2001:fd00::1 end") == b"at <target> and 2001:fd00::1 end"
+    assert v6(b"at fd00::1 and 2001:fd00::1 end") == b"at <target> and 2001:<target> end"
     v4 = _masker({"url": "https://10.0.0.5:8443", "accounts": {}}, "http://127.0.0.1:9")
-    assert v4(b"peer ::ffff:10.0.0.5 up") == b"peer ::ffff:<target> up"
+    assert v4(b"peer ::ffff:10.0.0.5 up") == b"peer <target> up"
     assert b"Gh12" not in dotted(b"ab/cd&#x2b;ef&#x3d;Gh12")
 
 

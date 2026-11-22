@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from drafts import expected_body, fenced, leaks, oracle_problems
+from drafts import cut_whole, expected_body, fenced, leaks, oracle_problems
 from live_proxy import REFUSED_HEADER
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "contracts" / "v1"))
@@ -349,7 +349,7 @@ def _bounded(message: str) -> str:
     if len(message) <= MAX_MESSAGE:
         return message
     digest = hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
-    return f"{message[:MAX_MESSAGE - 32]}... (sha256 {digest})"
+    return f"{cut_whole(message, MAX_MESSAGE - 32)}... (sha256 {digest})"
 
 
 def _verdict(cls: str) -> dict:

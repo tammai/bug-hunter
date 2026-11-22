@@ -71,15 +71,7 @@ def _section(text: str, heading: str) -> list[str]:
     return lines
 
 
-def _linked(root: Path, path: Path) -> bool:
-    """Whether `path`, or a folder between `root` and it, is a symlink (or it is outside root)."""
-    try:
-        parts = path.relative_to(root).parts
-    except ValueError:
-        return True
-    # Junctions too: Windows' directory links, which islink doesn't report.
-    return any(os.path.islink(p) or os.path.isjunction(p)
-               for p in (root.joinpath(*parts[:i]) for i in range(1, len(parts) + 1)))
+_linked = scope._linked
 
 
 def _read(path: Path, root: Path) -> str:
@@ -276,10 +268,13 @@ def build(repo: str, spec: Path, live: bool = False) -> dict:
     """The spec's features as parts; with `live`, only those whose files define routes."""
     # Normalised but unresolved, so a link is seen rather than followed: a spec folder inside
     # the repo (or a folder above it there) committed as a link would read files from outside.
+    # Each link's parent is resolved, not compared as text, so a path spelled another way (an
+    # 8.3 short name, a link above the repo) can't make it look outside the repo.
+    repo_real = Path(repo).resolve()
     spec_abs = Path(os.path.abspath(spec))
-    for repo_abs in {Path(os.path.abspath(repo)), Path(repo).resolve()}:
-        if spec_abs.is_relative_to(repo_abs) and spec_abs != repo_abs \
-                and _linked(repo_abs, spec_abs):
+    for folder in (*reversed(spec_abs.parents), spec_abs):
+        if (os.path.islink(folder) or os.path.isjunction(folder)) \
+                and folder.parent.resolve().is_relative_to(repo_real):
             raise BadOracle(f"{spec} is a link inside the repo; name the folder it points to")
     criteria = load_lock(spec)
     listed = scope._tracked_files(repo)

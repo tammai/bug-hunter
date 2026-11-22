@@ -16,6 +16,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path, PurePosixPath
 
+from drafts import cut_whole
+
 PACKAGE = "@playwright/test"
 LOCKFILES = ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb")
 CONFIG = "bh.playwright.config.mjs"
@@ -149,7 +151,7 @@ def _message(text: str) -> str:
     # behaviours don't read the same; never the stack.
     lines = [line.strip() for line in ANSI.sub("", text).split("\n")]
     kept = [line for line in lines if line and not line.startswith("at ")][:MAX_LINES]
-    return "\n".join(kept)[:MAX_MESSAGE]
+    return cut_whole("\n".join(kept), MAX_MESSAGE)
 
 
 def _first_failure(suites: list) -> str | None:
