@@ -27,6 +27,7 @@ One line per defect: what it looks like, then the severity.
 - A proxy that relays a server's responses unchanged to an agent that must not see the credentials it added, so an echoing endpoint (debug page, `Location`) hands them back: high
 - A read-only guard that checks only the request method, so `X-HTTP-Method-Override` or `_method` turns an allowed GET into a write: high
 - A shell step that sets a variable as a command prefix (`BASE=x curl "$BASE"`), which the same command's own expansion never sees, or that a later setup step unsets (`isolate.py` drops `*AUTH*`): high
+- Two matchers for one value (a leak scan and a masker) with separate pattern sets or separate case and Unicode rules (bytes vs str, `re.I` folding K and ſ, `\w` vs ASCII), so one hides what the other reveals: high
 - Masking that matches secrets case-insensitively, or a dotless host name (`uat`) without its scheme or port, so ordinary response text is mangled and hunters report the proxy's damage as the target's bug (a dotted host inside a longer word is masked on purpose: the masker uses the leak scan's patterns): medium
 - Stopping a background job by the PID `$!` gave, when `$!` can be a subshell (`cmd && prog &`, `( … ) &`): killing it leaves `prog` running under PID 1; stop the whole process tree, recorded while the subshell lives: high
 - A `cd` chained into a backgrounded `&&` list (`cd copy && … & echo $! > f`): the `cd` runs only in the background job, so the next relative write lands in the starting folder (the target repo): high

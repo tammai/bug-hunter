@@ -1,5 +1,5 @@
 # 2026-11-22-m-leak-scan-limits
-Status: active
+Status: done
 Process: 3
 Change: docs/sdlc/changes/2026-11-22-m-leak-scan-limits.md   (this feature's record for people)
 Track: M   (sized up because: —; footprint: 8 files)
@@ -7,15 +7,16 @@ Risk: high   (secrets and hosts leaking into public issues and to agents)
 Top model: opus   (fable only if the user chose it)
 Commands: test: `uv run pytest`
 Started: 2026-11-22
-Base: 06e2ea1
+Base: fdd1072
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Current: Stage 2 – Build
+Verified: e1082ff tree 4a098aecd6656d9d5a57f6c1aed212019ba4bc8f
+Current: Stage 4 – Ship
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
-- [ ] 2 Build
-- [ ] 3 Review   — the change file's ## Review
+- [x] 2 Build
+- [x] 3 Review   — the change file's ## Review
 - [ ] 4 Ship     — PR: (Learn: knowledge, recurring-defects.md)
 
 ## How the build runs
@@ -54,6 +55,9 @@ inline, one part
 - 2026-11-22 review r3 ticket: SR3-5 (a 9-group IPv6 followed by another port)
 - 2026-11-22 Stage 3 (run by the coordinator): review r4: security PASS (no high); SR4-1, SR4-2 fixed without another round
 - 2026-11-22 review r4 tickets: SR4-3 (:: and 127/8 beyond 127.0.0.1 as loopback), SR4-4 (some ordinary links masked, not routed), SR4-5 (tab, LF, CR end the userinfo look)
+- 2026-11-22 rebased onto origin/main fdd1072 (C3 and the oracle tickets merged); Base moved from 06e2ea1 to fdd1072
+- 2026-11-22 Stage 2: pass — reviews ran deferred by the coordinator: r1-r4, last security PASS, code PASS at r2
+- 2026-11-22 Stage 3: pass — security r4 PASS, code r2 PASS; Review written
 
 ## Deviations
 - 2026-11-22 test-change tests/test_live_proxy.py test_masks_hosts_only_where_they_stand_alone What: 'xuat.acme.tests' now expects 'x<target>s'. Why: owner's answer (a) to question 1, the masker uses the scan's patterns with no left boundary. Fresh red: run against Base 06e2ea1 in a temporary worktree, fails there (not locked by this feature, so verify.py red --at doesn't apply).

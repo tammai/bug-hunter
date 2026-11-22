@@ -82,3 +82,33 @@ Builds on C3 (`2026-11-22-m-leak-check-followups`, not merged yet): its `_host_p
 - All-caps or mixed-case letters-only tokens matched case-sensitively (C3 R3-1); short loopback forms behind an undecoded escape (CR3-6); `<password value='member'/>`, `the password "is" member` and `<password><string>` (CR3-7, CR2-5's other shapes).
 - The `isolate.py` follow-ups, and any change to `findings.py`, `contracts/` or `CHANGELOG.md`.
 - Ticking `docs/sdlc/todo.md` (the owner does that).
+
+## Review
+
+- **Recommended and chosen:** security and code, because `Risk: high` (secrets and hosts into public issues and to agents) and the diff is large. The owner deferred every lane's reviews to the end of all builds; the coordinator ran them and relayed the results. A hook blocked the reviewers' report writes, so the builder saved each report from the relay.
+- **Verdicts:**
+  - r1: security → `.sdlc/.work/findings/2026-11-22-m-leak-scan-limits/security-r1.md` → FAIL — SR1-1, SR1-2; code → `code-reviewer-r1.md` → FAIL — H1, M1, M2, M3, L1. The owner folded C3's round-4 findings CR4-1, CR4-2 and CR4-4 into this change.
+  - r2: security → `security-r2.md` → FAIL — SR2-1; code → `code-reviewer-r2.md` → PASS (medium bugs M-1 to M-3 fixed anyway). The owner allowed one more fix round.
+  - r3: security → `security-r3.md` → FAIL — SR3-1. The owner chose a structural fix and one more round.
+  - r4: security → `security-r4.md` → PASS; its SR4-1 and SR4-2 were fixed, test first, without another round.
+- **Fixed** (each test first; tests in `tests/test_leak_scan_r1.py` to `tests/test_leak_scan_r4.py`, `tests/test_drafts_leak_spellings.py`):
+  - H1: `browser.py` imported `drafts`; it is fetched and run alone, so it keeps its own copy of the cut rule (`test_browser_script_runs_alone_on_the_standard_library`).
+  - SR1-1, SR2-1, SR3-1 (one class: an IP spelling one branch knew and another didn't): `drafts._ip_spellings` is now the one generator for every IP a target is reached at, loopback included (`127.0.0.1` padded and short, `0.0.0.0`, `::1`), every IPv6 spelling bracketed with a zone or unbracketed, each with the target's port or its scheme's default.
+  - SR1-2, M1, SR2-2, SR3-3 (one class: the scan and the masker read text by different rules): the masker runs the same str patterns on the UTF-8-decoded body (surrogateescape); every right boundary is case-sensitive ASCII (`(?-i:[0-9A-Za-z_])`).
+  - SR1-4, M-3, SR3-2, SR4-1, SR4-2, SR3-7: a link isn't routed when userinfo follows within its authority (a plain `@`, `&#64`, `&#x40`, `&commat;`, `@`, other entities stepped over) or a non-ASCII character follows (case-sensitively).
+  - M2/SR1-3, and a token-shaped `.AspNetCore.Cookies` value the builder found after the first commit: only a word-shaped value (at most one rare letter pair) of a non-session cookie is limited to credential context.
+  - M3: value-first logins skip up to three quoted attributes. L1, L-1, L-2, SR2-4, SR3-6: browser messages carry a digest, are never empty, and NOT_THE_APP is read from every non-stack line.
+  - C3 CR4-1 (glued scheme characters before `http://`), CR4-2 (one `[` and one quote after a value key), CR4-4 (any non-word but a sentence or line end after is/was).
+- **Tickets** (in `docs/sdlc/todo.md`): SR1-5, SR1-6/L3, SR1-7, C3 CR4-3 and CR4-5, L-3/SR2-5, L-4, `password="" member` without a value key, browser's `startswith("at ")` filter, SR3-5, SR4-3, SR4-4, SR4-5, unquoted HTML attributes.
+- **Drift:** every line under the state file's `## Deviations`:
+  - the three `tests/test_live_proxy.py` expectations changed by the owner's answer (a) to question 1 (fresh red at Base by hand; the `::ffff:10.0.0.5` assert was never seen failing on its own), and the masker test renamed;
+  - `drafts.cut_whole` exported (used by `finding_v1` only after H1);
+  - the timing test extended each round;
+  - the cookie rule narrowed twice, on the safe side;
+  - `_bounded` keeps `not run: `; browser never returns an empty message;
+  - `uat.acme.test:8443` masks as `<target>:8443`;
+  - C3's CR4-1/2/4 folded in;
+  - each review round's fixes; the change file's Decisions and Out of scope reworded above this section after the reviews (r1 L4/M3, r2 F-1), the gotcha and recurring-defects line rewritten.
+  - At Ship, by the owner's instruction, this change also edits `CHANGELOG.md` and `docs/sdlc/todo.md`, which Out of scope above left out; and the branch was rebased onto `main` (fdd1072), moving Base from 06e2ea1.
+- **Manual checks:** AC-006 runs a link above the repo on macOS; a real Windows 8.3 short name was not run.
+- **Lessons filed:** [recurring-defects.md](../recurring-defects.md) gets one line: two matchers for one value with separate pattern sets or case and Unicode rules. [The masking gotcha](../../../knowledge/gotchas/redacting-logged-requests.md) now states the shared-pattern rule.
