@@ -20,11 +20,13 @@
   - the all-history numstat walk's cost on large repos (R2-4);
   - the hunter's brief comes from the first criterion's story file only (R2-5);
   - contracts' `check_lock` and `check_criteria` read stories differently (R2-6).
-- [ ] Leak scan (`drafts.leaks`) known limits and tickets, from the follow-up reviews: 2026-11-08-m-review-followups (2026-11-08)
-  - a host or login cut by the 500-character message cap leaves a prefix (C4-8, S-7);
-  - a trailing-dot host;
-  - `_host_patterns` and `live_proxy._masker` are two sources of truth for an address (C4-6); the masker still uses word boundaries, so the scan catches more than it masks;
-  - a spec folder reached by an 8.3 short path skips the link guard; the folder links that `scope._any_matches` doesn't check (S-5);
+- [ ] Leak scan and masker tickets, from the review of docs/sdlc/changes/2026-11-22-m-leak-scan-limits.md (C4-6, C4-8/S-7, trailing dots and S-5 are done there): 2026-11-22-m-leak-scan-limits (2026-11-22)
+  - a response body cut before masking (SR1-5); sibling readers of repo files without the folder-link guard (SR1-6, L3); `..` in a spec path (SR1-7);
+  - placeholders of other accounts, and a non-word login equal to the account name, refused (C3 CR4-3); a newline after "is:" ends the login look (CR4-5);
+  - the non-session cookie rule's residual cases (L-3, SR2-5); a `news://` scheme and a comma after is/was (L-4); `password="" member` with no value key;
+  - browser's `startswith("at ")` stack filter;
+  - a 9-group IPv6 followed by another port (SR3-5); `::` and 127/8 beyond 127.0.0.1 as loopback (SR4-3); some ordinary links masked, not routed (SR4-4); tab, LF or CR end the userinfo look (SR4-5);
+  - unquoted HTML attributes between a login's name and value.
 - [ ] Part 3 review tickets, in docs/sdlc/changes/2026-11-08-m-reference-classify.md's Review: 2026-11-08-m-reference-classify (2026-11-08)
   - an allow-list of forwarded headers, and `%252e` double decoding (S2-5);
   - the hunter writes its draft through a quoted heredoc (S2-6);
