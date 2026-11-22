@@ -1142,9 +1142,35 @@ def test_only_real_functions_that_hold_no_credential_skip_the_checks(tmp_path):
     result = subprocess.run([BASH, "-c", script], env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "gone"
+    # Every bash imports the %% form, so there the variable itself must be gone too.
+    env = {"PATH": os.environ["PATH"], "HOME": str(real), "BASH_FUNC_greet%%": function_body(real)}
+    if WINDOWS:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    got = child_env(tmp_path / "s2", env)
+    assert not [k for k in got if k.startswith("BASH_FUNC_greet")]
 
 
 SENTINEL = "4711"
+
+
+def test_a_credentialed_list_keeps_the_scheme_of_the_surviving_entry(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    wanted = {
+        "PROXY_A": (f"http://a,https://u:{SENTINEL}@b", "https://b"),
+        "PROXY_B": (f"socks5://a|http://u:{SENTINEL}@b:1080", "http://b:1080"),
+        "PROXY_C": (f"http://a,u:{SENTINEL}@b", "http://b"),
+        # A scheme-looking piece inside the password is never carried over.
+        "PROXY_D": (f"http://u:x://{SENTINEL}@h", "h"),
+    }
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "real"),
+           **{name: given for name, (given, _) in wanted.items()}}
+    if WINDOWS:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    got = child_env(scratch, env)
+    folded = {k.upper(): v for k, v in got.items()}
+    for name, (_, expected) in wanted.items():
+        assert folded[name] == expected and SENTINEL not in folded[name], name
 
 
 def test_proxy_values_never_keep_part_of_a_password(tmp_path):

@@ -300,13 +300,19 @@ def _shown(name: str) -> str:
 
 
 def _without_credentials(value: str) -> str:
-    """value with everything between its scheme and its last @ removed."""
+    """value with everything between the scheme and the last @ removed."""
     scheme, rest = re.fullmatch(r"(\s*[A-Za-z][A-Za-z0-9+.-]*://)?(.*)", value, re.S).groups()
     # One cut at the last @ anywhere: no split of a list (GOPROXY) can tell a separator from
     # one inside a password, so a credentialed list loses its earlier entries instead.
     if "@" not in rest:
         return value
-    return (scheme or "") + rest.rpartition("@")[2]
+    cut, _, host = rest.rpartition("@")
+    if "://" in cut:
+        # The surviving host belongs to a later list entry: take that entry's scheme, and
+        # only a known one at an entry's start, so nothing from inside a password survives.
+        found = re.findall(r"(?:^|[,|\s])((?:https?|socks[45][ah]?)://)", cut, re.I)
+        scheme = found[-1] if found else ""
+    return (scheme or "") + host
 
 
 def _proxy_flags(env: dict[str, str]) -> list[str]:
