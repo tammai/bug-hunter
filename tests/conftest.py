@@ -99,6 +99,9 @@ FAKE_GH = """import json, os, subprocess, sys
 def main(args):
     with open(os.environ["FAKE_GH_LOG"], "a", encoding="utf-8") as log:
         log.write(json.dumps(args) + "\\n")
+    if junk := os.environ.get("FAKE_GH_STDERR_HEX"):
+        sys.stderr.buffer.write(bytes.fromhex(junk))
+        sys.stderr.flush()
     if args[:2] == ["auth", "status"]:
         return int(os.environ.get("FAKE_GH_AUTH_EXIT", "0"))
     if args[:2] == ["issue", "list"]:

@@ -50,6 +50,23 @@ def test_files_named_drafts_once(tmp_path, fake_gh):
     assert sorted(posted) == ["01", "02", "03"]
 
 
+def test_odd_bytes_from_gh_never_become_a_traceback(tmp_path, fake_gh):
+    env, calls = fake_gh
+    drafts = make_drafts(tmp_path, count=1)
+    # Invalid UTF-8, and bytes cp1252 leaves undefined.
+    env["FAKE_GH_STDERR_HEX"] = "ff81c5"
+    result = run_script("post", drafts, "1", "--label", "bug", env=env)
+    assert result.returncode == 0, result.stderr
+    assert "Traceback" not in result.stderr
+    assert "https://github.com/o/r/issues/1" in result.stdout
+
+    env["FAKE_GH_FAIL_AT"] = "2"
+    (drafts / "02.md").write_bytes((drafts / "01.md").read_bytes())
+    failed = run_script("post", drafts, "2", "--label", "bug", env=env)
+    assert failed.returncode == 1 and "Traceback" not in failed.stderr
+    assert "could not create issue" in failed.stderr
+
+
 def test_refuses_before_filing_and_keeps_partial_progress(tmp_path, fake_gh):
     env, calls = fake_gh
     drafts = make_drafts(tmp_path)

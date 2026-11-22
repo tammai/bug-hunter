@@ -10,6 +10,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+WINDOWS = os.name == "nt"
+
 # What `git rev-parse --local-env-vars` lists: set inside a hook or alias of another repo, these
 # would send every command (the clone, the origin removal, the patch) to that repo instead.
 _REPO_VARS = {
@@ -29,22 +31,31 @@ def _git(*args: str, **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(["git", "--no-optional-locks", *args], capture_output=True, **kwargs)
 
 
+def _clear_read_only(func, failed: str, exc: OSError) -> None:
+    """On Windows, retry a refused unlink or rmdir after clearing the read-only flag git sets."""
+    if not WINDOWS or func not in (os.unlink, os.rmdir) or not isinstance(exc, PermissionError):
+        raise exc
+    # One lstat decides: a link or junction is never chmod-ed, since chmod follows it on 3.13+.
+    info = os.lstat(failed)
+    if stat.S_ISLNK(info.st_mode) or (getattr(info, "st_file_attributes", 0)
+                                      & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+        raise exc
+    os.chmod(failed, stat.S_IWRITE)
+    func(failed)
+
+
 def _rmtree(path: Path, ignore_errors: bool = False) -> None:
     """shutil.rmtree that also removes git's object files, which Windows keeps read-only."""
 
-    def clear_read_only(func, failed, exc) -> None:
-        # Only this script has run in the folder, so nothing can swap a link in meanwhile.
-        if (os.name != "nt" or func not in (os.unlink, os.rmdir)
-                or not isinstance(exc, PermissionError) or os.path.islink(failed)):
-            raise exc
-        os.chmod(failed, stat.S_IWRITE)
-        func(failed)
+    def onexc(func, failed, exc) -> None:
+        try:
+            _clear_read_only(func, failed, exc)
+        except OSError:
+            # Ignoring means skipping this entry and removing the rest, as shutil's own flag does.
+            if not ignore_errors:
+                raise
 
-    try:
-        shutil.rmtree(path, onexc=clear_read_only)
-    except OSError:
-        if not ignore_errors:
-            raise
+    shutil.rmtree(path, onexc=onexc)
 
 
 def _escaping_links(root: Path) -> list[str]:

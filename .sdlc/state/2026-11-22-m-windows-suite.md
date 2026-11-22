@@ -10,14 +10,14 @@ Started: 2026-11-22
 Base: 7790f3e
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: f72ea0d tree 8728cf44719f9f95bfcffbbb18ee69447764672d
-Current: Stage 4 – Ship
+Verified: 445d560 tree 67f9e8be7ad7c8604572a822ec523ddaa3fda636
+Current: Stage 3 – Review
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
 - [x] 2 Build
 - [ ] 3 Review   — the change file's ## Review
-- [ ] 4 Ship     — PR: (Learn: knowledge, recurring-defects.md)
+- [x] 4 Ship     — PR: (Learn: knowledge, recurring-defects.md)
 
 ## How the build runs
 inline
@@ -39,12 +39,16 @@ inline
 
 ## Test lock
 - `tests/test_portable_fixtures.py` sha256:25b0caf7cd9e1c18d435f9d57a64676b9558ecd5b33af5be7934f902e7246ea9
+- `tests/test_post.py` sha256:1600a56d56b7693505fa54c3e2fa17ed9804dcdc0fcb7c02fd4c2f1ee7e3828d
+- `tests/test_throwaway_rmtree.py` sha256:34ba882d2a6087b496e7c92371fc4ee819d945e3fd3e104583fc399e60afe040
 
 ## Gate log
 - 2026-11-22 Stage 1: pass — plan not stopped for approval: low-risk M
 - 2026-11-22 review deferred: coordinator runs every lane's reviews together after the build; committed on the branch, not pushed
 - 2026-11-22 Base What: moved from 635113a to 7790f3e. Why: rebased onto main after PR #44 (C3) merged. Effect: diff and drift checks cover only this change.
 - 2026-11-22 Stage 2: pass — no review: no trigger fired
+- 2026-11-22 Stage 4: pass — back from review r1 (FAIL H1): fixing H1, M1, L2, L3 test-first
+- 2026-11-22 Stage 2: pass — r1 fixes verified; round 2 check is the coordinator's
 
 ## Deviations
 - 2026-11-22 test-change tests/test_portable_fixtures.py What: the lock test's finally called a misspelled name (unconftest.lock_dir) and now calls conftest.unlock_dir. Why: a typo from rewriting the imports into attribute access; the test was red for the missing helper either way, not weakened.
@@ -54,6 +58,9 @@ inline
 - 2026-11-22 Task 2 What: the two post.py lock tests skip on a Python whose tempfile.TMP_MAX > 100 on Windows (3.12). Why: tempfile retries a refused mkstemp 2**31 times there, so post.py would hang the job. Effect: none on macOS/Linux or on Windows with 3.13+; the post.py bug is a ticket.
 - 2026-11-22 scripts/post.py What: _main switches stdout and stderr to UTF-8, like every other script. Why: windows-latest run 45018336646 failed test_refuses_before_filing_and_keeps_partial_progress and test_refuses_odd_numbers_duplicates_and_unusable_record with stderr None (UnicodeDecodeError on 0xfc/0xb2): post.py wrote ü and ² in cp1252. Those CI failures are the failing tests; macOS can't show them. Effect: none on POSIX.
 - 2026-11-22 scripts/throwaway.py What: every removal of the copy goes through _rmtree, which on Windows clears the read-only flag on a refused unlink/rmdir and retries, never on a link. Why: windows-latest run 45018336646 failed test_refuses_symlinks_out_of_the_copy_and_a_used_dest with 'couldn't copy: [WinError 5] Access is denied' on .git/objects/pack/*.idx: refusing a clone couldn't delete it. That CI failure is the failing test. Effect: none on POSIX (the handler re-raises there).
+- 2026-11-22 Correction to the scripts/throwaway.py line above: its 'Effect: none on POSIX' was wrong. The handler re-raised every case it didn't handle, so _rmtree(ignore_errors=True) stopped at the first failure on POSIX too (review r1 H1). Fixed: _clear_read_only is module-level and decides from one lstat (no link or reparse point is chmod-ed, M1); _rmtree's onexc skips the entry when ignoring and re-raises otherwise. Tests: tests/test_throwaway_rmtree.py (AC-009).
+- 2026-11-22 scripts/post.py What: gh auth status is no longer decoded (only its exit code is read), and gh issue create is decoded with errors=replace (review r1 L3). Test: test_odd_bytes_from_gh_never_become_a_traceback (AC-010), through a FAKE_GH_STDERR_HEX knob in tests/conftest.py's fake gh.
+- 2026-11-22 docs/sdlc/todo.md What: the review r1 L1 ticket (refusal reason lost when cleanup fails) is an open item. Why: the coordinator triaged L1 as a ticket.
 
 ## Open questions
 -

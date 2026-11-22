@@ -34,6 +34,8 @@ Every baseline row is a fixture problem, not a product one. While they stay red 
 - **AC-006** `skip_unless_git_keeps_symlinks` skips, saying why, when symlinks can't be created or when git checks a committed link out as a plain file, and lets the test run otherwise.
 - **AC-007** CI runs lint and the full suite on `windows-latest` as well as `ubuntu-latest`.
 - **AC-008** (manual) The 19 rows in `.sdlc/baseline.md` pass, or skip with their stated reason, on the `windows-latest` job.
+- **AC-009** (review r1, H1, M1) When `throwaway.py` removes a copy while ignoring errors, an entry it can't remove doesn't stop it removing the rest. Without ignoring, the first error still raises. On Windows a refused unlink of a read-only entry is retried after clearing the flag, but never through a link or reparse point, and a retry that fails again raises its own error.
+- **AC-010** (review r1, L3) Bytes from `gh` that aren't valid in the reading encoding don't turn `post.py` into a traceback, either from `gh auth status` or from `gh issue create`.
 
 ## Acceptance tests
 
@@ -47,6 +49,8 @@ Every baseline row is a fixture problem, not a product one. While they stay red 
 | AC-006 | tests/test_portable_fixtures.py › test_symlink_probe_skips_with_its_reason | `uv run pytest tests/test_portable_fixtures.py -k test_symlink_probe_skips_with_its_reason` |
 | AC-007 | tests/test_portable_fixtures.py › test_ci_runs_the_suite_on_windows | `uv run pytest tests/test_portable_fixtures.py -k test_ci_runs_the_suite_on_windows` |
 | AC-008 | manual | Windows only: no Windows machine here. The first `windows-latest` run checks it, and only then do the rows leave the baseline. |
+| AC-009 | tests/test_throwaway_rmtree.py | `uv run pytest tests/test_throwaway_rmtree.py` |
+| AC-010 | tests/test_post.py › test_odd_bytes_from_gh_never_become_a_traceback | `uv run pytest tests/test_post.py -k test_odd_bytes_from_gh_never_become_a_traceback` |
 
 ## Must never break
 
@@ -73,5 +77,13 @@ Every baseline row is a fixture problem, not a product one. While they stay red 
 ## Review
 
 No review ran: low risk, no trigger fired (tests and CI only, no product code, empty Public Surface); every AC with a test red then green (verify.py). AC-008 (manual): the 19 baseline rows are verified only by reasoning until the first windows-latest CI run on this PR; baseline rows stay until that run shows them passing. Ticket: post.py hangs instead of refusing a locked drafts folder on Windows with Python 3.12 (out of scope, product code).
+
+Code review r1 of the `scripts/` changes (run by the coordinator, report `.sdlc/.work/findings/2026-11-22-m-windows-suite/code-reviewer-r1.md`): FAIL on H1. Fixed test-first (AC-009, AC-010):
+- H1: `_rmtree(ignore_errors=True)` stopped at the first entry it couldn't remove. It now skips that entry and removes the rest, while callers that don't ignore still get the first error.
+- M1: the Windows retry decides from one `lstat` and never chmods a link or reparse point.
+- L2: added tests for the link guard and for a retry that fails again.
+- L3: `post.py` no longer decodes `gh auth status`, and decodes `gh issue create` with `errors="replace"`.
+- M2 (bounded retry for WinError 32): not seen in CI, so not done.
+- L1 (refusal reason lost when cleanup fails): a ticket in `docs/sdlc/todo.md`.
 
 Baseline pruned: 17 of the 19 rows pass on windows-latest (CI run 45020995450, Python 3.12.10), so they are removed: both test_known.py rows, test_post.py's test_files_named_drafts_once and test_refuses_before_filing_and_keeps_partial_progress, both test_drafts.py rows, the four test_findings.py rows, test_secrets_scan.py's row, test_stacks.py's row, both test_scope.py rows, and the three test_throwaway.py symlink rows. Kept, with the reason updated: test_refuses_odd_numbers_duplicates_and_unusable_record and test_shows_url_when_recording_fails_after_filing, which skip on Python 3.12 (tempfile retries a refused mkstemp 2^31 times) and pass on 3.13+.

@@ -93,7 +93,7 @@ def _main(argv: list[str] | None = None) -> int:
         return _fail(f"{drafts_dir} isn't writable, so filed drafts couldn't be recorded")
 
     try:
-        auth = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True)
+        auth = subprocess.run(["gh", "auth", "status"], capture_output=True)
     except FileNotFoundError:
         return _fail("gh is not installed")
     if auth.returncode != 0:
@@ -107,7 +107,7 @@ def _main(argv: list[str] | None = None) -> int:
         result = subprocess.run(
             ["gh", "issue", "create", "--title", title(path), "--body-file", str(path),
              "--label", args.label],
-            capture_output=True, text=True, encoding="utf-8",
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         if result.returncode != 0:
             reason = (result.stderr.strip().splitlines() or ["no message"])[-1]

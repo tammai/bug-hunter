@@ -52,6 +52,7 @@
 
 - [x] Make the test suite pass on Windows: the 19 Windows-only failures in `.sdlc/baseline.md` (fake `gh` that Windows can run without passing titles through `cmd.exe`, `USERPROFILE` in the drafts and findings fixtures, POSIX-mode asserts, read-only git objects, CRLF and forbidden names in fixtures, symlink privilege), then add a `windows-latest` CI runner — left out of the Windows isolation change on purpose; 2026-11-06-m-windows-isolation (2026-11-06). Done in 2026-11-22-m-windows-suite (2026-11-22); two 3.12-only skips remain
 - [ ] `post.py` hangs instead of refusing a locked drafts folder on Windows with Python 3.12: `tempfile.mkstemp` retries a refused create up to `os.TMP_MAX` (2^31) times there, because `os.access` can't see a deny ACL (3.13+ stops after 20). The two `tests/test_post.py` lock tests skip on 3.12 and stay in `.sdlc/baseline.md` until this is fixed. Found by the first `windows-latest` run in 2026-11-22-m-windows-suite (2026-11-22)
+- [ ] `throwaway.py`: when cleaning up a refused copy fails, `_main` prints only "couldn't copy: <error>", so the refusal reason is lost and the partial copy left at dest isn't named. Catch the cleanup failure next to the refusal and say both. Review r1 L1 of 2026-11-22-m-windows-suite (2026-11-22)
 - [x] Small `isolate.py` follow-ups from the Windows isolation review:
   - match 8.3 short names (needs `GetLongPathNameW`);
   - match a quoted value with a space inside the quotes;
