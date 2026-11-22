@@ -620,6 +620,24 @@ def test_git_sees_no_global_or_system_config(tmp_path):
     assert "credential.helper" not in result.stdout
 
 
+def test_git_config_from_the_environment_is_dropped(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    command = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch)])
+    script = (f'ISO="$({command})" && eval "$ISO" || exit 1; '
+              "git config --list --show-origin; true")
+    env = {**os.environ, "HOME": str(tmp_path / "real"),
+           "GIT_CONFIG_PARAMETERS": "'credential.helper'='store'",
+           "GIT_CONFIG_COUNT": "2",
+           "GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "cache",
+           "GIT_CONFIG_KEY_1": "core.sshCommand", "GIT_CONFIG_VALUE_1": "ssh -i key"}
+    result = subprocess.run([BASH, "-c", script], cwd=tmp_path, capture_output=True, text=True,
+                            env=env)
+    assert result.returncode == 0, result.stderr
+    assert "credential.helper" not in result.stdout
+    assert "sshcommand" not in result.stdout.lower()
+
+
 def test_isolation_that_cant_be_set_up_exits_with_a_clear_error(tmp_path):
     scratch = tmp_path / "s"
     scratch.mkdir()
