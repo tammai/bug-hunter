@@ -33,4 +33,4 @@ def test_diag_bang_drive_names(tmp_path):
                    f'eval "$ISO"; compgen -e | grep -n "[!=]"; {child}'):
         r = subprocess.run([BASH, "-c", script], env=env, capture_output=True, text=True)
         out.append(f"--- rc={r.returncode}\nOUT:{r.stdout}\nERR:{r.stderr}")
-    assert False, "\n".join(out)
+    pytest.fail("\n".join(out))
