@@ -328,14 +328,17 @@ def _json_unescaped(text: str) -> str:
 DEFAULT_PORTS = {"http": 80, "ws": 80, "https": 443, "wss": 443}
 # An IPv6 spelling ends where no longer address goes on: not before a letter, digit or `_`,
 # nor before `:` and another group (2001:db8::1:5, std::vector); "2001:db8::1: timeout" counts.
-# ASCII only: a letter of another script after it (fd00::1失败) is not part of an address.
-V6_END = r"(?![0-9A-Za-z_]|:[0-9A-Za-z_:])"
+# Right boundaries are ASCII and case-sensitive, so a letter of another script after a host
+# (fd00::1失败), or one re.I folds into ASCII (K, ſ), never hides it.
+WORD = "(?-i:[0-9A-Za-z_])"
+V6_END = rf"(?!{WORD}|:(?:{WORD}|:))"
 # Anything up to the bracket, bounded so a hostile run of "[::1%" stays linear.
 ZONE = r"(?:%[^\]\s]{0,64}+)?"
-# Right boundaries are ASCII too, so a letter of another script after a host never hides it.
-WORD = "[0-9A-Za-z_]"
 # Where a host name ends with no port after it: not in a longer name or before a port.
-HOST_END = r"(?![0-9A-Za-z_.-]|:[0-9])"
+HOST_END = r"(?!(?-i:[0-9A-Za-z_.-])|:[0-9])"
+# The addresses a loopback target is reached at besides "localhost": 0.0.0.0 reaches the same
+# server.
+LOOPBACK = tuple(map(ipaddress.ip_address, ("127.0.0.1", "0.0.0.0", "::1")))
 
 
 def _host(url) -> str:
@@ -355,17 +358,28 @@ def _octets(address) -> str:
     return r"\.".join(f"0*{octet}" for octet in address.packed)
 
 
+def _ip_spellings(address) -> list[tuple[str, str]]:
+    """Every way to write an IP address, each with where it ends when no port follows: IPv4
+    zero-padded and as an IPv4-mapped IPv6 address; IPv6 in any spelling, bracketed (with a
+    zone) or not."""
+    if address.version == 4:
+        # A leading 0* starts only at a run's first zero, so a long run of zeros stays linear.
+        # 0.0.0.0 and 127.0.0.1's short forms (127.1, 127.0.1) need a left boundary, or they
+        # match inside 10.0.0.0.0 or 192.168.127.1.
+        guard = "(?<![0-9.])" if address.packed == bytes(4) else "(?<!0)"
+        found = [(guard + _octets(address), "(?![0-9])")]
+        if str(address) == "127.0.0.1":
+            found.append((r"(?<![0-9.])0*127(?:\.0*0)?\.0*1", "(?![0-9])"))
+        return found + _ip_spellings(ipaddress.IPv6Address(f"::ffff:{address}"))
+    tree = _ipv6_pattern(address)
+    return [(rf"\[{tree}{ZONE}\]", ""), (tree, V6_END)]
+
+
 def _loopback() -> str:
-    """Every spelling of a loopback host: 127.1 and 127.0.1 are 127.0.0.1, 0.0.0.0 reaches the
-    same server, and ::1 or ::ffff:127.0.0.1 in any IPv6 spelling, zoned in brackets."""
-    v6 = _ipv6_pattern(ipaddress.IPv6Address("::1"))
-    mapped = _ipv6_pattern(ipaddress.IPv6Address("::ffff:127.0.0.1"))
-    # A leading 0* starts only at a run's first zero, so a long run of zeros stays linear.
-    # The short forms and 0.0.0.0 need a boundary, or they match inside 192.168.127.1.
-    # The lookahead fails at once where no spelling can start; there are about 100.
-    return (rf"(?=[l0-9\[:])(?:localhost\.?|(?<!0)0*127\.0*0\.0*0\.0*1"
-            rf"|(?<![\d.])0*127(?:\.0*0)?\.0*1|(?<![\d.])0*0(?:\.0*0){{3}}"
-            rf"|\[(?:{v6}|{mapped}){ZONE}\]|{v6})")
+    """Every spelling of a loopback host: localhost and each loopback address's IP spellings."""
+    spellings = [s for a in LOOPBACK for s, _ in _ip_spellings(a)]
+    # The lookahead fails at once where no spelling can start.
+    return rf"(?=[l0-9\[:])(?:localhost\.?|{'|'.join(spellings)})"
 
 
 def _port(port: int) -> str:
@@ -373,11 +387,10 @@ def _port(port: int) -> str:
     return rf":0*+{port}(?![0-9])"
 
 
-def _ipv6(address: ipaddress.IPv6Address, port: int | None) -> list[str]:
-    """Every IPv6 spelling of `address` alone, and with `port` written after it unbracketed
-    (2001:db8::1:443)."""
-    tree = _ipv6_pattern(address)
-    return [tree + V6_END] + ([tree + _port(port)] if port else [])
+def _ip(address, port: int | None) -> list[str]:
+    """Every spelling of an IP target alone, and each with `port` after it (2001:db8::1:443)."""
+    return [s + end for s, end in _ip_spellings(address)] + \
+        ([s + _port(port) for s, _ in _ip_spellings(address)] if port else [])
 
 
 def _host_patterns(url, local_hosts: set[str]) -> list[str]:
@@ -408,12 +421,9 @@ def _host_patterns(url, local_hosts: set[str]) -> list[str]:
             found.append(rf"{prefix}{alias}{HOST_END}")
         return found
     address = _address(host)
-    if address and address.version == 4:
-        mapped = ipaddress.IPv6Address(f"::ffff:{address}")
-        return [rf"(?<!0){_octets(address)}(?![0-9])", *_ipv6(mapped, effective)]
-    if address:  # every IPv6 spelling: compressed or not, zero-padded, with a dotted tail
-        found = _ipv6(address, effective)
-        if address.ipv4_mapped:
+    if address:
+        found = _ip(address, effective)
+        if address.version == 6 and address.ipv4_mapped:
             port = f":{url.port}" if url.port else ""
             found += _host_patterns(urlsplit(f"{url.scheme}://{address.ipv4_mapped}{port}"),
                                     local_hosts)
@@ -425,7 +435,7 @@ def _host_patterns(url, local_hosts: set[str]) -> list[str]:
     # every draft's own words ($REF_BASE, "reference", a /ref or //ref path, an @ref
     # decorator, qa@ref.com) would match. Known limit: a protocol-relative //ref is missed.
     name = re.escape(host) + r"\.?"
-    found = [rf"{scheme}{name}(?![0-9A-Za-z_-]|\.{WORD})"]
+    found = [rf"{scheme}{name}(?!(?-i:[0-9A-Za-z_-])|\.{WORD})"]
     if port:
         found.append(rf"{name}{_port(port)}")
     return found
@@ -438,11 +448,8 @@ def _link_pattern(url, local_hosts: set[str]) -> str:
     address = _address(host)
     if host in local_hosts:
         spelled = _loopback()
-    elif address and address.version == 4:
-        mapped = _ipv6_pattern(ipaddress.IPv6Address(f"::ffff:{address}"))
-        spelled = rf"(?:{_octets(address)}|\[{mapped}\])"
     elif address:
-        spelled = rf"\[{_ipv6_pattern(address)}{ZONE}\]"
+        spelled = f"(?:{'|'.join(s for s, _ in _ip_spellings(address))})"
     else:
         spelled = re.escape(host) + r"\.?"
     default = DEFAULT_PORTS.get(url.scheme)
@@ -451,11 +458,14 @@ def _link_pattern(url, local_hosts: set[str]) -> str:
         tail = _port(port)
     else:
         tail = (rf"(?:{_port(default)})?" if default else "") + HOST_END
-    # Not where userinfo follows: in http://uat.acme.test@evil.test/ the host is evil.test.
-    # The look stops where a URL ends (a quote, a bracket, a comma), so a later address
-    # (admin@acme.test) doesn't count; possessive, so it stays linear.
+    # Not before a non-ASCII letter (http://localhost失): that is no link the listener serves,
+    # so the host is masked instead. Not where userinfo follows, plain or as an entity: in
+    # http://uat.acme.test;@evil.test/ the host is evil.test. The look stops only where a
+    # URL's authority ends (space, /, ?, #, a double quote, <, >, a backtick, a backslash),
+    # so a later address in the text (admin@acme.test) doesn't count; possessive, so linear.
     return (rf"(?<![a-z0-9+.-]){re.escape(url.scheme)}://{spelled}{tail}"
-            r"(?![^\s/?#@\"'<>`\\,;()]*+@)")
+            r"(?![^\x00-\x7f])"
+            r"(?![^\s/?#@\"<>`\\&]*+(?:@|&(?:#0*64|#x0*40|commat);))")
 
 
 def _ipv6_pattern(address: ipaddress.IPv6Address) -> str:

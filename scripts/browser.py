@@ -146,11 +146,16 @@ export default defineConfig({{
 """
 
 
+def _lines(text: str) -> list[str]:
+    # The error's own lines, never the stack.
+    lines = [line.strip() for line in ANSI.sub("", text).split("\n")]
+    return [line for line in lines if line and not line.startswith("at ")]
+
+
 def _kept(text: str) -> str:
     # Enough of the error (its Expected and Received lines) that two different wrong
-    # behaviours don't read the same; never the stack.
-    lines = [line.strip() for line in ANSI.sub("", text).split("\n")]
-    return "\n".join([line for line in lines if line and not line.startswith("at ")][:MAX_LINES])
+    # behaviours don't read the same.
+    return "\n".join(_lines(text)[:MAX_LINES])
 
 
 def _message(text: str) -> str:
@@ -173,8 +178,9 @@ def _cut_whole(text: str, limit: int) -> str:
 def _failed(raw: str) -> dict:
     """A failing test's result: not run when the run itself broke, read before any cut."""
     message = _message(raw)
-    # The kept lines, not the stack: a helper named net::ERR_… in a frame isn't the run's.
-    if NOT_THE_APP.search(_kept(raw)):
+    # Every line of the error but the stack: a helper named net::ERR_… in a frame isn't the
+    # run's, while a marker past the kept lines still is.
+    if NOT_THE_APP.search("\n".join(_lines(raw))):
         return {"result": f"not run: {message.split(chr(10))[0]}"}
     return {"result": "fail", "step": 1, "message": message}
 
