@@ -1,5 +1,5 @@
 # 2026-11-22-m-isolate-followups
-Status: active
+Status: done
 Process: 3
 Change: docs/sdlc/changes/2026-11-22-m-isolate-followups.md   (this feature's record for people)
 Track: M   (sized up because: —; footprint: 3 files)
@@ -7,15 +7,16 @@ Risk: high   (secrets: agent isolation boundary; untrusted environment input)
 Top model: opus   (fable only if the user chose it)
 Commands: test: `uv run pytest`
 Started: 2026-11-22
-Base: 635113a
+Base: fdd1072
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Current: Stage 2 – Build
+Verified: b4d953c tree 3a39610487a5b6cf80ed4e91178811f39ca2cdd1
+Current: Stage 4 – Ship
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
-- [ ] 2 Build
-- [ ] 3 Review   — the change file's ## Review
+- [x] 2 Build
+- [x] 3 Review   — the change file's ## Review
 - [ ] 4 Ship     — PR: (Learn: knowledge, recurring-defects.md)
 
 ## How the build runs
@@ -53,6 +54,9 @@ inline in this session; the Windows-only checks (MSYS ssh with -F /dev/null) joi
 - 2026-11-22 review r2 (coordinator): security FAIL R2-1, R2-2; code PASS. Owner chose one more fix round. Reports saved by the builder from the relay: .sdlc/.work/findings/2026-11-22-m-isolate-followups/security-r2.md, code-reviewer-r2.md
 - 2026-11-22 review r3 (coordinator): security FAIL R3-1; owner chose the structural fix plus one more round. Report saved by the builder from the relay: .sdlc/.work/findings/2026-11-22-m-isolate-followups/security-r3.md
 - 2026-11-22 review r4 (coordinator): security PASS, no high or medium; lows fixed without another round (L1, L3, L4, F1). Report saved by the builder from the relay: security-r4.md
+- 2026-11-22 rebased onto origin/main fdd1072 (C3 and oracle merged), no conflicts; Base set to the merge-base fdd1072
+- 2026-11-22 Stage 2: pass — reviews deferred by the owner to the end of all builds; run by the coordinator: r1-r4
+- 2026-11-22 Stage 3: pass — security r4 PASS, code r2 PASS; lows fixed; Learn: gotcha + 2 recurring defects
 
 ## Deviations
 - 2026-11-22 tests/test_isolate.py AC-005 What: AC-005 shares AC-004's test (test_a_variable_bash_cant_unset_stops_isolation) instead of its own. Why: AC-005 guards behaviour that already holds, so a test of its own passes before the code and the red step refuses it. Effect: the change file's AC-005 row names AC-004's test; the check is unchanged.

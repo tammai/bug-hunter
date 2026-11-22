@@ -83,3 +83,44 @@ AC-004, AC-005 and AC-006 check the environment through a child process (`python
 - Credentials in non-proxy URL variables, unless you keep the proposal above.
 - A direct `ssh`/`scp` from target code reading `~/.ssh` by absolute path. Only a container stops that.
 - Ticking the item in `docs/sdlc/todo.md`, which is left to the owner for this parallel run.
+
+## Review
+
+- **Recommended and chosen:** security and code, because `Risk: high` triggers both. The owner deferred every lane's reviews to the end of all builds. The coordinator ran them, and the owner approved each round past the cap.
+- **Verdicts** (reports in `.sdlc/.work/findings/2026-11-22-m-isolate-followups/`):
+  - **Round 1:** security `security-r1.md` FAIL (S1); code `code-reviewer-r1.md` FAIL (CR1-1).
+  - **Round 2:** security `security-r2.md` FAIL (R2-1, R2-2); code `code-reviewer-r2.md` PASS (it listed the same two plus lows).
+  - **Round 3:** security `security-r3.md` FAIL (R3-1).
+  - **Round 4:** security `security-r4.md` PASS, with no high or medium findings. Its lows were fixed without another round.
+  - Hooks blocked some reviewers' own writes, so the builder saved the round-2, round-3 and round-4 reports from the coordinator's relay as short lists of the findings.
+- **Fixed** (each with a test that failed first; all in `tests/test_isolate.py`):
+  - **CR1-1 (high):** a name with a newline or ESC could split the error line or write terminal escapes. One helper, `_shown` (unicode_escape), now escapes names in both the fail-closed error and `_unwritable` (`test_error_lines_escape_control_characters_in_names`).
+  - **S1, CR1-2, R2-1, R3-2:** an exported bash function is removed with `unset -f`, but only when its value starts with `() {` and its name couldn't carry a credential. Every other `BASH_FUNC_` name goes through the credential gate (`test_exported_bash_functions_are_removed_not_refused`, `test_only_real_functions_that_hold_no_credential_skip_the_checks`).
+  - **CR1-3, S2 (owner decision):** isolation fails closed only for odd names that could carry a credential. Odd names holding only a path pass through, including `ProgramFiles(x86)`, a JetBrains variable in the profile and `!C:` (`test_a_variable_bash_cant_unset_stops_isolation`).
+  - **CR1-4, R2-2, R3-1 (high), L4:** splitting proxy lists left part of a password behind, for a separator inside the password or digits that read as a port. By the owner's decision, every PROXY value is now cut once between the scheme and the last `@`. The surviving host takes the scheme of its own entry (a known scheme only) or none (`test_proxy_values_never_keep_part_of_a_password`, `test_a_credentialed_list_keeps_the_scheme_of_the_surviving_entry`).
+  - **R2-4:** the proxy credential check runs even when a name is dropped for another reason.
+  - **CR1-5:** the error names every stuck variable.
+  - **CR1-6:** new tests for a non-ASCII secret name and an odd `GIT_` name.
+  - **R2-5:** the AC-002 ssh test no longer skips on Windows.
+  - **R3-3, L3:** the function tests assert in a child process.
+  - **CR1-8, R3-5, F1, L1:** docs updated: README, the gotcha doc, `copying-a-target-repo.md`, and the docstring.
+- **Tickets:**
+  - S3/CR1-7: secrets in names `SECRET_NAME` misses (`PROXY_PASS`, `PROXY_PWD`, `SSHPASS`, `MYSQL_PWD`).
+  - R2-3: odd names for key or cert files (the owner's call).
+  - R3-4: an odd PROXY name holding a harmless `@` now stops isolation (it fails closed).
+  - `BASH_FUNC_token+x%%` is refused rather than removed (the safe side).
+  - L2: bash 5 keeps a failed `%%` import as a variable; only a home path can survive that way.
+  - The Windows session: Git for Windows' ssh with `-F /dev/null`, real `=C:` and JetBrains variables, and the AC-001 fake-ssh and function-body tests under Git Bash.
+- **Drift and manual checks** (every Deviations line in the state file):
+  - AC-005 shares AC-004's test.
+  - Proxy credentials are cut at the last `@`, not in the authority alone.
+  - The owner's CR1-3 decision supersedes AC-004's "a path into the real home"; AC-004 now reads "a variable that could carry a credential".
+  - The owner's R3-1 decision supersedes the CR1-4 and R2-2 list-splitting fixes.
+  - The owner's R3-2 gate means an exported secret-named function (`get_token`, and `git_author`, which matches `AUTH`) stops isolation again, reversing round 1's S1 expectation.
+  - README and `copying-a-target-repo.md` were edited beyond the planned files.
+  - Each round's `isolate.py` fixes, and four test changes. Each test change was re-shown failing at base, before Base moved.
+  - Rebased onto `fdd1072`, with Base moved to that merge-base.
+  - The coordinator asked for the todo item to be ticked at ship; its tickets stay open as a new item.
+  - There are no manual ACs.
+- **Security:** no high or critical finding is open, and there are no secrets in the diff. No dependency audit ran: the project has no runtime dependencies, the change adds none, and `pip-audit` isn't installed (not counted as a pass).
+- **Lessons filed:** [knowledge/gotchas/isolating-agents-without-a-sandbox.md](../../../knowledge/gotchas/isolating-agents-without-a-sandbox.md) (ssh, names bash can't unset, proxy credentials, the descriptor check) and two lines in [recurring-defects.md](../recurring-defects.md).
