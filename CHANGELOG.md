@@ -20,6 +20,14 @@
 
 ### Fixed
 
+- **`/audit` verdict follow-ups** ([change](docs/sdlc/changes/2026-11-22-m-audit-verdict-followups.md)):
+  - The Accepted list shows each finding's current severity, and when a later run raised it.
+  - A secret committed since its first sighting reads "(since committed)"; an advisory whose fix was released later stops saying "no fix known".
+  - A local `.env` whose path git history holds counts as committed; one whose history git can't read (a shallow, partial or grafted clone, or a timeout) is a coverage gap, never "never committed".
+  - npm advisories are one finding each, so `via`'s order can't change a number. Pre-id secrets pair one to one, never when accepted `rotated`, and one kept open by a same-shape sibling is never marked fixed.
+  - `recheck` without `--repo` never fixes a local secret. `secret-id.key` works on filesystems without hard links.
+  - Every git call the audit scripts make ignores inherited repo variables, can't use any transport (`GIT_ALLOW_PROTOCOL`), runs no lazy fetch, and times out; `scope.py` blanks the target's own filter drivers before `git status` and doesn't enter submodules, listing each as a gap. On git older than 2.31 or 2.45.1 those guards fail closed. PII inventory cells are escaped.
+  - **New `findings.py seal`** and `--seal` on `recheck`, `dedupe` and `report`: `/audit` seals `accepted.md`, `policy.md` and the findings after your yes and refuses to write if an agent changed them during the run.
 - **`/hunt --oracle` scoping and citations** ([change](docs/sdlc/changes/2026-11-22-m-oracle-tickets.md)):
   - `oracle.py scope` exits 1 when no feature has source files, as `scope.py` does.
   - A criterion whose story line changed since the lock (`text_sha256`) ranks at level 0.

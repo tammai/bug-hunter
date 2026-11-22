@@ -1,5 +1,5 @@
 # 2026-11-22-m-audit-verdict-followups
-Status: active
+Status: done
 Process: 3
 Change: docs/sdlc/changes/2026-11-22-m-audit-verdict-followups.md   (this feature's record for people)
 Track: M   (sized up because: —; footprint: 8 files)
@@ -7,15 +7,16 @@ Risk: high   (secrets, deploy verdict, untrusted target git config)
 Top model: opus   (fable only if the user chose it)
 Commands: test: `uv run pytest`
 Started: 2026-11-22
-Base: 635113a
+Base: fdd1072
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Current: Stage 2 – Build
+Verified: a965e7d tree f2cb64a9af495a2b0d6b56f68172d4390549a68a
+Current: Stage 4 – Ship
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
-- [ ] 2 Build
-- [ ] 3 Review   — the change file's ## Review
+- [x] 2 Build
+- [x] 3 Review   — the change file's ## Review
 - [ ] 4 Ship     — PR: (Learn: knowledge, recurring-defects.md)
 
 ## How the build runs
@@ -66,6 +67,9 @@ inline, one session; S8 first to ticket if context runs short
 - 2026-11-22 review r3 tickets (not fixed): R3-L3 every submodule is a gap even outside scope; R3-L4/M-2 history_unknown reaches the report via the model (a script-carried version); single-branch clones; L-4; L-5; L-6 drafts.drafts_dir environment
 - 2026-11-22 review r4: code PASS (no high); r4 lows fixed test-first without another round, per the coordinator
 - 2026-11-22 review r4 ticket: L-1 folded into L-A (the report should tell the owner to close a pre-id finding kept open by a same-shape sibling by marking it rotated)
+- 2026-11-22 rebased onto origin/main fdd1072 (C3 and oracle merged), no conflicts; Base set to fdd1072
+- 2026-11-22 Stage 2: pass — build done after r1-r4 fixes; reviews ran at the end by owner instruction
+- 2026-11-22 Stage 3: pass — review: security r3 PASS, code r4 PASS; r2 and r3 past the cap with the owner's OK
 
 ## Deviations
 - 2026-11-22 test-change tests/test_audit_scope.py What: the hostile repo gets a tracked app.js (scope.py refused a repo with no source files) and expects dirty False, not true-or-null; the partial-clone check asserts in_history is not False instead of rev-list exiting 0. Why: blanked filters that change nothing honestly read clean, so AC-010's 'dirty is true or null' wording was wrong for this fixture; with GIT_NO_LAZY_FETCH git can't read the missing tree and exits 128, which is the safe 'can't say'. Effect: AC-010 now asserts no marker, a correct dirty value, and the safe history answer.
@@ -84,6 +88,7 @@ inline, one session; S8 first to ticket if context runs short
 - 2026-11-22 test-change tests/test_findings.py tests/test_audit_scope.py What: AC-017 and AC-018's tests added; no existing test changed. Why: review r3 R3-H1 and M-1. Effect: the files' locks cover the new tests.
 - 2026-11-22 scripts/secrets_scan.py scripts/scope.py scripts/findings.py docs/sdlc/changes/2026-11-22-m-audit-verdict-followups.md What: in_history runs rev-list with --no-replace-objects and answers None when info/grafts exists (M-A, confirmed: a replace graft made it answer False); a timed-out git ls-files raises TimeoutError and secrets_scan.py and scope.py print 'error: git timed out on <repo>' (L-3; TIMED_OUT = 124); a history_unknown finding's Impact says it may be in history already (L-2); AC-018 extended, AC-019 and AC-020 added. Why: review r4. Effect: as listed.
 - 2026-11-22 test-change tests/test_audit_scope.py What: AC-018's test also checks the Impact line and the unchanged evidence line; AC-019 (replaced history) and AC-020 (timeouts, browser's repo-variable twin) tests added. Why: review r4 M-A, L-2..L-5. Effect: stronger checks only.
+- 2026-11-22 docs/sdlc/todo.md CHANGELOG.md docs/sdlc/recurring-defects.md What: at Ship the todo item is ticked and its review tickets kept as a new open item, the CHANGELOG entry added, and two recurring-defects lines filed, though Out of scope said todo.md wasn't edited here. Why: the coordinator's ship instruction, relayed from the owner. Effect: docs only.
 
 ## Open questions
 -

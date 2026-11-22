@@ -139,3 +139,30 @@ F3 (a test split) has no AC: it changes no behaviour. `verify.py` checks it thro
 - Lowering a severity the registry revised down: kept one-way by design.
 - `drafts.py`, `oracle.py`, `isolate.py` and `contracts.py` are owned by parallel changes and aren't touched.
 - `docs/sdlc/todo.md` isn't edited in this change; the orchestrator ticks the item.
+
+## Review
+
+- **What fired and why:** security (`Risk: high`) and code (`Risk: high`, and the Public Surface changed). The owner deferred every lane's reviews to the end of all builds. The coordinator ran each round with fresh reviewers; hooks blocked their report files, so the builder saved them from the relayed findings in `.sdlc/.work/findings/2026-11-22-m-audit-verdict-followups/`.
+- **Rounds and verdicts:**
+  - r1: security FAIL (SEC-1), code FAIL (H1, H2, M1).
+  - r2: security FAIL (H1, H2), code FAIL (H-A, H-B), the same two root causes. The owner allowed one more fix round past the cap.
+  - r3: security PASS, code FAIL (R3-H1). The owner allowed one more round.
+  - r4: code PASS, with no high. Its lows were fixed test first without another round.
+- **The owner's decisions:** approve the plan; SR3-4 counts a local `.env` whose path history holds as committed at full severity, only on a definite yes from git; S8's seal is built in this change; R3-3 shows the current severity and the raise and keeps accepting; the seal comes after the owner's yes (M2); the re-block proposal and S6's submodule half were dropped (U1 later handled the submodule half as a gap).
+- **Fixed, each with its test:**
+  - **SEC-1 / H1 and H1 / H-A (r1, r2), git guards a target or an old git defeats:** `GIT_ALLOW_PROTOCOL` naming no protocol (with `protocol.allow=never`), version floors that fail closed (2.31, 2.45.1). Tested by AC-012.
+  - **M1, H2 / H-B, R3-H1 (r1 to r3), legacy pairing:** one to one within and across runs; a secret held by id is never paired again; a pre-id finding whose key a produced secret shares is never "no longer found". Tested by AC-013 and AC-017, with AC-005 and the H1 upgrade test kept.
+  - **SEC-2 and M2 (r1):** two-part seal, checked by `recheck`, `dedupe` and `report`, taken after the yes. Tested by AC-011 and AC-014.
+  - **U1 and M1 (r2):** submodules not entered by `status`, each a gap (AC-015); an unknown history is a gap through `meta.json` (AC-016).
+  - **M-1 (r3) and M-A (r4), history git can't see:** shallow clones, `info/grafts` and replace refs answer "can't say" (AC-018, AC-019; M-A's probe confirmed the bug first).
+  - **L-2 to L-5 (r3, r4):** stdin from `/dev/null` and a timeout on every git call, named "git timed out" (AC-020); `browser.py`'s repo variables match `throwaway._REPO_VARS`; a `history_unknown` title and Impact no longer claim "not committed".
+  - **Record-only:** H2 (r1, the raise wording), L1, L2, F-A, F1, F2.
+- **Tickets** (the open item in `docs/sdlc/todo.md`): L-A with L-1 (explain a pre-id finding kept open by a sibling); R3-L4 / M-2 (carry `history_unknown` by script); SEC-3 (`$RUN` inputs unsealed); L4 (a run without `--seal` leaves no trace); R3-L3 (submodules outside scope) and single-branch clones; L-B (the 2.45.1 margin); L5, L7, L-4, L-5, L-6.
+- **Deviations** (each in the state file):
+  - Test changes, each re-shown red at the base: AC-010's honest `dirty` value and the partial-clone answer; the Accepted line's new shape and the N9 `--repo` test; F3's split; the seal's timing and two-part value; the r2 to r4 test extensions.
+  - Public surface beyond the plan: `run_git`, `in_history`, `git_version`, `CONFIG_BY_VARIABLE`, `NO_LAZY_FETCH`, `TIMED_OUT`, `dedupe --seal`, `report --seal`, `coverage.submodules`, the scan's `history`/`history_unknown` fields, and `meta.json`'s `history_unknown`.
+  - `scripts/browser.py`: only `_tracked`, hardened inline.
+  - Record changes: AC-001, AC-010, AC-011 and AC-013 reworded; AC-012 to AC-020 added; the R3-3, R3-5 and N11 wording.
+  - The rebase onto `origin/main` at fdd1072 (no conflicts), with Base set to it.
+- **Manual checks:** none; every AC has a test.
+- **Lessons filed:** the knowledge doc [audit-facts-frozen-at-first-sight](../../../knowledge/gotchas/audit-facts-frozen-at-first-sight.md) gained the pairing, git-config, seal and history bullets; two lines in [recurring-defects.md](../recurring-defects.md): a config-level git guard the repo or an old git defeats, and "nothing in history" read as "never committed".
