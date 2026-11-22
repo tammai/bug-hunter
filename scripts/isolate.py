@@ -265,23 +265,48 @@ def _plan(scratch: Path, env: dict[str, str],
         if k in respelled or fold(k) not in exported
     }
     # Proxy routing survives, as in JAVA_TOOL_OPTIONS; proxy users and passwords never do.
+    credentials = set()
     for k, v in env.items():
         if "PROXY" in k.upper() and k not in unset and fold(k) not in exported:
             bare = _without_credentials(v)
             if bare != v:
+                credentials.add(k)
                 if _is_shell_name(k):
                     exports[k] = bare
-                else:
-                    unset.add(k)
-    return sorted(unset), exports
+    functions, stuck = set(), set()
+    for k in unset | credentials:
+        if _is_shell_name(k):
+            continue
+        if function := re.fullmatch(r"BASH_FUNC_([A-Za-z_][\w.:-]*)(?:%%|\(\))", k, re.A):
+            functions.add(function[1])
+        # A name bash can't unset that holds no credential (ProgramFiles(x86), a JetBrains
+        # "PyCharm Community Edition" in the profile) passes through, as it always has.
+        elif k in credentials or k in secrets or fold(k) in always or fold(k).startswith(
+                GIT_PREFIX):
+            stuck.add(k)
+    unset = {k for k in unset if _is_shell_name(k)}
+    return sorted(unset), sorted(functions), exports, sorted(stuck)
 
 
 def _is_shell_name(name: str) -> bool:
     return re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is not None
 
 
+def _shown(name: str) -> str:
+    """A variable name safe for one line of a terminal: control and non-ASCII escaped."""
+    return name.encode("unicode_escape").decode("ascii")
+
+
 def _without_credentials(value: str) -> str:
-    """value with any user[:password]@ before a proxy's host removed."""
+    """value with everything up to each URL's last @ removed, keeping every list entry."""
+    # A list (GOPROXY, curl's comma lists) is split only where the next entry starts with a
+    # scheme, so a raw , in a password stays inside its entry.
+    pieces = re.split(r"([,|]\s*)(?=[A-Za-z][A-Za-z0-9+.-]*://)", value)
+    return "".join(_entry_without_credentials(p) if i % 2 == 0 else p
+                   for i, p in enumerate(pieces))
+
+
+def _entry_without_credentials(value: str) -> str:
     scheme, rest = re.fullmatch(r"(\s*[A-Za-z][A-Za-z0-9+.-]*://)?(.*)", value, re.S).groups()
     # Up to the last @ anywhere, not just in the authority: a raw / or @ in a password must
     # not leave part of it behind, and a proxy URL has no use for an @ in its path.
@@ -580,12 +605,12 @@ def _main(argv: list[str] | None = None) -> int:
     except OSError as exc:
         print(f"error: can't prepare {scratch / 'home'}: {exc}", file=sys.stderr)
         return 1
-    unset, exports = _plan(scratch, env, cache)
-    if stuck := [k for k in unset if not _is_shell_name(k)]:
+    unset, functions, exports, stuck = _plan(scratch, env, cache)
+    if stuck:
         # bash can't unset such a name, yet passes it on to every program it starts.
-        name = stuck[0].encode("ascii", "backslashreplace").decode()
-        print(f"error: the environment variable {name} must not reach agents, but its name "
-              "can't be unset from bash; unset it before starting Claude Code", file=sys.stderr)
+        names = ", ".join(map(_shown, stuck))
+        print(f"error: the environment variable(s) {names} must not reach agents, but bash "
+              "can't unset such names; unset them before starting Claude Code", file=sys.stderr)
         return 1
     if args.browser:
         # The owner's installed browsers, used where they are: HOME and LOCALAPPDATA move
@@ -604,7 +629,9 @@ def _main(argv: list[str] | None = None) -> int:
     # reaches their own shell, so a relative write would land in the repo.
     home_dir = " || ".join(f"cd {shlex.quote(p.as_posix())}"
                            for p in (scratch / "copy", scratch))
-    line = "unset " + " ".join(unset) + "; export " + " ".join(
+    # Exported functions (BASH_FUNC_name%%) leave every child with the function gone.
+    drop_functions = f"unset -f {shlex.join(functions)}; " if functions else ""
+    line = drop_functions + "unset " + " ".join(unset) + "; export " + " ".join(
         f"{key}={shlex.quote(value)}" for key, value in exports.items()
     ) + f"; trap {shlex.quote(listing)} EXIT; {{ {home_dir}; }} 2> /dev/null;"
     if not _encodes(line):
@@ -624,7 +651,7 @@ def _unwritable(env: dict[str, str], exports: dict[str, str]) -> str:
     if env.get(bad) != exports[bad]:
         # Built from the owner's variables (RUSTUP_HOME from HOME), so name those instead.
         bad = " or ".join(k for k, v in env.items() if not _encodes(k + v)) or bad
-    return "the environment variable " + bad.encode("ascii", "backslashreplace").decode()
+    return "the environment variable " + _shown(bad)
 
 
 def _encodes(text: str) -> bool:

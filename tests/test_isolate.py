@@ -1041,8 +1041,9 @@ def test_a_variable_bash_cant_unset_stops_isolation(tmp_path):
     real = tmp_path / "real"
     cases = {
         "npm_config_//registry.npmjs.org/:_authToken": "npm_SECRETVALUE",
-        "tool-dir": str(real / "tools-SECRETVALUE"),
         "corp-proxy": "http://me:SECRETVALUE@proxy.corp:8080",
+        "ÜBER_TOKEN": "SECRETVALUE",
+        "GIT_SSH COMMAND": "ssh -i SECRETVALUE",
     }
     for name, value in cases.items():
         env = {"PATH": os.environ["PATH"], "HOME": str(real), name: value}
@@ -1051,19 +1052,71 @@ def test_a_variable_bash_cant_unset_stops_isolation(tmp_path):
         result = run_script("isolate", tmp_path / "s", env=env)
         assert result.returncode == 1 and result.stdout == "", name
         assert result.stderr.startswith("error:") and len(result.stderr.splitlines()) == 1, name
-        assert name in result.stderr and "SECRETVALUE" not in result.stderr, name
+        shown = name.encode("unicode_escape").decode("ascii")
+        assert shown in result.stderr and "SECRETVALUE" not in result.stderr, name
         assert "Traceback" not in result.stderr, name
-    # Odd names isolation keeps unchanged (Windows always has ProgramFiles(x86)) never stop it.
+    # Every stuck name, so the owner fixes them all in one go.
+    env = {"PATH": os.environ["PATH"], "HOME": str(real), "a//:_authToken": "x",
+           "b//:_authToken": "y"}
+    if WINDOWS:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    result = run_script("isolate", tmp_path / "s", env=env)
+    assert result.returncode == 1 and len(result.stderr.splitlines()) == 1
+    assert "a//:_authToken" in result.stderr and "b//:_authToken" in result.stderr
+    # Odd names that hold no credential never stop it: Windows always has ProgramFiles(x86),
+    # JetBrains adds "PyCharm Community Edition" pointing into the profile, and MSYS shows
+    # cmd.exe's drive folders as !C:.
     scratch = tmp_path / "s2"
     scratch.mkdir()
-    env = {"PATH": os.environ["PATH"], "HOME": str(real),
-           "a-b": "1", "Program Data(x86)": "D:\\data"}
+    odd = {"a-b": "1", "Program Data(x86)": "D:\\data",
+           "Tool Dir": str(real / "tools"), "!C:": str(real / "proj")}
+    env = {"PATH": os.environ["PATH"], "HOME": str(real), **odd}
     if WINDOWS:
         env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
     got = child_env(scratch, env)
     folded = {k.upper(): v for k, v in got.items()} if WINDOWS else got
-    assert folded["A-B" if WINDOWS else "a-b"] == "1"
-    assert folded["PROGRAM DATA(X86)" if WINDOWS else "Program Data(x86)"] == "D:\\data"
+    for name, value in odd.items():
+        assert folded[name.upper() if WINDOWS else name] == value, name
+
+
+def test_error_lines_escape_control_characters_in_names(tmp_path, monkeypatch, capsys):
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "real"),
+           "x\nTOKEN\x1b[2J": "SECRETVALUE"}
+    result = run_script("isolate", tmp_path / "s", env=env)
+    assert result.returncode == 1 and len(result.stderr.splitlines()) == 1, result.stderr
+    assert "x\\nTOKEN\\x1b[2J" in result.stderr and "\x1b" not in result.stderr
+    assert "SECRETVALUE" not in result.stderr
+    # The encoding error names the owner's variables the same way.
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "h-\ud800"),
+           "odd\nname": "v-\ud800"}
+    monkeypatch.setattr(isolate, "_environ", lambda: dict(env))
+    assert isolate._main([str(tmp_path / "s2")]) == 1
+    out, err = capsys.readouterr()
+    assert out == "" and len(err.splitlines()) == 1 and "odd\\nname" in err
+
+
+def test_exported_bash_functions_are_removed_not_refused(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "real"),
+           "BASH_FUNC_git_author%%": "() {  git log -1 --format=%an\n}",
+           "BASH_FUNC_f_token%%": "() {  echo s3cr3t\n}"}
+    if WINDOWS:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    got = child_env(scratch, env)
+    assert not [k for k in got if "git_author" in k or "f_token" in k]
+
+
+def test_proxy_lists_keep_every_entry(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "real"),
+           "GOPROXY": "https://proxy.golang.org,https://u:hunter2@athens.corp"
+                      "|https://u2:hun,ter2@b.corp,direct"}
+    if WINDOWS:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    got = child_env(scratch, env)
+    assert got["GOPROXY"] == "https://proxy.golang.org,https://athens.corp|https://b.corp,direct"
 
 
 def test_proxy_credentials_are_dropped_and_routing_kept(tmp_path):

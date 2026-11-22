@@ -49,10 +49,15 @@ inline in this session; the Windows-only checks (MSYS ssh with -F /dev/null) joi
 ## Gate log
 - 2026-11-22 Stage 1: pass — plan approved by the owner (high-risk M)
 - 2026-11-22 build done: verify PASS head 635113a tree 65feae28e3224a93f4f8c49644229d1b3744956b; review deferred by the owner to the end of the build (all lanes reviewed together); not advanced to Review
+- 2026-11-22 review r1 (run by the coordinator after the deferred build): security FAIL S1, code FAIL CR1-1; back in Build (already at Stage 2) to fix S1, S2, CR1-1..CR1-6, CR1-8; S3/CR1-7 are tickets
 
 ## Deviations
 - 2026-11-22 tests/test_isolate.py AC-005 What: AC-005 shares AC-004's test (test_a_variable_bash_cant_unset_stops_isolation) instead of its own. Why: AC-005 guards behaviour that already holds, so a test of its own passes before the code and the red step refuses it. Effect: the change file's AC-005 row names AC-004's test; the check is unchanged.
 - 2026-11-22 scripts/isolate.py proxy rule What: credentials are cut at the last @ anywhere after the scheme, not the last @ in the authority as the Decisions row says. Why: a raw / in a password would end the authority early and leave the password in the value. Effect: never leaks; an @ in a proxy URL's path (not seen in practice) would mis-route rather than leak.
+- 2026-11-22 AC-004 owner decision (CR1-3) What: fail closed only for an odd name that could carry a credential (secret name, GIT_*, ALWAYS_UNSET, or a proxy URL with credentials); an odd name that is only a path into the home passes through, as before. Why: the owner chose it at review r1; a JetBrains 'PyCharm Community Edition' in the Windows profile would otherwise stop every run. Effect: AC-004 as written in the change file ('or a path into the real home') and its Decisions row are superseded on that point.
+- 2026-11-22 test-change tests/test_isolate.py What: test_a_variable_bash_cant_unset_stops_isolation drops the into-home 'tool-dir' case (it must now pass through, per CR1-3), and adds a non-ASCII secret name, an odd GIT_ name, two stuck names named in one line, and odd names that pass ('Tool Dir' into the home, '!C:'); the name check compares against the escaped form. Why: review r1 CR1-3, CR1-5, CR1-6, S2. Effect: stricter, except for the owner's CR1-3 decision.
+- 2026-11-22 README.md, knowledge/gotchas/copying-a-target-repo.md What: the owner-facing isolation paragraph and the credentials line are updated. Why: review r1 CR1-8, docs that restate isolate.py's rules. Effect: docs only.
+- 2026-11-22 scripts/isolate.py review r1 fixes What: _plan returns unset, functions, exports and stuck; exported bash functions are removed with unset -f (S1/CR1-2); one helper _shown (unicode_escape) escapes names in both error paths (CR1-1); every stuck name is listed (CR1-5); proxy lists split only before a scheme:// entry (CR1-4). Why: review r1. Effect: as listed.
 
 ## Open questions
 -
