@@ -56,5 +56,7 @@ One line per defect: what it looks like, then the severity.
 - "Not produced again, so fixed" without checking the producer ran and could see it (a failed or skipped audit, a lockfile deleted only in the working tree, a secret still in git history): high
 - A target-controlled name (file, folder, lockfile) written into a line-structured record or report without escaping control characters, so a newline forges a heading or an evidence line the parser reads first: high
 - A left boundary or lookbehind added to a leak or host matcher to cut over-refusal or scan cost, so a prefix (another scheme, a dot, a digit, an undecoded escape) now hides the value the matcher must refuse; anchor at a run's start and check the run's end instead: high
+- A git call on a target repo that trusts a config-level guard (`protocol.allow`, filter blanking by `GIT_CONFIG_COUNT`, `GIT_NO_LAZY_FETCH`) that the repo's own config can override (`protocol.file.allow=always`) or an older git silently ignores; use `GIT_ALLOW_PROTOCOL`, check the git version, and fail closed: high
+- "git found nothing in history" read as "never committed" when git couldn't see all history (a shallow, partial or grafted clone, replace refs, a timeout); answer "can't say" and make it a gap: high
 - A value cleaner that splits a list on separators before stripping credentials, so a password containing the separator (or digits that read as a port) leaves a fragment: high
 - An exemption chosen from a variable's name alone, without checking what its value is (`BASH_FUNC_` with a non-function value): high

@@ -169,3 +169,59 @@ def test_one_line_keys_and_header_mentions_dont_swallow_the_file(make_repo):
     assert ("src/pem.js", 2, "aws-access-key-id") in got
     assert ("src/cfg.js", 1, "hardcoded-credential") in got
     assert not any(f["path"] == "src/cfg.js" and f["line"] in (2, 3) for f in found)
+
+
+def test_a_local_env_whose_path_is_in_history_counts_as_committed(make_repo, tmp_path,
+                                                                  monkeypatch, capsys):
+    from conftest import commit, git
+    repo = make_repo({".env": f"STRIPE_SECRET={STRIPE}\n", "a.js": ""})
+    commit(repo)
+    git(repo, "rm", "-q", "--cached", ".env")
+    (repo / ".gitignore").write_text(".env\n", encoding="utf-8")
+    git(repo, "add", ".gitignore")
+    commit(repo, "untrack")
+    _, found = scan(repo)
+    [item] = [f for f in found if f["path"] == ".env"]
+    assert item["committed"] is True and item["severity"] == "critical"
+    assert item.get("history") is True
+    data = tmp_path / "s.json"
+    data.write_text(json.dumps(found), encoding="utf-8")
+    out = tmp_path / "out"
+    assert run_script("findings", "from-secrets-scan", data, out).returncode == 0
+    [text] = [p.read_text(encoding="utf-8") for p in out.glob("*.md")]
+    assert text.startswith("# Secret (stripe-live-key) in a local file whose path is in git "
+                           "history: .env")
+
+    # When git can't answer, the file stays what it is: local and low.
+    import secrets_scan
+    real = secrets_scan.run_git
+
+    def failing(repo_, *args, **kwargs):
+        if "rev-list" in args:
+            return subprocess.CompletedProcess(args, 128, b"", b"fatal")
+        return real(repo_, *args, **kwargs)
+
+    monkeypatch.setattr(secrets_scan, "run_git", failing)
+    assert secrets_scan._main([str(repo)]) == 0
+    [item] = [f for f in json.loads(capsys.readouterr().out) if f["path"] == ".env"]
+    assert item["committed"] is False and item["severity"] == "low"
+
+
+def test_the_id_key_is_made_without_hard_links(tmp_path, monkeypatch):
+    import errno
+    import os
+    import stat
+
+    import secrets_scan
+
+    def no_links(src, dst, *a, **k):
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(os, "link", no_links)
+    path = tmp_path / "keys" / "secret-id.key"
+    key = secrets_scan._id_key(path)
+    assert len(key) == 32 and path.read_bytes() == key
+    if os.name != "nt":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert secrets_scan._id_key(path) == key
+    assert [p.name for p in path.parent.iterdir()] == ["secret-id.key"]

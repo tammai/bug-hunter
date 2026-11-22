@@ -1,6 +1,7 @@
 """Find secrets committed to a repo (and local .env files), reporting where, never what."""
 
 import argparse
+import functools
 import hashlib
 import hmac
 import json
@@ -11,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path, PurePosixPath
+
+from throwaway import _REPO_VARS
 
 RULES = json.loads(
     (Path(__file__).resolve().parent / "secret_patterns.json").read_text(encoding="utf-8")
@@ -141,8 +144,85 @@ def known_secret_in(text: str, prints: dict) -> bool:
                if _single_case(w))
 
 
+# No transport has this name, so a GIT_ALLOW_PROTOCOL list of it allows none.
+NO_PROTOCOL = "none-allowed"
+GIT_TIMEOUT = 300
+TIMED_OUT = 124  # the return code run_git gives a call that timed out, as timeout(1) does
+
+
+def run_git(repo: str, *args: str, config: dict[str, str] | None = None
+            ) -> subprocess.CompletedProcess:
+    """git on the target repo, steered neither by the caller's repo variables nor its config."""
+    env = {k: v for k, v in os.environ.items() if k.upper() not in _REPO_VARS}
+    # A treeless partial clone would fetch missing trees through the target's remote config.
+    env["GIT_NO_LAZY_FETCH"] = "1"
+    # No fetch may start a program the target's remote config names. protocol.allow=never is
+    # only a default the target's protocol.<name>.allow=always overrides; this list, naming no
+    # real protocol, overrides every config, on any git since 2.12, and children inherit it.
+    env["GIT_ALLOW_PROTOCOL"] = NO_PROTOCOL
+    if config:
+        # Passed by variable, not -c: a target-chosen name may hold "=".
+        env["GIT_CONFIG_COUNT"] = str(len(config))
+        for n, (key, value) in enumerate(config.items()):
+            env[f"GIT_CONFIG_KEY_{n}"], env[f"GIT_CONFIG_VALUE_{n}"] = key, value
+    command = ["git", "--no-optional-locks", "-c", "core.fsmonitor=false",
+               "-c", "protocol.allow=never", "-C", repo, *args]
+    try:
+        return subprocess.run(command, capture_output=True, env=env, stdin=subprocess.DEVNULL,
+                              timeout=GIT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # A failed call: every caller reads that as "can't say", a gap, never as clean.
+        return subprocess.CompletedProcess(command, TIMED_OUT, b"", b"timed out")
+
+
+@functools.cache
+def git_version() -> tuple[int, ...]:
+    """The installed git's version; (0,) when it can't be read, which is below every floor."""
+    try:
+        out = subprocess.run(["git", "version"], capture_output=True, text=True).stdout
+    except OSError:
+        return (0,)
+    found = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", out)
+    return tuple(int(n or 0) for n in found.groups()) if found else (0,)
+
+
+# Older git ignores these variables without a word, so each guard relying on one fails closed.
+CONFIG_BY_VARIABLE = (2, 31)
+NO_LAZY_FETCH = (2, 45, 1)
+
+
+def in_history(repo: str, name: str) -> bool | None:
+    """Whether git history holds the path; None when git can't say."""
+    if git_version() < NO_LAZY_FETCH:
+        try:
+            promisor = run_git(repo, "config", "--get-regexp",
+                               r"^(extensions\.partialclone|remote\..*\.promisor)$")
+        except OSError:
+            return None
+        if promisor.returncode != 1:
+            return None  # a partial clone (or an unreadable config) would fetch to answer
+    try:
+        # A shallow clone lacks the history before its cut, so "not found" proves nothing.
+        # The shallow file is what older git, without --is-shallow-repository, goes by too.
+        # Grafts rewrite parents the same way, and --no-replace-objects doesn't undo them.
+        for hidden in ("shallow", "info/grafts"):
+            where = run_git(repo, "rev-parse", "--git-path", hidden)
+            if where.returncode != 0 or (Path(repo) / os.fsdecode(where.stdout.strip())).exists():
+                return None
+        # Literal: a target-named file like `:x` mustn't read as pathspec magic. rev-list
+        # shows no signatures, so the target's config can't make it run gpg.program. Replace
+        # refs could graft a commit's parents away, so they're ignored.
+        result = run_git(repo, "--literal-pathspecs", "--no-replace-objects", "rev-list",
+                         "--all", "-1", "--", name)
+    except OSError:
+        return None
+    return bool(result.stdout.strip()) if result.returncode == 0 else None
+
+
 def _git_names(repo: str, *args: str) -> list[str] | None:
-    result = subprocess.run(["git", "-C", repo, "ls-files", "-z", *args], capture_output=True)
+    result = run_git(repo, "ls-files", "-z", *args)
+    if result.returncode == TIMED_OUT:
+        raise TimeoutError(repo)
     if result.returncode != 0:
         return None
     names = []
@@ -272,6 +352,11 @@ def _id_key(path: Path) -> bytes:
             os.link(tmp, path)
         except FileExistsError:
             pass
+        except OSError:
+            # No hard links here (some network or synced folders): a rename publishes the
+            # whole key too, and only when there is none yet.
+            if not os.path.lexists(path):
+                os.replace(tmp, path)
     finally:
         Path(tmp).unlink(missing_ok=True)
     return _read_key(path)
@@ -312,6 +397,9 @@ def _main(argv: list[str] | None = None) -> int:
     except FileNotFoundError:
         print("error: git is not installed", file=sys.stderr)
         return 1
+    except TimeoutError:
+        print(f"error: git timed out on {args.repo}", file=sys.stderr)
+        return 1
     if tracked is None or ignored is None or untracked is None or ignored_env is None:
         print(f"error: not a git repo: {args.repo}", file=sys.stderr)
         return 1
@@ -322,7 +410,14 @@ def _main(argv: list[str] | None = None) -> int:
     })
     values: list[str] = []
     found = [f for n in tracked for f in _scan_file(repo, n, True, values)]
-    found += [f for n in local_env for f in _scan_file(repo, n, False, values)]
+    for name in local_env:
+        # A file untracked since (`git rm --cached`) is still in history, so it counts as
+        # committed; only a definite answer raises it, never a git failure.
+        answer = in_history(args.repo, name)
+        for item in _scan_file(repo, name, answer is True, values):
+            # Unknown stays local and low, and the report names it as a gap.
+            found.append({**item, "history": True} if answer is True else
+                         {**item, "history_unknown": True} if answer is None else item)
     if args.fingerprints:
         out = Path(args.fingerprints)
         fd, tmp = tempfile.mkstemp(dir=out.parent, prefix=".fingerprints-")
