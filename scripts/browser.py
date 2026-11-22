@@ -5,6 +5,7 @@ repro runs from the draft alone on another machine.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -15,8 +16,6 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path, PurePosixPath
-
-from drafts import cut_whole
 
 PACKAGE = "@playwright/test"
 LOCKFILES = ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb")
@@ -30,6 +29,7 @@ REFUSALS = "/.bug-hunter/refusals"  # live_proxy.py's count of the requests it r
 TIMEOUT = 300
 MAX_MESSAGE = 500
 MAX_LINES = 6
+CUT_AT = re.compile(r"[\s\"'`<>]")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 TEST_NAME = re.compile(r"[A-Za-z0-9_.-]+\.(?:spec|test)\.(?:ts|js|mjs)")
 # Failures of the run itself, not of the app: no browser, no network, out of time.
@@ -150,9 +150,28 @@ def _message(text: str) -> str:
     # Enough of the error (its Expected and Received lines) that two different wrong
     # behaviours don't read the same; never the stack.
     lines = [line.strip() for line in ANSI.sub("", text).split("\n")]
-    kept = [line for line in lines if line and not line.startswith("at ")][:MAX_LINES]
-    # Never empty: an empty message would read as no failure.
-    return cut_whole("\n".join(kept), MAX_MESSAGE) or "(error message too long to show)"
+    kept = "\n".join([line for line in lines if line and not line.startswith("at ")][:MAX_LINES])
+    if len(kept) <= MAX_MESSAGE:
+        return kept
+    # A cut one keeps a digest of the whole, so it is never empty and two messages that differ
+    # only past the cut still differ.
+    digest = hashlib.sha256(kept.encode("utf-8")).hexdigest()[:16]
+    return f"{_cut_whole(kept, MAX_MESSAGE - 32)}... (sha256 {digest})"
+
+
+def _cut_whole(text: str, limit: int) -> str:
+    # drafts.cut_whole's rule, copied: this script is fetched and run on its own.
+    # Cut before a space, quote or angle bracket, which no host, URL or token holds, so
+    # none is left as a prefix; a run with none of them before the limit is dropped whole.
+    return text[:max((m.start() for m in CUT_AT.finditer(text, 0, limit + 1)), default=0)]
+
+
+def _failed(raw: str) -> dict:
+    """A failing test's result: not run when the run itself broke, read before any cut."""
+    message = _message(raw)
+    if NOT_THE_APP.search(ANSI.sub("", raw)):
+        return {"result": f"not run: {message.split(chr(10))[0]}"}
+    return {"result": "fail", "step": 1, "message": message}
 
 
 def _first_failure(suites: list) -> str | None:
@@ -170,7 +189,7 @@ def _first_failure(suites: list) -> str | None:
                     if isinstance(result, dict) and result.get("status") not in (
                             "passed", "skipped"):
                         error = result.get("error") or {}
-                        return _message(str(error.get("message") or result.get("status")))
+                        return str(error.get("message") or result.get("status"))
         found = _first_failure(suite.get("suites"))
         if found:
             return found
@@ -302,10 +321,8 @@ def run(copy: Path, test: str, base: str) -> dict:
     except (OSError, UnicodeDecodeError, ValueError):
         return {"result": f"not run: playwright wrote no report (exit {exit_code})"}
     failure = _first_failure(data.get("suites") if isinstance(data, dict) else None)
-    if failure and NOT_THE_APP.search(failure):
-        return {"result": f"not run: {failure.split(chr(10))[0]}"}
     if failure:
-        return {"result": "fail", "step": 1, "message": failure}
+        return _failed(failure)
     stats = data.get("stats") if isinstance(data, dict) else None
     if not isinstance(stats, dict) or not stats.get("expected"):
         return {"result": "not run: no test ran"}

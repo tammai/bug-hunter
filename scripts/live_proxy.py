@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, quote_plus, unquote, urlsplit
 
-from drafts import _host_patterns, _link_pattern, drafts_dir
+from drafts import _host, _host_patterns, _link_pattern, drafts_dir
 from stub_server import _redact_body, _redact_query
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -361,22 +361,24 @@ def _masker(target: dict, proxy_url: str, others: tuple = ()):
     links, hosts = [], []
     for i, (chosen, _) in enumerate(pairs):
         base = urlsplit(chosen["url"])
-        size = len(base.hostname or "")
+        size = len(_host(base))
         links.append((size, f"(?P<link{i}>{_link_pattern(base, LOCAL_HOSTS)})"))
         hosts += [(size, p) for p in _host_patterns(base, LOCAL_HOSTS)]
     ordered = [p for _, p in sorted(links, key=lambda x: -x[0])] + \
         [p for _, p in sorted(hosts, key=lambda x: -x[0])]
-    address = re.compile("|".join(ordered).encode("utf-8"), re.I)
-    listeners = [url.encode() for _, url in pairs]
+    # Run on text exactly as the scan runs them (str, Unicode case folding: ſ, K), with bytes
+    # that aren't UTF-8 kept as they are through surrogateescape.
+    address = re.compile("|".join(ordered), re.I)
 
-    def place(match: re.Match) -> bytes:
-        return next((listeners[i] for i in range(len(pairs))
-                     if match.group(f"link{i}") is not None), b"<target>")
+    def place(match: re.Match) -> str:
+        return next((url for i, (_, url) in enumerate(pairs)
+                     if match.group(f"link{i}") is not None), "<target>")
 
     def mask(data: bytes) -> bytes:
         if secret:
             data = secret.sub(b"<redacted>", data)
-        return address.sub(place, data)
+        text = address.sub(place, data.decode("utf-8", "surrogateescape"))
+        return text.encode("utf-8", "surrogateescape")
     return mask
 
 

@@ -195,7 +195,7 @@ CREDENTIAL_FIELDS = r"password|passwd|pwd|pass|token|secret|api[_-]?key|key|auth
 PROSE_FIELDS = r"password|passwd|pwd|token|secret|api[_-]?key"
 SESSION_LIKE = re.compile(r"sess|sid|auth|tok|jwt|csrf|xsrf|login|remember|key|secret|pass"
                           r"|cred|bearer|access|refresh|user|account|identity|id\s*$", re.I)
-PROSE_TWO_WORDS =r"(?<![\w-])(?i:api|secret|access)\s++(?i:key|token)(?![\w-])"
+PROSE_TWO_WORDS = r"(?<![\w-])(?i:api|secret|access)\s++(?i:key|token)(?![\w-])"
 # Where a name starts or ends inside an identifier: its edge, `_`/`-`, or a camelCase hump.
 SEGMENT_START = r"(?:(?<![\w-])|(?<=[_-])|(?<=[a-z0-9])(?=[A-Z]))"
 SEGMENT_END = r"(?=[_-]|(?<=[a-z0-9])[A-Z]|[^\w-]|\Z)"
@@ -213,7 +213,9 @@ def _holds_login(text: str, account: str, headers: dict, url: str) -> bool:
     cookies = [(c.partition("=")[0], c.partition("=")[2].strip())
                for h, v in headers.items() if h.lower() == "cookie" for c in v.split(";")
                if "=" in c]
-    plain = {v for n, v in cookies if not SESSION_LIKE.search(n) and WORDLIKE.fullmatch(v)}
+    # Word-shaped: up to one rare pair (desktop's "kt"), where a random value has several.
+    plain = {v for n, v in cookies if not SESSION_LIKE.search(n) and WORDLIKE.fullmatch(v)
+             and len(v) <= WORDLIKE_MAX and _rare_pairs(v) <= 1}
     plain = {p for p in plain - _whole_values(headers) - {v for n, v in cookies
                                                           if SESSION_LIKE.search(n)}
              if len(p) >= 6}
@@ -247,17 +249,18 @@ def _holds_login(text: str, account: str, headers: dict, url: str) -> bool:
     name = named(context)
     prose = named("|".join([*(re.escape(n) for n in names if n), PROSE_FIELDS]))
     # After the punctuation, one `value` key or element may stand between (name="password"
-    # value="…", "name":"token","value":"…", <password><value>…); in prose, "is" or "was"
-    # (the password is: …, the token value was …, the API key is …).
-    # Up to three other attributes or keys may stand before that `value` (name="password"
+    # value="…", "name":"token","value":"…", <password><value>…), then at most one `[` and
+    # one quote, so an empty value ("") is never crossed; in prose, "is" or "was" (the
+    # password is: …, the token value was **…**), then anything but a sentence or line end.
+    # Up to three other quoted attributes or keys may stand beside that `value` (name="password"
     # type="text" value="…"); bounded, so a hostile run of them stays linear.
     punct = r"[^\w\s]\W*+"
     attr = (r"[\w-]++[\"']?\s*+[:=]\s*+(?:\"[^\"\n]{0,256}+\"|'[^'\n]{0,256}+')"
             r"[\s,]*+[\"']?")
     field = (rf"(?:{name}\s*+{punct}(?:(?:{attr}){{0,3}}(?i:value)[\"']?\s*+[:=>]"
-             rf"[\s\"'\[]*+)?|(?=-){name}\s++"
+             rf"\s*+(?:\[\s*+)?[\"']?)?|(?=-){name}\s++"
              rf"|(?:{prose}|{PROSE_TWO_WORDS})\s++(?:(?i:value)\s++)?(?i:is|was)(?![\w-])"
-             rf"[ \t:\"'`—]*+)"
+             rf"[^\w\n.!?;]*+)"
              rf"{f'(?:{scheme})?' if scheme else ''}")
     before = f"(?:{field}|\\b{scheme})" if scheme else field
     word = "|".join(map(re.escape, words))
@@ -265,8 +268,8 @@ def _holds_login(text: str, account: str, headers: dict, url: str) -> bool:
         return True
     # The `value` key first: value="…" name="password", {"value":"…","name":"token"}.
     return re.search(rf"(?<![\w-])(?i:value)[\"']?\s*+[:=]\s*+[\"']?(?i:{word})(?![\w-])"
-                     rf"[\"']?[\s,]*+[\"']?(?i:name)[\"']?\s*+[:=]\s*+[\"']?{name}",
-                     text) is not None
+                     rf"[\"']?[\s,]*+[\"']?(?:{attr}){{0,3}}(?i:name)[\"']?\s*+[:=]\s*+[\"']?"
+                     rf"{name}", text) is not None
 
 
 def _whole_values(headers: dict) -> set[str]:
@@ -292,8 +295,12 @@ def cut_whole(text: str, limit: int) -> str:
 
 
 def _reads_as_word(piece: str) -> bool:
+    return _rare_pairs(piece) == 0
+
+
+def _rare_pairs(piece: str) -> int:
     letters = piece.rstrip("0123456789").lower()
-    return not any(letters[i:i + 2] in RARE_PAIRS for i in range(len(letters) - 1))
+    return sum(letters[i:i + 2] in RARE_PAIRS for i in range(len(letters) - 1))
 
 
 def _spellings(text: str) -> set[str]:
@@ -321,8 +328,10 @@ def _json_unescaped(text: str) -> str:
 DEFAULT_PORTS = {"http": 80, "ws": 80, "https": 443, "wss": 443}
 # An IPv6 spelling ends where no longer address goes on: not before a letter, digit or `_`,
 # nor before `:` and another group (2001:db8::1:5, std::vector); "2001:db8::1: timeout" counts.
-V6_END = r"(?!\w|:[\w:])"
-ZONE = r"(?:%[\w.~-]*+)?"
+# ASCII only: a letter of another script after it (fd00::1失败) is not part of an address.
+V6_END = r"(?![0-9A-Za-z_]|:[0-9A-Za-z_:])"
+# Anything up to the bracket, bounded so a hostile run of "[::1%" stays linear.
+ZONE = r"(?:%[^\]\s]{0,64}+)?"
 
 
 def _host(url) -> str:
@@ -369,10 +378,11 @@ def _host_patterns(url, local_hosts: set[str]) -> list[str]:
     host, port = _host(url), url.port
     # A URL's host position, with any user@. The scheme starts only where its run of scheme
     # characters starts, so a long run of letters stays linear.
-    def at(schemes: str) -> str:
-        # Also behind a +-joined prefix (git+http://).
-        return rf"(?<![a-z0-9+.-])(?:[a-z0-9.-]*+\+)*+{schemes}://(?:[^\s/@]*@)?"
-    scheme = at(r"[a-z0-9+.-]++")
+    # The run is matched whole and its end checked, so scheme characters glued before it
+    # (git+http://, ...http://, -http://, an undecoded \057) never hide the URL.
+    def at(ends: str = "") -> str:
+        return rf"(?<![a-z0-9+.-])[a-z0-9+.-]++{ends}://(?:[^\s/@]*@)?"
+    scheme = at()
     if host in local_hosts:
         # Any loopback spelling with exactly the target's port, the scheme's default when the
         # URL names none; a bare "localhost" gives nothing away.
@@ -382,7 +392,8 @@ def _host_patterns(url, local_hosts: set[str]) -> list[str]:
             return [rf"{scheme}{alias}(?![\w.-]|:\d)"]
         # A URL leaves out its own scheme's default port, whatever the target's scheme is.
         found = [rf"{alias}{_port(port)}"]
-        prefix = {80: at("(?:http|ws)"), 443: at("(?:https|wss)")}.get(port)
+        prefix = {80: at("(?:(?<=http)|(?<=ws))"),
+                  443: at("(?:(?<=https)|(?<=wss))")}.get(port)
         if prefix:
             found.append(rf"{prefix}{alias}(?![\w.-]|:\d)")
         return found
@@ -392,6 +403,8 @@ def _host_patterns(url, local_hosts: set[str]) -> list[str]:
         return [rf"(?<!0){_octets(address)}(?!\d)", _ipv6_pattern(mapped) + V6_END]
     if address:  # every IPv6 spelling: compressed or not, zero-padded, with a dotted tail
         found = [_ipv6_pattern(address) + V6_END]
+        if url.port:  # its port written after it unbracketed (2001:db8::1:8080)
+            found.append(_ipv6_pattern(address) + _port(url.port))
         if address.ipv4_mapped:
             port = f":{url.port}" if url.port else ""
             found += _host_patterns(urlsplit(f"{url.scheme}://{address.ipv4_mapped}{port}"),
@@ -430,7 +443,9 @@ def _link_pattern(url, local_hosts: set[str]) -> str:
         tail = _port(port)
     else:
         tail = (rf"(?:{_port(default)})?" if default else "") + r"(?![\w.-]|:\d)"
-    return rf"(?<![a-z0-9+.-]){re.escape(url.scheme)}://{spelled}{tail}"
+    # Not where userinfo follows: in http://uat.acme.test@evil.test/ the host is evil.test.
+    return (rf"(?<![a-z0-9+.-]){re.escape(url.scheme)}://{spelled}{tail}"
+            r"(?![^\s/?#@]{0,256}+@)")
 
 
 def _ipv6_pattern(address: ipaddress.IPv6Address) -> str:

@@ -383,7 +383,7 @@ def test_masks_every_form_of_an_account_value():
         assert form not in out and "<redacted>" in out, form
 
 
-def test_masks_hosts_only_where_they_stand_alone():
+def test_masks_hosts_with_the_scans_patterns_and_plain_names_only_with_a_port():
     from live_proxy import _masker
     short = _masker({"url": "https://uat:8443/base", "accounts": {}}, "http://127.0.0.1:9")
     text = b"/actuator /api/orders https://uat:8443/x uat:8443/y"
