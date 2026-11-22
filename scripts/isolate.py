@@ -25,6 +25,9 @@ ALWAYS_UNSET = [
     "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "JAVA_OPTS", "MAVEN_OPTS", "MAVEN_ARGS", "GRADLE_OPTS",
     "MAVEN_CONFIG", "NODE_OPTIONS", "MISE_GLOBAL_CONFIG_FILE",
 ]
+# git reads config from these as well as from files, so an owner's credential helper or SSH
+# command would survive the config files being hidden.
+GIT_CONFIG_VARS = re.compile(r"GIT_CONFIG_(?:PARAMETERS|COUNT|KEY_[0-9]+|VALUE_[0-9]+)")
 JVM_OPTION_VARS = ["JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "JAVA_OPTS",
                    "MAVEN_OPTS", "GRADLE_OPTS"]
 # Proxy routing survives the JVM option variables being dropped, so Maven and Gradle still
@@ -215,7 +218,7 @@ def _plan(scratch: Path, env: dict[str, str],
     }
     secrets = {k for k in env if SECRET_NAME.search(k)}
     respelled = {k for k in env if fold(k) in exported and k not in exports}
-    named = {k for k in env if fold(k) in always}
+    named = {k for k in env if fold(k) in always or GIT_CONFIG_VARS.fullmatch(fold(k))}
     unset = {
         k for k in (*ALWAYS_UNSET, *named, *into_home, *secrets, *respelled)
         if (k in respelled or fold(k) not in exported) and re.fullmatch(r"[A-Za-z_]\w*", k)
