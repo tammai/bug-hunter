@@ -1,9 +1,8 @@
 import json
 import os
-import shutil
 from pathlib import Path
 
-from conftest import run_script
+from conftest import rmtree, run_script
 
 GOOD = """# Sort puts B10 before B2
 
@@ -38,7 +37,7 @@ def test_dir_is_outside_target_named_after_origin(make_repo, fake_gh, tmp_path):
         want = home / ".bug-hunter" / "github.com" / "tammai" / "sdlc" / "drafts"
         assert result.stdout.strip() == str(want)
         assert str(repo) not in result.stdout
-        shutil.rmtree(repo)
+        rmtree(repo)
 
     repo = make_repo({"a.py": ""})
     result = run_script("drafts", "dir", repo, env=env)
@@ -109,14 +108,14 @@ def test_dir_names_never_collide_or_escape(make_repo, fake_gh):
         result = run_script("drafts", "dir", repo, env=env)
         assert result.returncode == 0, result.stderr
         seen.add(result.stdout.strip())
-        shutil.rmtree(repo)
+        rmtree(repo)
     assert len(seen) == 4
 
     for origin in ("git@github.com:../../etc.git", "https://github.com/a/./b"):
         repo = make_repo({"a.py": ""}, origin=origin)
         result = run_script("drafts", "dir", repo, env=env)
         assert result.returncode == 1 and "Traceback" not in result.stderr
-        shutil.rmtree(repo)
+        rmtree(repo)
 
     repo = make_repo({"a.py": ""})
     no_git = {**env, "PATH": str(Path(env["HOME"]) / "no bin")}

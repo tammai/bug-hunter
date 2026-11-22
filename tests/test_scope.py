@@ -1,8 +1,7 @@
 import json
-import shutil
 import subprocess
 
-from conftest import run_script
+from conftest import rmtree, run_script
 
 FILES = {
     "src/cli.py": "",
@@ -142,9 +141,10 @@ def test_skips_names_that_are_not_utf8(make_repo):
     blob = subprocess.run(
         ["git", "hash-object", "-w", "--stdin"], cwd=repo, input=b"", capture_output=True
     ).stdout.decode().strip()
+    # Through stdin: a Windows command line can't carry non-UTF-8 bytes.
     subprocess.run(
-        [b"git", b"update-index", b"--add", b"--cacheinfo",
-         f"100644,{blob},".encode() + b"bad\xff.py"],
+        ["git", "update-index", "--index-info"],
+        input=f"100644 {blob}\t".encode() + b"bad\xff.py\n",
         cwd=repo, check=True, capture_output=True,
     )
     result, out = scope(repo)
@@ -171,7 +171,7 @@ def test_live_keeps_only_parts_serving_http(make_repo):
     assert "lib" in {p["dir"] for p in plain["parts"]}
     assert all("live-http" not in p["edge_inputs"] for p in plain["parts"])
 
-    shutil.rmtree(repo)
+    rmtree(repo)
     none = make_repo({"lib/util.py": "def total(items):\n    return sum(items)\n"})
     result = run_script("scope", none, "--live")
     assert result.returncode == 1 and result.stderr.startswith("error:")

@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 from conftest import run_script
@@ -97,7 +98,7 @@ def test_no_lockfile_means_no_installs(make_repo):
 
 
 def test_install_steps_are_exact_and_unsafe_folders_get_none(make_repo):
-    repo = make_repo({
+    files = {
         "src/a.js": "",
         "web app/package-lock.json": "",
         "café/go.sum": "",
@@ -113,7 +114,13 @@ def test_install_steps_are_exact_and_unsafe_folders_get_none(make_repo):
         "dup/bun.lockb": "",
         "mw/mvnw": "",
         "mw/pom.xml": "",
-    })
+    }
+    unsafe = 6
+    if os.name == "nt":
+        # Windows forbids " in names and reads \ as a folder separator.
+        del files['b"q/yarn.lock'], files["d\\e/uv.lock"]
+        unsafe = 4
+    repo = make_repo(files)
     result = run_script("scope", repo)
     assert result.returncode == 0, result.stderr
     installs = json.loads(result.stdout)["installs"]
@@ -123,7 +130,7 @@ def test_install_steps_are_exact_and_unsafe_folders_get_none(make_repo):
         ("mw", "(cd 'mw' && ./mvnw -B -q dependency:go-offline)"),
         ("web app", "(cd 'web app' && npm ci --ignore-scripts)"),
     ]
-    assert result.stderr.count("unsafe folder name") == 6
+    assert result.stderr.count("unsafe folder name") == unsafe
     assert not (repo / "pwned").exists()
 
 

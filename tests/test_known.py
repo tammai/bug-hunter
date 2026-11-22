@@ -8,7 +8,7 @@ def test_lists_open_issues_and_earlier_drafts(make_repo, fake_gh, tmp_path):
     env, calls = fake_gh
     drafts = tmp_path / "drafts dir"
     drafts.mkdir()
-    (drafts / "01.md").write_text("# Crash on CRLF input\r\n\r\n## What happens\r\nx\r\n", "utf-8")
+    (drafts / "01.md").write_bytes(b"# Crash on CRLF input\r\n\r\n## What happens\r\nx\r\n")
     (drafts / "10.md").write_text("# Wrong sort: B10 before B2\n", encoding="utf-8")
     (drafts / "2.md").write_text("no title line\n", encoding="utf-8")
     (drafts / ".DS_Store").write_bytes(b"\x00\x01")

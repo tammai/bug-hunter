@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from conftest import run_script
+from conftest import lock_dir, run_script, unlock_dir
 from test_drafts import GOOD
 
 
@@ -107,11 +107,11 @@ def test_refuses_odd_numbers_duplicates_and_unusable_record(tmp_path, fake_gh):
     assert "Traceback" not in as_dir.stderr
     (drafts / "posted.json").rmdir()
 
-    drafts.chmod(0o555)
+    lock_dir(drafts)
     try:
         locked = run_script("post", drafts, "1", "--label", "bug", env=env)
     finally:
-        drafts.chmod(0o755)
+        unlock_dir(drafts)
     assert locked.returncode == 1 and "writable" in locked.stderr
     assert creates(calls) == []
 
@@ -123,7 +123,7 @@ def test_shows_url_when_recording_fails_after_filing(tmp_path, fake_gh):
     try:
         result = run_script("post", drafts, "1", "2", "--label", "bug", env=env)
     finally:
-        drafts.chmod(0o755)
+        unlock_dir(drafts)
     assert result.returncode == 1
     assert "https://github.com/o/r/issues/1" in result.stdout + result.stderr
     assert "not recorded" in result.stderr and "Traceback" not in result.stderr

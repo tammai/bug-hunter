@@ -4,7 +4,7 @@ import subprocess
 import sys
 
 import pytest
-from conftest import SCRIPTS, commit, git, run_script
+from conftest import SCRIPTS, commit, git, run_script, skip_unless_git_keeps_symlinks
 
 
 def head(repo) -> str:
@@ -39,6 +39,7 @@ def test_copy_is_standalone_and_has_uncommitted_tracked_changes(make_repo, tmp_p
 
 
 def test_refuses_symlinks_out_of_the_copy_and_a_used_dest(make_repo, tmp_path):
+    skip_unless_git_keeps_symlinks(tmp_path / "probe")
     repo = make_repo({"a.py": ""})
     os.symlink("a.py", repo / "inside.py")
     os.symlink(str(tmp_path), repo / "escape")
@@ -118,6 +119,7 @@ def make_base(make_repo, tmp_path):
 
 
 def test_copy_from_a_base_is_independent_and_checked(make_repo, tmp_path):
+    skip_unless_git_keeps_symlinks(tmp_path / "probe")
     repo, base = make_base(make_repo, tmp_path)
     dest = tmp_path / "run ü" / "hunter-1" / "copy"
     result = run_script("throwaway", repo, dest, "--base", base)
@@ -154,6 +156,7 @@ def test_copy_from_a_base_is_independent_and_checked(make_repo, tmp_path):
 
 
 def test_copy_from_a_base_falls_back_when_cp_fails(make_repo, tmp_path):
+    skip_unless_git_keeps_symlinks(tmp_path / "probe")
     repo, base = make_base(make_repo, tmp_path)
     bin_dir = tmp_path / "fake bin"
     bin_dir.mkdir()

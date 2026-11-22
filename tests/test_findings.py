@@ -1,10 +1,9 @@
 import json
 import os
-import stat
 from pathlib import Path
 
 import pytest
-from conftest import run_script
+from conftest import mode_is, run_script
 
 AWS = "AKIA" + "Q" * 16
 
@@ -146,7 +145,7 @@ def test_audit_folder_and_numbering(make_repo, fake_gh, tmp_path):
     assert result.returncode == 0, result.stderr
     audit = Path(result.stdout.strip())
     assert audit == Path(env["HOME"]) / ".bug-hunter/github.com/acme/shop/audit"
-    assert audit.is_dir() and stat.S_IMODE(audit.stat().st_mode) == 0o700
+    assert audit.is_dir() and mode_is(audit, 0o700)
 
     for name in ("01.md", "09.md", "REPORT.md", ".DS_Store"):
         (audit / name).write_text("x", encoding="utf-8")
@@ -192,7 +191,7 @@ def test_script_outputs_become_findings(tmp_path):
     texts = {f.name: f.read_text(encoding="utf-8") for f in files}
     for name, text in texts.items():
         assert run_script("findings", "check", out / name).returncode == 0, (name, text)
-        assert stat.S_IMODE((out / name).stat().st_mode) == 0o600
+        assert mode_is(out / name, 0o600)
     joined = "\n".join(texts.values())
     assert "**Severity:** critical" in joined and "**Category:** secrets" in joined
     assert "CWE-798" in joined and "CWE-1321" in joined and "CWE-400" in joined
@@ -250,7 +249,7 @@ def test_report_and_inventory(tmp_path):
     result = run_script("findings", "report", audit, "--meta", meta, "--scope", scope)
     assert result.returncode == 0, result.stderr
     report = (audit / "REPORT.md").read_text(encoding="utf-8")
-    assert stat.S_IMODE((audit / "REPORT.md").stat().st_mode) == 0o600
+    assert mode_is(audit / "REPORT.md", 0o600)
     assert report.index("Admin route open") < report.index("Any user can read")
     assert "| 02 | critical |" in report and "traced" in report
     assert "critical: 1" in report and "medium: 1" in report and "authz: 2" in report
@@ -339,7 +338,7 @@ def test_known_secrets_are_withheld_and_code_is_not(make_repo, tmp_path):
     raw = prints.read_text(encoding="utf-8")
     for value in (letters, jwt, dotted, json_key, short):
         assert value not in raw and value[:8] not in raw
-    assert stat.S_IMODE(prints.stat().st_mode) == 0o600
+    assert mode_is(prints, 0o600)
 
     leaks = (f"DB_PASSWORD={letters}", f"- reason: config has {letters}",
              f'"api_key": "{json_key}"',
@@ -703,7 +702,7 @@ def test_accepted_findings_expire_and_bad_lines_accept_nothing(tmp_path):
     scope, meta, recheck = clean_facts(tmp_path)
     audit = audit_with(tmp_path, GOOD, GOOD.replace("# Any user", "# Admin open"), MEDIUM)
     accepted = audit.parent / "accepted.md"
-    accepted.write_text(
+    accepted.write_bytes((
         "# Accepted\n\n"
         "- 01 until 2999-12-31: fixing in sprint 4\n"
         "- 02 until 2000-01-01: was fine last year\r\n"
@@ -713,7 +712,7 @@ def test_accepted_findings_expire_and_bad_lines_accept_nothing(tmp_path):
         "- 03 rotated: not a secret\n"
         "- ０３ until 2999-12-31: fullwidth digits\n"
         "- 99999999999999999999 until 2999-12-31: huge\n"
-        "- 03 until 9999-99-99: impossible date\n", encoding="utf-8")
+        "- 03 until 9999-99-99: impossible date\n").encode())
     report = report_for(tmp_path, audit, scope, meta, recheck)
     top = report.split("## Findings")[0]
     assert verdict(report) == "## Verdict: Blocked"
@@ -773,7 +772,7 @@ def test_scripted_findings_fixed_when_gone_but_committed_secrets_need_rotation(t
         assert not (audit / f"{n}.md").exists()
         moved = (audit / "fixed" / f"{n}.md").read_text(encoding="utf-8")
         assert TODAY in moved.splitlines()[-1] and "no longer" in moved.splitlines()[-1]
-        assert stat.S_IMODE((audit / "fixed" / f"{n}.md").stat().st_mode) == 0o600
+        assert mode_is(audit / "fixed" / f"{n}.md", 0o600)
     assert (audit / "03.md").exists() and (audit / "04.md").exists()
     assert run_script("findings", "next", audit).stdout.strip() == "05"
 
@@ -832,7 +831,7 @@ def test_findings_keep_their_number_when_code_moves(tmp_path, make_repo):
         ids.append(item["id"])
         assert value not in scan.stdout and value[8:20] not in scan.stdout
     assert ids[0] == ids[1] != ids[2]
-    assert stat.S_IMODE(key.stat().st_mode) == 0o600
+    assert mode_is(key, 0o600)
     import hashlib
     assert ids[0] not in hashlib.sha256(value.encode()).hexdigest()
 
@@ -899,7 +898,7 @@ def test_worth_a_look_lists_unconfirmed_without_blocking(tmp_path):
     kept = sorted(p.name for p in (audit / "unconfirmed").iterdir())
     assert kept == ["agent-1.md", "agent-2.md"]
     for name in kept:
-        assert stat.S_IMODE((audit / "unconfirmed" / name).stat().st_mode) == 0o600
+        assert mode_is(audit / "unconfirmed" / name, 0o600)
     assert run_script("findings", "next", audit).stdout.strip() == "01"
 
     report = report_for(tmp_path, audit, scope, meta, recheck_)
