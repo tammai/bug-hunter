@@ -66,7 +66,9 @@ Every baseline row is a fixture problem, not a product one. While they stay red 
 - `post.py` spinning on a locked drafts folder on Windows with Python 3.12 (`tempfile` retries `mkstemp` 2**31 times): a product ticket.
 
 - Removing the baseline rows (after the first green Windows run) and editing `docs/sdlc/todo.md`.
-- Product code under `scripts/`.
+- Product code under `scripts/`, except two real Windows bugs the first `windows-latest` run (actions run 45018336646) exposed once the fixtures stopped hiding them:
+  - `post.py` was the only script that didn't switch stdout and stderr to UTF-8, so on Windows it wrote `ü` and `²` in the ANSI code page and the caller, reading UTF-8, lost its stderr. It now does what every other script does.
+  - `throwaway.py` couldn't remove a copy it had cloned and then refused (escaping symlinks, a failed seal), because git leaves its object files read-only on Windows, so the refusal turned into "couldn't copy: Access is denied". Its removals now go through `_rmtree`, which clears the read-only flag and retries. It never acts on a link, and only runs on a folder this script just made, so nothing else can be running in it.
 
 ## Review
 
