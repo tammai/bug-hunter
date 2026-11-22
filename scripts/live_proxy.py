@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, quote_plus, unquote, urlsplit
@@ -44,7 +45,9 @@ BROWSER_FAMILIES = ("sec-fetch-", "sec-ch-", "sec-websocket-")
 MAX_DECODES = 10
 # A segment whose name, up to `;`, `?` or `#`, is only dots and whitespace.
 DOT_SEGMENT = re.compile(r"(?:^|[/\\])\.[.\s]*(?:[;?#/\\]|$)")
-UNICODE_ESCAPE = re.compile(r"%u[0-9a-f]{4}", re.I)  # IIS-style `%u002e`
+# IIS-style `%u002e`, and `%c0`/`%c1`, which start only overlong UTF-8 (`%c0%ae` is a dot to
+# a lenient decoder) and never a valid character.
+UNSAFE_ESCAPE = re.compile(r"%u[0-9a-f]{4}|%c[01]", re.I)
 MAX_BODY = 50 * 1024 * 1024
 HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 # Drafts write an account as "$<NAME>_AUTH", so its name must be a shell variable name.
@@ -271,7 +274,9 @@ def _leaves_base(path: str) -> bool:
         return True
     current = path.split("?", 1)[0]
     for _ in range(MAX_DECODES):
-        if DOT_SEGMENT.search(current) or UNICODE_ESCAPE.search(current):
+        # NFKC: a fullwidth `．` is a dot to a server that normalizes.
+        if DOT_SEGMENT.search(unicodedata.normalize("NFKC", current)) \
+                or UNSAFE_ESCAPE.search(current) or "\x00" in current:
             return True
         decoded = unquote(current)
         if decoded == current:

@@ -191,6 +191,75 @@ def test_deeply_nested_json_is_one_error_line(tmp_path):
         assert result.stderr.count("\n") == 1 and "Traceback" not in result.stderr
 
 
+def test_a_deeply_nested_registry_is_one_error_line(make_repo, tmp_path):
+    spec = spec_with(tmp_path / "s", "- match: " + "[" * 600 + "]" * 600 + "\n")
+    checked = run_script("finding_v1", "departures", "--oracle", spec)
+    got = classify_departure_draft(tmp_path, spec)
+    out, wrote = write_departure_draft(make_repo, tmp_path, spec)
+    for result in (checked, got, wrote):
+        assert result.returncode == 1 and result.stderr.startswith("error:"), result.stderr
+        assert result.stderr.count("\n") == 1 and "Traceback" not in result.stderr
+        assert "departures.yaml" in result.stderr
+
+
+@pytest.mark.parametrize("rule", ["x\\nerror: forged", "x\\e[31mred", "x\\u202eevil",
+                                  "x" * 2000])
+def test_registry_text_in_an_error_is_escaped_and_bounded(tmp_path, rule):
+    registry = DECIDED.replace("regex:^TSK-\\\\d{4}$", rule)
+    got = run_script("finding_v1", "departures", "--oracle",
+                     spec_with(tmp_path, registry))
+    assert got.returncode == 1 and got.stderr.startswith("error:"), got.stderr
+    assert got.stderr.count("\n") == 1, got.stderr
+    assert "\x1b" not in got.stderr and "‮" not in got.stderr, got.stderr
+    assert len(got.stderr) <= 600, len(got.stderr)
+
+
+@pytest.mark.parametrize("registry", [
+    # check_id echoes a criteria item; the schema's `$` lets a trailing newline through.
+    DECIDED + '  criteria: ["F-TSK-01.AC1\\n\\u001b[31merror: forged"]\n',
+    DECIDED + '  criteria: ["F-TSK-01.AC' + "1" * 3000 + 'x"]\n',
+    # YamlError names the character after an unknown escape.
+    DECIDED.replace("padded keys", '"padded \\\x1b[31m keys"'),
+    DECIDED.replace("padded keys", '"padded \\x1b[31m\\u202e keys"') + "  criteria: [x]\n",
+])
+def test_every_registry_source_in_an_error_is_escaped(tmp_path, registry):
+    got = run_script("finding_v1", "departures", "--oracle", spec_with(tmp_path, registry))
+    assert got.returncode == 1 and got.stderr.startswith("error:"), got.stderr
+    assert got.stderr.count("\n") == 1, got.stderr
+    assert "\x1b" not in got.stderr and "‮" not in got.stderr, got.stderr
+    assert len(got.stderr) <= 600, len(got.stderr)
+
+
+def test_an_oracle_that_is_not_a_folder_is_one_error_line(make_repo, tmp_path):
+    spec = tmp_path / "spec.txt"
+    spec.write_text("not a folder", encoding="utf-8")
+    checked = run_script("finding_v1", "departures", "--oracle", spec)
+    got = classify_departure_draft(tmp_path, spec)
+    out, wrote = write_departure_draft(make_repo, tmp_path, spec)
+    for result in (checked, got, wrote):
+        assert result.returncode == 1 and result.stderr.startswith("error:"), result.stderr
+        assert result.stderr.count("\n") == 1 and "--oracle" in result.stderr, result.stderr
+    assert not out.exists()
+
+
+def test_a_draft_repro_error_is_escaped(tmp_path):
+    draft = tmp_path / "departure.md"
+    text = (PAIR / "drafts" / "departure.md").read_text(encoding="utf-8")
+    draft.write_text(text.replace('"method": "POST"', '"method": "PO\\u001b[31mST\\nerror: x"'),
+                     encoding="utf-8")
+    got = run_script("finding_v1", "render", "--draft", draft)
+    assert got.returncode == 1 and got.stderr.startswith("error:"), got.stderr
+    assert got.stderr.count("\n") == 1 and "\x1b" not in got.stderr, got.stderr
+
+
+def test_a_check_matches_when_either_equals_or_rule_fails():
+    from finding_v1 import matching_departure
+
+    both = {"runner": "http", "steps": [{**STEPS[0], "expect": {"status": 201, "json": [
+        {"pointer": "/key", "equals": "TSK-0003", "rule": "regex:^TSK-[1-9][0-9]*$"}]}}]}
+    assert matching_departure([D1], both, KEY_FAIL) == "D-001"
+
+
 def test_registry_with_an_equivalence_trace_is_read_and_never_matches(tmp_path):
     # product-rebuild's equiv.py writes this entry when a person accepts a red equivalence trace.
     trace = ('- id: D-002\n  kind: deliberate-change\n  summary: accepted trace\n'

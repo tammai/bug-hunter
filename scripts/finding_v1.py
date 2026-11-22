@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -119,6 +120,15 @@ def result_problem(result) -> str | None:
             return None
     return ('not {"result": "pass"}, {"result": "fail", "step": n, "message": …, '
             'optionally "check": {"pointer": …, "value": …}} or {"result": "not run: …"}')
+
+
+def _printable(text: str) -> str:
+    """Text safe as one terminal line: control and format characters escaped, length bounded."""
+    # Registry, draft and target text reach error lines; a newline would forge another line,
+    # an escape sequence or bidi override would rewrite what the reader sees.
+    out = "".join(c if c.isprintable() and unicodedata.category(c) != "Cf"
+                  else c.encode("unicode_escape").decode("ascii") for c in text)
+    return out if len(out) <= MAX_MESSAGE else out[:MAX_MESSAGE - 3] + "..."
 
 
 def _check_ok(check) -> bool:
@@ -457,18 +467,23 @@ def load_departures(spec: Path) -> list[dict]:
         data = contracts.parse_yaml(text)
     except ValueError as exc:  # YamlError
         raise BadDraft(f"{REGISTRY}: {exc}") from None
+    except RecursionError:
+        raise BadDraft(f"{REGISTRY} is nested too deeply to read") from None
     # Before contracts' checks, whose messages quote the ID: a bad one is never echoed.
     if isinstance(data, list) and any(
             isinstance(entry, dict) and isinstance(entry.get("id"), str)
             and not DEPARTURE_ID.fullmatch(entry["id"]) for entry in data):
         raise BadDraft(f"{REGISTRY}: a departure ID is not D- and 3 to "
                        f"{len(str(MAX_NUMBER))} digits")
-    issues = contracts.check_departures(data)
+    try:
+        issues = contracts.check_departures(data)
+    except RecursionError:
+        raise BadDraft(f"{REGISTRY} is nested too deeply to read") from None
     errors = [m for s, m in issues if s == "error"]
     if errors:
         raise BadDraft(f"{REGISTRY}: {errors[0]}")
     for message in (m for s, m in issues if s == "blocked"):
-        print(f"warning: {REGISTRY}: {message}", file=sys.stderr)
+        print(f"warning: {REGISTRY}: {_printable(message)}", file=sys.stderr)
     return data
 
 
@@ -506,8 +521,8 @@ def _in_scope(entry: dict, criterion: str | None) -> bool:
 
 def _fails(check: dict, value) -> bool:
     """Whether `value` fails this check; a `same-as:` rule needs captures, so never proven."""
-    if "equals" in check:
-        return not contracts._same(value, check["equals"])
+    if "equals" in check and not contracts._same(value, check["equals"]):
+        return True
     rule = str(check.get("rule", ""))
     return bool(rule) and not rule.startswith("same-as:") \
         and not contracts._rule_ok(rule, value, {})
@@ -665,6 +680,9 @@ def _main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         results = None
+        oracle = getattr(args, "oracle", None)
+        if oracle is not None and not oracle.is_dir():
+            raise BadDraft("--oracle is not a folder; give the spec folder")
         if args.command in ("write", "classify"):
             if args.command == "classify" and not (args.rebuild and args.reference):
                 raise BadDraft("classify needs --rebuild and --reference")
@@ -685,7 +703,7 @@ def _main(argv: list[str] | None = None) -> int:
             except ValueError:
                 port = -1
             if port == -1:
-                raise BadDraft("--base is not a URL with a valid host and port")
+                raise BadDraft("--base can't be parsed as a URL: its host or port is malformed")
             steps = repro_steps(_sections(args.draft.read_text(encoding="utf-8")))
             if not is_http(steps):
                 raise BadDraft("replay runs an HTTP repro (a list of C4 steps); "
@@ -706,10 +724,12 @@ def _main(argv: list[str] | None = None) -> int:
                 raise BadDraft(str(exc)) from None
             print(write(args.repo, args.out, args.draft, args.oracle, results, targets))
     except BadDraft as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {_printable(str(exc))}", file=sys.stderr)
         return 1
     except (OSError, UnicodeDecodeError) as exc:
-        print(f"error: cannot {args.command} the draft: {type(exc).__name__}: {exc}",
+        what = "check the registry" if args.command == "departures" \
+            else f"{args.command} the draft"
+        print(f"error: cannot {what}: {_printable(f'{type(exc).__name__}: {exc}')}",
               file=sys.stderr)
         return 1
     return 0
