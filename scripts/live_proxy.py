@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, quote_plus, unquote, urlsplit
 
-from drafts import drafts_dir
+from drafts import _host, _host_patterns, _link_pattern, drafts_dir
 from stub_server import _redact_body, _redact_query
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -354,34 +354,31 @@ def _masker(target: dict, proxy_url: str, others: tuple = ()):
             pass
     secret = re.compile(b"|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))
                         ) if forms else None
-    # Each target's address goes to its own listener, so links an agent follows still work;
-    # not where it continues as a longer host name (uat.acme.test.evil).
-    urls: dict[bytes, bytes] = {}
-    hosts: list[str] = []
-    for chosen, url in pairs:
+    # The leak scan's own address patterns, so an agent never sees a spelling the scan would
+    # refuse in a finding. A link to a target goes to its own listener, so links an agent
+    # follows still work; any other spelling is hidden. Links come first, then hosts longest
+    # first, in one pass, so no target's match cuts another's or a listener URL put in.
+    links, hosts = [], []
+    for i, (chosen, _) in enumerate(pairs):
         base = urlsplit(chosen["url"])
-        urls.setdefault(f"{base.scheme}://{base.netloc}".encode().lower(), url.encode())
-        # A bare host is masked only where it stands alone, and a plain name ("uat") only with
-        # its port: on its own it would mangle words like /actuator.
-        if ":" in base.netloc or "." in base.netloc:
-            hosts.append(base.netloc)
-        if base.hostname not in LOCAL_HOSTS and ("." in base.hostname or ":" in base.hostname):
-            hosts.append(base.hostname)
-    address = re.compile(b"(?:" + b"|".join(re.escape(a) for a in sorted(
-        urls, key=len, reverse=True)) + rb")(?![\w-]|\.\w)", re.I)
-    # An IPv6 host must not match inside a longer address, so ":" before it also blocks it;
-    # for other hosts ":" is ordinary punctuation ("Host:uat.acme.test").
-    alternatives = [(rb"(?<![\w.:-])" if h.count(":") > 1 and not h.startswith("[")
-                     else rb"(?<![\w.-])") + re.escape(h).encode() + rb"(?![\w-])"
-                    for h in sorted(dict.fromkeys(hosts), key=len, reverse=True)]
-    host = re.compile(b"|".join(alternatives), re.I) if hosts else None
+        size = len(_host(base))
+        links.append((size, f"(?P<link{i}>{_link_pattern(base, LOCAL_HOSTS)})"))
+        hosts += [(size, p) for p in _host_patterns(base, LOCAL_HOSTS)]
+    ordered = [p for _, p in sorted(links, key=lambda x: -x[0])] + \
+        [p for _, p in sorted(hosts, key=lambda x: -x[0])]
+    # Run on text exactly as the scan runs them (str, Unicode case folding: ſ, K), with bytes
+    # that aren't UTF-8 kept as they are through surrogateescape.
+    address = re.compile("|".join(ordered), re.I)
+
+    def place(match: re.Match) -> str:
+        return next((url for i, (_, url) in enumerate(pairs)
+                     if match.group(f"link{i}") is not None), "<target>")
 
     def mask(data: bytes) -> bytes:
         if secret:
             data = secret.sub(b"<redacted>", data)
-        # bytes.lower() folds ASCII only, as re.I on bytes does, so every match has its key.
-        data = address.sub(lambda m: urls[m.group().lower()], data)
-        return host.sub(b"<target>", data) if host else data
+        text = address.sub(place, data.decode("utf-8", "surrogateescape"))
+        return text.encode("utf-8", "surrogateescape")
     return mask
 
 

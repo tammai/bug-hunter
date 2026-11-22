@@ -20,11 +20,13 @@
   - the all-history numstat walk's cost on large repos (R2-4);
   - the hunter's brief comes from the first criterion's story file only (R2-5);
   - contracts' `check_lock` and `check_criteria` read stories differently (R2-6).
-- [ ] Leak scan (`drafts.leaks`) known limits and tickets, from the follow-up reviews: 2026-11-08-m-review-followups (2026-11-08)
-  - a host or login cut by the 500-character message cap leaves a prefix (C4-8, S-7);
-  - a trailing-dot host;
-  - `_host_patterns` and `live_proxy._masker` are two sources of truth for an address (C4-6); the masker still uses word boundaries, so the scan catches more than it masks;
-  - a spec folder reached by an 8.3 short path skips the link guard; the folder links that `scope._any_matches` doesn't check (S-5);
+- [ ] Leak scan and masker tickets, from the review of docs/sdlc/changes/2026-11-22-m-leak-scan-limits.md (C4-6, C4-8/S-7, trailing dots and S-5 are done there): 2026-11-22-m-leak-scan-limits (2026-11-22)
+  - a response body cut before masking (SR1-5); sibling readers of repo files without the folder-link guard (SR1-6, L3); `..` in a spec path (SR1-7);
+  - placeholders of other accounts, and a non-word login equal to the account name, refused (C3 CR4-3); a newline after "is:" ends the login look (CR4-5);
+  - the non-session cookie rule's residual cases (L-3, SR2-5); a `news://` scheme and a comma after is/was (L-4); `password="" member` with no value key;
+  - browser's `startswith("at ")` stack filter;
+  - a 9-group IPv6 followed by another port (SR3-5); `::` and 127/8 beyond 127.0.0.1 as loopback (SR4-3); some ordinary links masked, not routed (SR4-4); tab, LF or CR end the userinfo look (SR4-5);
+  - unquoted HTML attributes between a login's name and value.
 - [ ] Part 3 review tickets, in docs/sdlc/changes/2026-11-08-m-reference-classify.md's Review: 2026-11-08-m-reference-classify (2026-11-08)
   - an allow-list of forwarded headers, and `%252e` double decoding (S2-5);
   - the hunter writes its draft through a quoted heredoc (S2-6);
@@ -52,11 +54,20 @@
 
   Review tickets (CR5, CR10, R3-1, R3-2, S4). Not bugs on the command path; 2026-11-06-m-windows-isolation (2026-11-06). Done in 2026-11-22-m-git-env-allowlist (2026-11-22)
 - [x] `isolate.py` passes every other inherited `GIT_*` override through: `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_PROXY_COMMAND`, `GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`, `GIT_EXTERNAL_DIFF`, `GIT_PAGER`/`GIT_EDITOR`, `GIT_CONFIG`/`GIT_CONFIG_SYSTEM`, and `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` (caught only when they point into the home; a `GIT_DIR` at the target would let a hunter edit it). Structural fix: unset every inherited `GIT_*` except an allowlist (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM`, `GIT_TERMINAL_PROMPT`, `GIT_SSL_CAINFO`). Security review S1 of 2026-11-22-s-git-config-env (2026-11-22). Done in 2026-11-22-m-git-env-allowlist (2026-11-22)
-- [ ] `isolate.py` follow-ups from the review of 2026-11-22-m-git-env-allowlist (2026-11-22):
+- [x] `isolate.py` follow-ups from the review of 2026-11-22-m-git-env-allowlist (2026-11-22):
   - `GIT_SSL_CAPATH` and `GIT_PROXY_SSL_CAINFO` are now dropped, so git TLS breaks behind a corporate proxy that sets only those; keeping `GIT_SSL_CAPATH` was declined at Define, so revisit only if an owner hits it (R2-2, CR4);
   - plain `ssh` finds the owner's `~/.ssh` through the password database, not `HOME`, so git over SSH can still use the owner's keys; an isolation `GIT_SSH_COMMAND` with `-F /dev/null` and no identity would close it (CR5);
   - `_refuse_links` on the descriptor path checks entries by path (`os.path.islink(folder / name)`), not through the opened descriptor (R2-7);
   - variable names that aren't shell identifiers (`npm_config_//registry.npmjs.org/:_authToken`) can't be unset, so they survive; proxy URLs with credentials pass through (security, outside the diff).
+
+  Done in 2026-11-22-m-isolate-followups (2026-11-22); `GIT_SSL_CAPATH` and `GIT_PROXY_SSL_CAINFO` stay declined. Its review tickets are the next item.
+- [ ] `isolate.py` review tickets from 2026-11-22-m-isolate-followups (2026-11-22):
+  - secrets in names `SECRET_NAME` misses: `PROXY_PASS`, `PROXY_PWD`, `SSHPASS`, `MYSQL_PWD` (S3, CR1-7);
+  - odd names for key or cert files: the owner decides whether they stop isolation (R2-3);
+  - an odd PROXY name holding a harmless `@` stops isolation; it fails closed (R3-4);
+  - `BASH_FUNC_token+x%%` is refused rather than removed; the safe side;
+  - bash 5 keeps a failed `%%` function import as a variable; only a home path can survive that way (L2);
+  - Windows session: Git for Windows' ssh with `-F /dev/null`, real `=C:` and JetBrains variables, and the AC-001 fake-ssh and function-body tests under Git Bash.
 - [ ] Improve how well `/hunt` finds bugs, in this order (planned to start the week of 2026-11-23); from the 19 B0 runs in `knowledge/runs/`, which measured only that kept drafts reproduce, not missed bugs or maintainer acceptance (2026-11-20)
   1. **Scoring benchmark:** 2–3 pinned repos per stack, about 10 planted bugs each with no hints in comments; score how many it finds, how many kept drafts are wrong, how often the verifier passes a bad draft, and cost per real bug. Run before and after each change.
   2. **Stricter verifier:** a checklist (every claim shown in its output, every cited line holds the quoted code), a script that checks line contents rather than just that the line exists, and bad drafts planted in the benchmark (defects 5, 8 and 10).

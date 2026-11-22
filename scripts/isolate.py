@@ -214,6 +214,11 @@ def _plan(scratch: Path, env: dict[str, str],
         # start vi with no terminal and hang the call. `true` keeps git's prepared message.
         "GIT_EDITOR": "true",
         "GIT_PAGER": "cat",
+        # ssh finds ~ through the password database, not HOME, so without this git over ssh
+        # would use the owner's ~/.ssh config, keys and known hosts.
+        "GIT_SSH_COMMAND": "ssh -F /dev/null -o IdentityFile=none -o IdentitiesOnly=yes"
+                           " -o IdentityAgent=none -o UserKnownHostsFile=/dev/null"
+                           " -o StrictHostKeyChecking=yes -o BatchMode=yes",
     }
     if cache is not None:
         exports.update(_shared_caches(cache))
@@ -257,9 +262,57 @@ def _plan(scratch: Path, env: dict[str, str],
     named = {k for k in env if fold(k) in always or fold(k).startswith(GIT_PREFIX)}
     unset = {
         k for k in (*ALWAYS_UNSET, *named, *into_home, *secrets, *respelled)
-        if (k in respelled or fold(k) not in exported) and re.fullmatch(r"[A-Za-z_]\w*", k)
+        if k in respelled or fold(k) not in exported
     }
-    return sorted(unset), exports
+    # Proxy routing survives, as in JAVA_TOOL_OPTIONS; proxy users and passwords never do.
+    credentials = set()
+    for k, v in env.items():
+        if "PROXY" in k.upper() and fold(k) not in exported:
+            bare = _without_credentials(v)
+            if bare != v:
+                credentials.add(k)
+                if _is_shell_name(k) and k not in unset:
+                    exports[k] = bare
+    functions, stuck = set(), set()
+    for k in unset | credentials:
+        if _is_shell_name(k):
+            continue
+        function = re.fullmatch(r"BASH_FUNC_([A-Za-z_][\w.:-]*)(?:%%|\(\))", k, re.A)
+        if k in credentials or k in secrets or fold(k) in always or fold(k).startswith(
+                GIT_PREFIX):
+            stuck.add(k)
+        # A function value (bash imports only one starting "() {") goes with unset -f. Any
+        # other name bash can't unset that holds no credential (ProgramFiles(x86), a JetBrains
+        # "PyCharm Community Edition" in the profile) passes through, as it always has.
+        elif function and env[k].startswith("() {"):
+            functions.add(function[1])
+    unset = {k for k in unset if _is_shell_name(k)}
+    return sorted(unset), sorted(functions), exports, sorted(stuck)
+
+
+def _is_shell_name(name: str) -> bool:
+    return re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is not None
+
+
+def _shown(name: str) -> str:
+    """A variable name safe for one line of a terminal: control and non-ASCII escaped."""
+    return name.encode("unicode_escape").decode("ascii")
+
+
+def _without_credentials(value: str) -> str:
+    """value with everything between the scheme and the last @ removed."""
+    scheme, rest = re.fullmatch(r"(\s*[A-Za-z][A-Za-z0-9+.-]*://)?(.*)", value, re.S).groups()
+    # One cut at the last @ anywhere: no split of a list (GOPROXY) can tell a separator from
+    # one inside a password, so a credentialed list loses its earlier entries instead.
+    if "@" not in rest:
+        return value
+    cut, _, host = rest.rpartition("@")
+    if "://" in cut:
+        # The surviving host belongs to a later list entry: take that entry's scheme, and
+        # only a known one at an entry's start, so nothing from inside a password survives.
+        found = re.findall(r"(?:^|[,|\s])((?:https?|socks[45][ah]?)://)", cut, re.I)
+        scheme = found[-1] if found else ""
+    return (scheme or "") + host
 
 
 def _proxy_flags(env: dict[str, str]) -> list[str]:
@@ -345,9 +398,12 @@ def _refuse_links(scratch: Path, folder: Path) -> None:
         return
     fd = _open_folder(scratch, folder)
     try:
-        for name in os.listdir(fd):
-            if os.path.islink(folder / name):
-                raise OSError(f"{folder / name} is a symlink; refusing to use this home")
+        # Through the descriptor: the path could name another folder by now.
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                if entry.is_symlink():
+                    raise OSError(f"{folder / entry.name} is a symlink; "
+                                  "refusing to use this home")
     finally:
         os.close(fd)
 
@@ -549,7 +605,13 @@ def _main(argv: list[str] | None = None) -> int:
     except OSError as exc:
         print(f"error: can't prepare {scratch / 'home'}: {exc}", file=sys.stderr)
         return 1
-    unset, exports = _plan(scratch, env, cache)
+    unset, functions, exports, stuck = _plan(scratch, env, cache)
+    if stuck:
+        # bash can't unset such a name, yet passes it on to every program it starts.
+        names = ", ".join(map(_shown, stuck))
+        print(f"error: the environment variable(s) {names} must not reach agents, but bash "
+              "can't unset such names; unset them before starting Claude Code", file=sys.stderr)
+        return 1
     if args.browser:
         # The owner's installed browsers, used where they are: HOME and LOCALAPPDATA move
         # into the scratch folder, where Playwright would find none. The skip variable only
@@ -567,7 +629,9 @@ def _main(argv: list[str] | None = None) -> int:
     # reaches their own shell, so a relative write would land in the repo.
     home_dir = " || ".join(f"cd {shlex.quote(p.as_posix())}"
                            for p in (scratch / "copy", scratch))
-    line = "unset " + " ".join(unset) + "; export " + " ".join(
+    # Exported functions (BASH_FUNC_name%%) leave every child with the function gone.
+    drop_functions = f"unset -f {shlex.join(functions)}; " if functions else ""
+    line = drop_functions + "unset " + " ".join(unset) + "; export " + " ".join(
         f"{key}={shlex.quote(value)}" for key, value in exports.items()
     ) + f"; trap {shlex.quote(listing)} EXIT; {{ {home_dir}; }} 2> /dev/null;"
     if not _encodes(line):
@@ -587,7 +651,7 @@ def _unwritable(env: dict[str, str], exports: dict[str, str]) -> str:
     if env.get(bad) != exports[bad]:
         # Built from the owner's variables (RUSTUP_HOME from HOME), so name those instead.
         bad = " or ".join(k for k, v in env.items() if not _encodes(k + v)) or bad
-    return "the environment variable " + bad.encode("ascii", "backslashreplace").decode()
+    return "the environment variable " + _shown(bad)
 
 
 def _encodes(text: str) -> bool:

@@ -27,7 +27,8 @@ One line per defect: what it looks like, then the severity.
 - A proxy that relays a server's responses unchanged to an agent that must not see the credentials it added, so an echoing endpoint (debug page, `Location`) hands them back: high
 - A read-only guard that checks only the request method, so `X-HTTP-Method-Override` or `_method` turns an allowed GET into a write: high
 - A shell step that sets a variable as a command prefix (`BASE=x curl "$BASE"`), which the same command's own expansion never sees, or that a later setup step unsets (`isolate.py` drops `*AUTH*`): high
-- Masking that matches secrets case-insensitively or bare host names inside words, so ordinary response text is mangled and hunters report the proxy's damage as the target's bug: medium
+- Two matchers for one value (a leak scan and a masker) with separate pattern sets or separate case and Unicode rules (bytes vs str, `re.I` folding K and ſ, `\w` vs ASCII), so one hides what the other reveals: high
+- Masking that matches secrets case-insensitively, or a dotless host name (`uat`) without its scheme or port, so ordinary response text is mangled and hunters report the proxy's damage as the target's bug (a dotted host inside a longer word is masked on purpose: the masker uses the leak scan's patterns): medium
 - Stopping a background job by the PID `$!` gave, when `$!` can be a subshell (`cmd && prog &`, `( … ) &`): killing it leaves `prog` running under PID 1; stop the whole process tree, recorded while the subshell lives: high
 - A `cd` chained into a backgrounded `&&` list (`cd copy && … & echo $! > f`): the `cd` runs only in the background job, so the next relative write lands in the starting folder (the target repo): high
 - `shutil.which` (or any PATH lookup) run from inside a target repo on Windows without `NoDefaultCurrentDirectoryInExePath`: a `ps.bat` the repo commits runs unisolated; a test that removes the variable must match its name case-insensitively: critical
@@ -55,3 +56,5 @@ One line per defect: what it looks like, then the severity.
 - "Not produced again, so fixed" without checking the producer ran and could see it (a failed or skipped audit, a lockfile deleted only in the working tree, a secret still in git history): high
 - A target-controlled name (file, folder, lockfile) written into a line-structured record or report without escaping control characters, so a newline forges a heading or an evidence line the parser reads first: high
 - A left boundary or lookbehind added to a leak or host matcher to cut over-refusal or scan cost, so a prefix (another scheme, a dot, a digit, an undecoded escape) now hides the value the matcher must refuse; anchor at a run's start and check the run's end instead: high
+- A value cleaner that splits a list on separators before stripping credentials, so a password containing the separator (or digits that read as a port) leaves a fragment: high
+- An exemption chosen from a variable's name alone, without checking what its value is (`BASH_FUNC_` with a non-function value): high
