@@ -132,9 +132,13 @@ def _printable(text: str) -> str:
 
 
 def _check_ok(check) -> bool:
-    return (isinstance(check, dict) and set(check) == {"pointer", "value"}
-            and isinstance(check["pointer"], str)
-            and len(json.dumps(check["value"])) <= MAX_MESSAGE)
+    if not (isinstance(check, dict) and set(check) == {"pointer", "value"}
+            and isinstance(check["pointer"], str)):
+        return False
+    try:
+        return len(json.dumps(check["value"])) <= MAX_MESSAGE
+    except RecursionError:
+        return False  # too deep to be a value a departure could name
 
 
 def observed(sections: dict[str, str], reference_optional: bool = False) -> dict:
@@ -500,7 +504,7 @@ def _failed_value(message: str, step: int, check: dict):
     rest = rest.removeprefix("got ")
     try:
         value, end = json.JSONDecoder().raw_decode(rest)
-    except ValueError:
+    except (ValueError, RecursionError):
         raise KeyError(message) from None
     tail = (f", expected {json.dumps(check.get('equals'))}" if got
             else f" does not satisfy rule {check.get('rule')}")

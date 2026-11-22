@@ -53,6 +53,7 @@ inline in this session
 - 2026-11-22 Stage 2: pass
 - 2026-11-22 review: ran security and code (Risk high; Public Surface changed), deferred by the owner to the end of all builds; r1 FAIL, r2 FAIL (owner allowed round 3), r3 PASS both; CHANGELOG written at Ship on the coordinator's instruction
 - 2026-11-22 Stage 3: pass
+- 2026-11-22 CI fix (PR 47): verify PASS head 24f427a tree d2776a32b5968acc2344ecd7c1fb09be5eae3dc5
 
 ## Deviations
 - 2026-11-22 test-change tests/test_reference.py What: AC-002's test lists the routing header names itself instead of importing ROUTING_HEADERS; test_replay_reports_pass_fail_and_not_run expects the new check field on its failed value check Why: ROUTING_HEADERS is replaced by the allow-list BESIDE_ANOTHER; a failed equals check now carries check (AC-003)
@@ -71,6 +72,7 @@ inline in this session
 - 2026-11-22 scripts/finding_v1.py scripts/live_proxy.py commands/hunt.md agents/bug-hunter.md README.md What: one _printable helper escapes control and format characters and bounds every error and warning line; RecursionError around parse_yaml and check_departures; --oracle must be a folder; _fails true when either equals or rule fails; --base message matches its check; _leaves_base also refuses %c0/%c1, NUL and NFKC dots; docs FP-A FP-B FP-C FP-D Why: review round 2 R2-1 R2-2 R2-3 R2-4 R2-5 S2-1 S2-2 S2-3 S2-6 FP-3 Effect: none beyond the fixes
 - 2026-11-22 test-change tests/test_live_proxy.py tests/test_departures.py What: r3 fix tests: 3- and 4-byte overlong UTF-8, F5-FF, mixed-depth spellings refused; valid UTF-8, CJK, emoji, Latin-1 %e9 kept; a ~990-deep equals is written whole or not at all Why: review r3 M3-1 M3-2 H3-1 (H3-1 confirmed: json.dump raised mid-write and left a partial BH-0001.json)
 - 2026-11-22 scripts/live_proxy.py scripts/finding_v1.py commands/hunt.md What: _leaves_base checks each decode round as bytes (unquote_to_bytes) and refuses overlong lead patterns; write serializes before opening the file and _main catches RecursionError as one line; hunt.md header list says such as and points to bug-hunter.md Why: review r3 M3-1 M3-2 H3-1 L3-4 FP3-1 Effect: Public Surface line for finding_v1.py departures stays a deviation (state.py writes Public Surface only at new)
+- 2026-11-22 test-change tests/test_reference.py What: the nested-body replay test accepts either not run (nested too deeply) or a bounded fail without check, and a new in-process test proves the RecursionError branches by monkeypatching contracts._run_steps and the JSON decoder; finding_v1._failed_value and _check_ok catch RecursionError Why: CI on ubuntu-latest (PR 47, run 45024443235): the C JSON decoder's depth limit differs across Python versions; the monkeypatched test then found a real crash path (a failure value too deep for raw_decode)
 
 ## Open questions
 -

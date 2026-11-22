@@ -375,12 +375,37 @@ def test_replay_survives_a_nested_body_and_a_bad_base(tmp_path):
         deep = replay(tmp_path, draft, base)
     finally:
         stop(stub)
-    assert deep.returncode == 0, deep.stderr
-    assert json.loads(deep.stdout)["result"].startswith("not run: "), deep.stdout
+    # Whether the C decoder gives up at this depth depends on the Python version: either way
+    # replay prints one bounded result line.
+    assert deep.returncode == 0 and deep.stdout.count("\n") == 1, deep.stderr
+    result = json.loads(deep.stdout)
+    assert result["result"] == "not run: a response is nested too deeply to read" or (
+        result["result"] == "fail" and len(result["message"]) <= 500
+        and "check" not in result), result
     for bad in ("http://[bad", "http://127.0.0.1:99999"):
         got = replay(tmp_path, draft, bad)
         assert got.returncode == 1 and got.stderr.startswith("error:"), (bad, got.stderr)
         assert got.stderr.count("\n") == 1 and "Traceback" not in got.stderr, got.stderr
+
+
+def test_replay_reports_a_recursion_error_as_not_run(monkeypatch):
+    import finding_v1
+
+    steps = [{"request": {"method": "GET", "path": "/deep"},
+              "expect": {"status": 200, "json": [{"pointer": "/0", "equals": 1}]}}]
+
+    def too_deep(*_):
+        raise RecursionError
+    monkeypatch.setattr(finding_v1.contracts, "_run_steps", too_deep)
+    assert finding_v1.replay(steps, "http://127.0.0.1:1", {}) == {
+        "result": "not run: a response is nested too deeply to read"}
+
+    def deep_failure(*_):
+        raise finding_v1.contracts._Fail("repro step 1 /0: got [[1]], expected 1")
+    monkeypatch.setattr(finding_v1.contracts, "_run_steps", deep_failure)
+    monkeypatch.setattr(finding_v1.json.JSONDecoder, "raw_decode", too_deep)
+    assert finding_v1.replay(steps, "http://127.0.0.1:1", {}) == {
+        "result": "fail", "step": 1, "message": "step 1 /0: got [[1]], expected 1"}
 
 
 def test_replay_restores_the_global_opener(tmp_path):
