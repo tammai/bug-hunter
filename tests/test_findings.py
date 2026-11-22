@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import stat
 from pathlib import Path
 
@@ -1565,7 +1566,7 @@ def test_recheck_refuses_an_audit_folder_changed_during_the_run(tmp_path):
         (audit.parent / "policy.md").write_text("admins see all\n", encoding="utf-8")
         result = run_script("findings", "seal", audit)
         assert result.returncode == 0, result.stderr
-        assert len(result.stdout.strip()) == 64
+        assert re.fullmatch(r"[0-9a-f]{64}\.[0-9a-f]{64}", result.stdout.strip())
         return audit, result.stdout.strip()
 
     def edit(path, text=None):
@@ -1598,7 +1599,76 @@ def test_recheck_refuses_an_audit_folder_changed_during_the_run(tmp_path):
 
     root = Path(__file__).resolve().parent.parent
     body = (root / "commands/audit.md").read_text(encoding="utf-8")
-    assert body.index('findings.py" seal') < body.index("owner's yes")
+    # After the owner's yes (they may edit accepted.md while reading the cost), before agents.
+    seal = body.index('findings.py" seal')
+    assert body.index("owner's yes") < seal < body.index("bug-hunter:security-auditor")
     assert body.index("reap.py\" \"$RUN\"` (it stops") < body.index('findings.py" recheck')
-    assert "--seal" in body.split('findings.py" recheck')[1].split("\n")[0]
+    for command in ("recheck", "dedupe", "report"):
+        assert "--seal" in body.split(f'findings.py" {command}')[1].split("\n")[0], command
     assert "seal" in (root / "README.md").read_text(encoding="utf-8")
+
+
+# --- Review round 1 of 2026-11-22-m-audit-verdict-followups ---
+
+
+def test_legacy_pairing_is_one_to_one_and_a_rotated_fix_says_why(tmp_path):
+    scope, _, _ = clean_facts(tmp_path)
+    legacy = {k: v for k, v in SECRET_SCAN[0].items() if k != "id"}
+    a = scripted(tmp_path, "from-secrets-scan", [legacy], "a")
+    b = scripted(tmp_path, "from-secrets-scan", [{**legacy, "line": 7}], "b")
+    audit = audit_with(tmp_path, a, b)
+    found = tmp_path / "found"
+    data = tmp_path / "s.json"
+    data.write_text(json.dumps([{**SECRET_SCAN[0], "id": "aaaa0000aaaa0000"}]), "utf-8")
+    assert run_script("findings", "from-secrets-scan", data, found).returncode == 0
+    result = recheck(tmp_path, audit, scope, "--found", found, "--secrets-scanned")
+    assert result["fixed"] == [] and sorted(result["still_open"]) == ["01", "02"]
+    assert "secret id aaaa0000aaaa0000" in (audit / "01.md").read_text(encoding="utf-8")
+    assert "secret id" not in (audit / "02.md").read_text(encoding="utf-8")
+    assert run_script("findings", "dedupe", found, audit).returncode == 0
+    assert list(found.glob("*.md")) == []
+
+    # A rotated, never-committed legacy secret gone from the scan: fixed, saying why.
+    base = tmp_path / "rot"
+    base.mkdir()
+    local = scripted(base, "from-secrets-scan", [{**legacy, "committed": False}], "l")
+    audit = audit_with(base, local)
+    (audit.parent / "accepted.md").write_text("- 01 rotated: rotated in the vault\n", "utf-8")
+    repo = base / "repo"
+    repo.mkdir()
+    from conftest import git
+    git(repo, "init", "-q")
+    other = base / "other.json"
+    other.write_text(json.dumps([{**SECRET_SCAN[0], "committed": False, "id": "dddd0000dddd0000"}]),
+                     "utf-8")
+    found = base / "found"
+    assert run_script("findings", "from-secrets-scan", other, found).returncode == 0
+    result = recheck(base, audit, scope, "--found", found, "--secrets-scanned", "--repo", repo)
+    [fixed] = result["fixed"]
+    assert fixed["number"] == "01" and "rotated (accepted.md)" in fixed["reason"]
+    assert "separate finding" in (audit / "fixed" / "01.md").read_text(encoding="utf-8")
+
+
+def test_dedupe_and_report_refuse_a_changed_acceptance(tmp_path):
+    scope, meta, recheck_ = clean_facts(tmp_path)
+    audit = audit_with(tmp_path, GOOD)
+    (audit.parent / "accepted.md").write_text("- 01 until 2999-12-31: x\n", encoding="utf-8")
+    seal = run_script("findings", "seal", audit).stdout.strip()
+    new = tmp_path / "new"
+    new.mkdir()
+    assert run_script("findings", "dedupe", new, audit, "--seal", seal).returncode == 0
+    report_for(tmp_path, audit, scope, meta, recheck_, extra=("--seal", seal))
+    (audit / "REPORT.md").unlink()
+    # Findings change legitimately after the seal (recheck, dedupe); acceptances never do.
+    (audit / "01.md").write_text(raised(GOOD, "still open at `src/a.js:3`"), encoding="utf-8")
+    report_for(tmp_path, audit, scope, meta, recheck_, extra=("--seal", seal))
+    (audit / "REPORT.md").unlink()
+    for name, text in (("accepted.md", "- 01 until 2999-12-31: y\n"), ("policy.md", "all\n")):
+        (audit.parent / name).write_text(text, encoding="utf-8")
+        for args in (("dedupe", new, audit), ("report", audit)):
+            result = run_script("findings", *args, "--seal", seal)
+            assert result.returncode == 1 and result.stderr.startswith("error:"), (name, args)
+            assert "Traceback" not in result.stderr
+        assert not (audit / "REPORT.md").exists()
+        (audit.parent / name).unlink() if name == "policy.md" else (
+            audit.parent / name).write_text("- 01 until 2999-12-31: x\n", encoding="utf-8")

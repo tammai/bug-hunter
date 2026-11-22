@@ -8,7 +8,7 @@ import sys
 from pathlib import Path, PurePosixPath
 
 import browser
-from secrets_scan import run_git
+from secrets_scan import CONFIG_BY_VARIABLE, git_version, run_git
 
 PART_SIZE = 5
 TOKENS_PER_HUNTER = 100_000
@@ -305,7 +305,8 @@ def _blank_filters(repo: str) -> dict[str, str] | None:
             driver = key.decode("utf-8", "surrogateescape")[len("filter."):].rsplit(".", 1)[0]
             for command in ("clean", "smudge", "process"):
                 blank[f"filter.{driver}.{command}"] = ""
-    return blank
+    # Older git ignores config passed by variable, so the drivers would run after all.
+    return None if blank and git_version() < CONFIG_BY_VARIABLE else blank
 
 
 def _coverage(repo: str, files: list[str], paths: list[str], parts: list[dict],

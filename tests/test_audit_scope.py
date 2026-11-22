@@ -285,3 +285,56 @@ def test_the_dirty_check_runs_no_program_from_the_target_config(make_repo, tmp_p
     # Without the trees git can't answer, which reads as "maybe in history", never as "not".
     assert secrets_scan.in_history(str(clone), "d/.env") is not False
     assert not marker.exists()
+
+
+def test_an_old_git_fails_closed_and_no_transport_runs(make_repo, tmp_path, monkeypatch):
+    import os
+    import subprocess
+
+    import pytest
+    import scope as scope_module
+    import secrets_scan
+    if os.name == "nt":
+        pytest.skip("the upload-pack stand-in is a POSIX shell script")
+
+    def git(repo, *args):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    repo = make_repo({"app.js": "x\n"})
+    commit(repo)
+    assert scope_module._blank_filters(str(repo)) == {}
+    git(repo, "config", "filter.x.clean", "cat")
+    assert scope_module._blank_filters(str(repo)) == {
+        "filter.x.clean": "", "filter.x.smudge": "", "filter.x.process": ""}
+
+    # Before 2.31 git ignores GIT_CONFIG_COUNT, so a blanked driver would still run.
+    for module in (scope_module, secrets_scan):
+        monkeypatch.setattr(module, "git_version", lambda: (2, 30, 9), raising=False)
+    assert scope_module._blank_filters(str(repo)) is None
+    git(repo, "config", "--unset", "filter.x.clean")
+    assert scope_module._blank_filters(str(repo)) == {}
+
+    marker = tmp_path / "ran"
+    src = tmp_path / "src"
+    src.mkdir()
+    git(src, "init", "-q")
+    (src / ".env").write_text("x\n", encoding="utf-8")
+    git(src, "add", "-A")
+    git(src, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i")
+    git(src, "config", "uploadpack.allowFilter", "true")
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", "--no-checkout", "--filter=tree:0", src.as_uri(),
+                    str(clone)], check=True, capture_output=True)
+    upload = tmp_path / "upload.sh"
+    upload.write_text(f'#!/bin/sh\ntouch "{marker}"\nexec git-upload-pack "$@"\n',
+                      encoding="utf-8")
+    upload.chmod(0o755)
+    git(clone, "config", "remote.origin.uploadpack", str(upload))
+    # Before 2.45.1 GIT_NO_LAZY_FETCH is ignored: a partial clone can't be asked at all.
+    monkeypatch.setattr(secrets_scan, "git_version", lambda: (2, 45, 0))
+    assert secrets_scan.in_history(str(clone), ".env") is None
+    assert secrets_scan.in_history(str(repo), "app.js") is True
+    # On any git, no transport runs: a fetch is refused before it starts the remote's program.
+    monkeypatch.setattr(secrets_scan, "git_version", lambda: (2, 50, 1))
+    assert secrets_scan.run_git(str(clone), "fetch", "-q", "origin").returncode != 0
+    assert not marker.exists()

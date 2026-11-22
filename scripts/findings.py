@@ -462,12 +462,29 @@ def _secret_line(text: str) -> str | None:
     return found["line"] if found else None
 
 
-def _legacy_pick(text: str, candidates: list[str]) -> list[str]:
-    """Of the produced secrets with a pre-id finding's key, the one it is, if that's clear."""
-    if len(candidates) <= 1:
-        return candidates
-    same = [c for c in candidates if _secret_line(c) == _secret_line(text)]
-    return same if len(same) == 1 else []
+def _legacy_pairs(earlier: list[tuple[int, str]], produced: list[str],
+                  rotated: set[int]) -> dict[int, str | None]:
+    """Which produced secret each pre-id finding is, one to one; None where that isn't clear.
+
+    The pre-id key (path, pattern, length) is shared by every same-shape secret in a file. A
+    lone finding takes the only secret with its key, or the only one at its line; several
+    findings sharing a key go by their own lines only. A rotated one names the old secret.
+    """
+    groups: dict[tuple, list[tuple[int, str]]] = {}
+    for number, text in earlier:
+        idents = _identities(text)
+        key = next(iter(idents)) if len(idents) == 1 else None
+        if key and key[0] == "secret-legacy" and number not in rotated:
+            groups.setdefault(key, []).append((number, text))
+    pairs: dict[int, str | None] = {}
+    for key, group in groups.items():
+        sharing = [t for t in produced if key in _identities(t, new=True)]
+        for number, text in group if sharing else []:
+            same = [t for t in sharing if _secret_line(t) == _secret_line(text)]
+            picked = sharing if len(group) == 1 and len(sharing) == 1 else same
+            pairs[number] = picked[0] if len(picked) == 1 else None
+    taken = [t for t in pairs.values() if t is not None]
+    return {n: t if t is None or taken.count(t) == 1 else None for n, t in pairs.items()}
 
 
 def _rotated(audit: Path) -> set[int]:
@@ -548,10 +565,12 @@ def _dedupe(new: Path, audit: Path, repo: Path | None = None) -> list[str]:
     if new.resolve() == audit.resolve():
         raise _Malformed("dedupe needs two folders; given the same folder twice")
     seen_before: dict[tuple, Path] = {}
-    rotated = _rotated(audit)
+    earlier_texts = []
     for number, earlier in _open(audit):
-        for key in _keys(earlier.read_text(encoding="utf-8", errors="replace"), repo):
-            if key[0] != "secret-legacy" or number not in rotated:
+        text = earlier.read_text(encoding="utf-8", errors="replace")
+        earlier_texts.append((number, text, earlier))
+        for key in _keys(text, repo):
+            if key[0] != "secret-legacy":
                 seen_before.setdefault(key, earlier)
     today = datetime.date.today().isoformat()
     candidates = []
@@ -560,20 +579,13 @@ def _dedupe(new: Path, audit: Path, repo: Path | None = None) -> list[str]:
         severity = _parse(text)[0].get("Severity", "low")
         candidates.append((SEVERITY_RANK.get(severity, 3), path.name, path,
                            _keys(text, repo, new=True), _keys(text, repo), text))
-    # A pre-id finding's key is shared by every same-shape secret in its file: it stands for
-    # one of them only when the pairing is clear.
-    legacy_match: dict[tuple, str | None] = {}
-    for key, earlier in seen_before.items():
-        if key[0] == "secret-legacy":
-            sharing = [c[5] for c in candidates if key in c[3]]
-            picked = _legacy_pick(earlier.read_text(encoding="utf-8", errors="replace"),
-                                  sharing)
-            legacy_match[key] = picked[0] if picked else None
+    pairs = _legacy_pairs([(n, t) for n, t, _ in earlier_texts], [c[5] for c in candidates],
+                          _rotated(audit))
     kept: dict[tuple, Path] = {}
     removed = []
     for _, _, path, matching, own, text in sorted(candidates, key=lambda c: c[:2]):
-        if hits := [seen_before[k] for k in matching if k in seen_before
-                    and (k[0] != "secret-legacy" or legacy_match.get(k) is text)]:
+        if hits := [seen_before[k] for k in matching if k in seen_before] + [
+                p for n, _, p in earlier_texts if n in pairs and pairs[n] == text]:
             # Found again at a higher severity (a secret since committed, a revised advisory):
             # the earlier number now carries it, below its untouched evidence.
             severity = _parse(text)[0].get("Severity")
@@ -1009,19 +1021,35 @@ def _move_fixed(path: Path, reason: str, today: str) -> None:
     path.unlink()
 
 
-def _seal(audit: Path) -> str:
-    """One hash of what the run reads and agents must not change: acceptances, policy, findings."""
+def _hash_files(root: Path, files: list[Path]) -> str:
     digest = hashlib.sha256()
-    files = [audit.parent / "accepted.md", audit.parent / "policy.md",
-             *sorted(p for p in audit.glob("*.md") if p.name != "REPORT.md"),
-             *sorted((audit / "fixed").glob("*.md"))]
     for path in files:
-        name = os.fsencode(path.relative_to(audit.parent))
+        name = os.fsencode(path.relative_to(root))
         # Length-framed, so no two sets of files hash alike; a missing file counts too.
         data = path.read_bytes() if path.exists() else None
         digest.update(len(name).to_bytes(8, "big") + name)
         digest.update(b"\0" if data is None else b"\1" + len(data).to_bytes(8, "big") + data)
     return digest.hexdigest()
+
+
+def _seal(audit: Path) -> str:
+    """`<owner's files>.<findings>`: hashes of what agents must not change during a run."""
+    # Two parts: recheck and dedupe change findings on purpose, never the owner's files.
+    owners = _hash_files(audit.parent, [audit.parent / "accepted.md", audit.parent / "policy.md"])
+    findings = _hash_files(audit.parent, [
+        *sorted(p for p in audit.glob("*.md") if p.name != "REPORT.md"),
+        *sorted((audit / "fixed").glob("*.md"))])
+    return f"{owners}.{findings}"
+
+
+def _check_seal(audit: Path, seal: str | None, whole: bool) -> None:
+    if seal is None:
+        return
+    now = _seal(audit)
+    if (now if whole else now.split(".")[0]) != (seal if whole else seal.split(".")[0]):
+        raise _Malformed("accepted.md, policy.md or the audit folder changed since the run "
+                         "began, so nothing was written: look at what changed, then run "
+                         "/audit again")
 
 
 def _verdict_spot(spot: str, repo: Path | None) -> str | None:
@@ -1051,12 +1079,16 @@ def _recheck(audit: Path, scope: dict, found: Path | None, verdicts: dict[str, s
         if (fixed_folder / path.name).exists():
             path.unlink()  # finishes a move a stopped run left half done
     produced: dict[tuple, list[str]] = {}
+    produced_texts = []
     for p in sorted(found.glob("*.md")) if found is not None else []:
         text = p.read_text(encoding="utf-8", errors="replace")
+        produced_texts.append(text)
         for key in _identities(text, new=True):
             produced.setdefault(key, []).append(text)
     audited_set = {_lockfile(a) for a in audited}
     rotated = _rotated(audit)
+    pairs = _legacy_pairs([(n, p.read_text(encoding="utf-8", errors="replace"))
+                           for n, p in numbered(audit)], produced_texts, rotated)
     result: dict[str, list] = {"fixed": [], "still_open": [], "cannot_check": [],
                                "not_rechecked": []}
     for number, path in numbered(audit):
@@ -1085,14 +1117,11 @@ def _recheck(audit: Path, scope: dict, found: Path | None, verdicts: dict[str, s
                 continue  # the report already names the scan that didn't run
             matches = [t for key in idents for t in produced.get(key, [])]
             if kind == "secret-legacy":
-                if number in rotated:
-                    matches = []  # its old key names the old secret, not the one there now
-                elif matches and not _legacy_pick(text, matches):
-                    # Still there, but which of the same-shape secrets it is isn't clear.
+                if number in pairs and pairs[number] is None:
+                    # Same-shape secrets are there, but which one this is isn't clear.
                     result["still_open"].append(nn)
                     continue
-                else:
-                    matches = _legacy_pick(text, matches)
+                matches = [pairs[number]] if number in pairs else []
             if matches:
                 if kind != "dependency":
                     new_ids = {i for t in matches for i in SECRET_ID_IN_EVIDENCE.findall(t)}
@@ -1112,6 +1141,10 @@ def _recheck(audit: Path, scope: dict, found: Path | None, verdicts: dict[str, s
                     continue
             reason = ("no longer found by the secrets scan" if kind != "dependency" else
                       f"no longer reported by the dependency audit of {lockfile}")
+            if kind == "secret-legacy" and number in rotated:
+                reason = "rotated (accepted.md)" + (
+                    "; the key now at this path is a separate finding"
+                    if any(produced.get(key) for key in idents) else f" and {reason}")
             _move_fixed(path, reason, today)
             result["fixed"].append({"number": nn, "reason": _one_line(reason)})
             continue
@@ -1207,8 +1240,12 @@ def _main(argv: list[str] | None = None) -> int:
     p.add_argument("new")
     p.add_argument("audit")
     p.add_argument("--repo")
+    p.add_argument("--seal", help="what `seal` printed: refuse if accepted.md or policy.md "
+                                  "changed since")
     p = sub.add_parser("report")
     p.add_argument("dir")
+    p.add_argument("--seal", help="what `seal` printed: refuse if accepted.md or policy.md "
+                                  "changed since")
     p.add_argument("--meta")
     p.add_argument("--scope", help="scope.py's JSON for this run")
     p.add_argument("--recheck", help="recheck's JSON for this run")
@@ -1273,10 +1310,7 @@ def _main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "recheck":
             # Checked before anything moves, so a tampered folder is left as it was found.
-            if args.seal is not None and _seal(Path(args.dir)) != args.seal:
-                raise _Malformed("accepted.md, policy.md or the audit folder changed since the "
-                                 "run began, so nothing was moved: look at what changed, then "
-                                 "run /audit again")
+            _check_seal(Path(args.dir), args.seal, whole=True)
             verdicts = _load(args.verdicts) if args.verdicts else {}
             if not isinstance(verdicts, dict) or not all(
                     isinstance(v, str) for v in verdicts.values()):
@@ -1312,9 +1346,11 @@ def _main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "dedupe":
             repo = Path(args.repo) if args.repo else None
+            _check_seal(Path(args.audit), args.seal, whole=False)
             for name in _dedupe(Path(args.new), Path(args.audit), repo):
                 print(f"dropped {_piece(name)}: already reported")
             return 0
+        _check_seal(Path(args.dir), args.seal, whole=False)
         meta = _check_meta(_load(args.meta)) if args.meta else None
         scope = _check_scope(_load(args.scope)) if args.scope else None
         recheck = _check_recheck(_load(args.recheck)) if args.recheck else None

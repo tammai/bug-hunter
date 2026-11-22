@@ -1,6 +1,7 @@
 """Find secrets committed to a repo (and local .env files), reporting where, never what."""
 
 import argparse
+import functools
 import hashlib
 import hmac
 import json
@@ -154,12 +155,39 @@ def run_git(repo: str, *args: str, config: dict[str, str] | None = None
         env["GIT_CONFIG_COUNT"] = str(len(config))
         for n, (key, value) in enumerate(config.items()):
             env[f"GIT_CONFIG_KEY_{n}"], env[f"GIT_CONFIG_VALUE_{n}"] = key, value
+    # protocol.allow=never refuses every transport, on any git since 2.12, so no fetch can start
+    # a program the target's remote config names, whatever the variables above do.
     return subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false",
-                           "-C", repo, *args], capture_output=True, env=env)
+                           "-c", "protocol.allow=never", "-C", repo, *args],
+                          capture_output=True, env=env)
+
+
+@functools.cache
+def git_version() -> tuple[int, ...]:
+    """The installed git's version; (0,) when it can't be read, which is below every floor."""
+    try:
+        out = subprocess.run(["git", "version"], capture_output=True, text=True).stdout
+    except OSError:
+        return (0,)
+    found = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", out)
+    return tuple(int(n or 0) for n in found.groups()) if found else (0,)
+
+
+# Older git ignores these variables without a word, so each guard relying on one fails closed.
+CONFIG_BY_VARIABLE = (2, 31)
+NO_LAZY_FETCH = (2, 45, 1)
 
 
 def in_history(repo: str, name: str) -> bool | None:
     """Whether git history holds the path; None when git can't say."""
+    if git_version() < NO_LAZY_FETCH:
+        try:
+            promisor = run_git(repo, "config", "--get-regexp",
+                               r"^(extensions\.partialclone|remote\..*\.promisor)$")
+        except OSError:
+            return None
+        if promisor.returncode != 1:
+            return None  # a partial clone (or an unreadable config) would fetch to answer
     try:
         # Literal: a target-named file like `:x` mustn't read as pathspec magic. rev-list
         # shows no signatures, so the target's config can't make it run gpg.program.
@@ -301,7 +329,7 @@ def _id_key(path: Path) -> bytes:
         except FileExistsError:
             pass
         except OSError:
-            # No hard links here (FAT, exFAT, some network folders): a rename publishes the
+            # No hard links here (some network or synced folders): a rename publishes the
             # whole key too, and only when there is none yet.
             if not os.path.lexists(path):
                 os.replace(tmp, path)
