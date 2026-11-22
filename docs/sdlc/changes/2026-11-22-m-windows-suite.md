@@ -67,3 +67,7 @@ Every baseline row is a fixture problem, not a product one. While they stay red 
 
 - Removing the baseline rows (after the first green Windows run) and editing `docs/sdlc/todo.md`.
 - Product code under `scripts/`.
+
+## Review
+
+No review ran: low risk, no trigger fired (tests and CI only, no product code, empty Public Surface); every AC with a test red then green (verify.py). AC-008 (manual): the 19 baseline rows are verified only by reasoning until the first windows-latest CI run on this PR; baseline rows stay until that run shows them passing. Ticket: post.py hangs instead of refusing a locked drafts folder on Windows with Python 3.12 (out of scope, product code).

@@ -1,5 +1,5 @@
 # 2026-11-22-m-windows-suite
-Status: active
+Status: done
 Process: 3
 Change: docs/sdlc/changes/2026-11-22-m-windows-suite.md   (this feature's record for people)
 Track: M   (sized up because: —; footprint: 10 files)
@@ -7,14 +7,15 @@ Risk: low
 Top model: opus   (fable only if the user chose it)
 Commands: test: `uv run pytest`
 Started: 2026-11-22
-Base: 635113a
+Base: 7790f3e
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Current: Stage 2 – Build
+Verified: f72ea0d tree 8728cf44719f9f95bfcffbbb18ee69447764672d
+Current: Stage 4 – Ship
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
-- [ ] 2 Build
+- [x] 2 Build
 - [ ] 3 Review   — the change file's ## Review
 - [ ] 4 Ship     — PR: (Learn: knowledge, recurring-defects.md)
 
@@ -42,6 +43,8 @@ inline
 ## Gate log
 - 2026-11-22 Stage 1: pass — plan not stopped for approval: low-risk M
 - 2026-11-22 review deferred: coordinator runs every lane's reviews together after the build; committed on the branch, not pushed
+- 2026-11-22 Base What: moved from 635113a to 7790f3e. Why: rebased onto main after PR #44 (C3) merged. Effect: diff and drift checks cover only this change.
+- 2026-11-22 Stage 2: pass — no review: no trigger fired
 
 ## Deviations
 - 2026-11-22 test-change tests/test_portable_fixtures.py What: the lock test's finally called a misspelled name (unconftest.lock_dir) and now calls conftest.unlock_dir. Why: a typo from rewriting the imports into attribute access; the test was red for the missing helper either way, not weakened.
