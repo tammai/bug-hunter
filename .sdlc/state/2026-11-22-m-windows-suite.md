@@ -7,7 +7,7 @@ Risk: low
 Top model: opus   (fable only if the user chose it)
 Commands: test: `uv run pytest`
 Started: 2026-11-22
-Base: 7790f3e
+Base: fdd1072
 Owner: tam.mai@bigin.vn
 Tool: claude-code
 Verified: 445d560 tree 67f9e8be7ad7c8604572a822ec523ddaa3fda636
@@ -61,6 +61,8 @@ inline
 - 2026-11-22 Correction to the scripts/throwaway.py line above: its 'Effect: none on POSIX' was wrong. The handler re-raised every case it didn't handle, so _rmtree(ignore_errors=True) stopped at the first failure on POSIX too (review r1 H1). Fixed: _clear_read_only is module-level and decides from one lstat (no link or reparse point is chmod-ed, M1); _rmtree's onexc skips the entry when ignoring and re-raises otherwise. Tests: tests/test_throwaway_rmtree.py (AC-009).
 - 2026-11-22 scripts/post.py What: gh auth status is no longer decoded (only its exit code is read), and gh issue create is decoded with errors=replace (review r1 L3). Test: test_odd_bytes_from_gh_never_become_a_traceback (AC-010), through a FAKE_GH_STDERR_HEX knob in tests/conftest.py's fake gh.
 - 2026-11-22 docs/sdlc/todo.md What: the review r1 L1 ticket (refusal reason lost when cleanup fails) is an open item. Why: the coordinator triaged L1 as a ticket.
+- 2026-11-22 tests/test_oracle.py What: merged origin/main (fdd1072) into the branch; its new test_install_warnings_are_printed_in_oracle_mode put a non-UTF-8 name on a bytes command line, which Windows can't carry (windows-latest run 45023197510). It now writes the index entry through git update-index --index-info on stdin, as test_scope.py does. Why: the PR's merge ref runs main's tests on Windows. Effect: fixture only; oracle.py untouched.
+- 2026-11-22 Base What: moved from 7790f3e to fdd1072 after merging origin/main into the branch. Why: main gained the oracle lane's changes (scripts/oracle.py, scripts/finding_v1.py and their tests), which aren't this feature's and showed as drift against the old Base. Effect: the drift check sees only this feature's files.
 
 ## Open questions
 -

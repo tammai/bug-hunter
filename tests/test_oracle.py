@@ -474,8 +474,9 @@ def test_install_warnings_are_printed_in_oracle_mode(make_repo):
     commit(repo, {"we$ird/package-lock.json": "{}\n"}, "lockfile")
     blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=repo, input=b"",
                           capture_output=True).stdout.decode().strip()
-    subprocess.run([b"git", b"update-index", b"--add", b"--cacheinfo",
-                    f"100644,{blob},".encode() + b"bad\xff.py"],
+    # Through stdin: a Windows command line can't carry non-UTF-8 bytes.
+    subprocess.run(["git", "update-index", "--index-info"],
+                   input=f"100644 {blob}\t".encode() + b"bad\xff.py\n",
                    cwd=repo, check=True, capture_output=True)
     result, _ = scope(repo)
     assert result.returncode == 0, result.stderr
