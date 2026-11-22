@@ -108,15 +108,22 @@ def result_problem(result) -> str | None:
     kind = result.get("result") if isinstance(result, dict) else None
     if kind == "fail":
         step = result.get("step")
-        if (set(result) == {"result", "step", "message"} and isinstance(step, int)
+        if (set(result) - {"check"} == {"result", "step", "message"} and isinstance(step, int)
                 and not isinstance(step, bool) and step >= 1
-                and isinstance(result["message"], str)):
+                and isinstance(result["message"], str)
+                and ("check" not in result or _check_ok(result["check"]))):
             return None
     elif isinstance(kind, str) and (kind == "pass" or kind.startswith("not run: ")):
         if set(result) == {"result"}:
             return None
-    return ('not {"result": "pass"}, {"result": "fail", "step": n, "message": …} or '
-            '{"result": "not run: …"}')
+    return ('not {"result": "pass"}, {"result": "fail", "step": n, "message": …, '
+            'optionally "check": {"pointer": …, "value": …}} or {"result": "not run: …"}')
+
+
+def _check_ok(check) -> bool:
+    return (isinstance(check, dict) and set(check) == {"pointer", "value"}
+            and isinstance(check["pointer"], str)
+            and len(json.dumps(check["value"])) <= MAX_MESSAGE)
 
 
 def observed(sections: dict[str, str], reference_optional: bool = False) -> dict:
@@ -182,14 +189,19 @@ def _fenced_block(body: list[str]) -> list[str]:
     return [STEPS_HEADING, fence, *body, fence, ""]
 
 
+def _headings(lines: list[str]) -> dict[int, str]:
+    """Each `## ` heading outside a fence: its line number and folded name."""
+    return {i: line[3:].strip().rstrip(":").casefold()
+            for i, (line, in_fence) in enumerate(fenced(lines))
+            if line.startswith("## ") and not in_fence}
+
+
 def _replace_section(text: str, heading: str, body: list[str]) -> str:
     """The text with one section's body replaced; the section must exist."""
     lines = text.split("\n")
-    headings = [i for i, (line, in_fence) in enumerate(fenced(lines))
-                if line.startswith("## ") and not in_fence]
-    start = next(i for i in headings
-                 if lines[i][3:].strip().rstrip(":").casefold() == heading[3:].casefold())
-    end = next((i for i in headings if i > start), len(lines))
+    names = _headings(lines)
+    start = next(i for i, name in names.items() if name == heading[3:].casefold())
+    end = next((i for i in names if i > start), len(lines))
     return "\n".join(lines[:start + 1] + body + lines[end:])
 
 
@@ -207,9 +219,8 @@ def render(text: str, results: dict | None = None) -> str:
     else:
         block = _steps_block(steps)
     lines = text.split("\n")
-    headings = [i for i, (line, in_fence) in enumerate(fenced(lines))
-                if line.startswith("## ") and not in_fence]
-    names = {i: lines[i][3:].strip().rstrip(":").casefold() for i in headings}
+    names = _headings(lines)
+    headings = list(names)
     steps_at = [i for i in headings if names[i] == STEPS_HEADING[3:].casefold()]
     if len(steps_at) > 1:
         raise BadDraft(f"more than one {STEPS_HEADING}; the Repro section is the only repro")
@@ -325,6 +336,8 @@ def replay(steps: list[dict], base: str, env: dict) -> dict:
     """Run C4 HTTP replay steps against one base, with contracts' own runner."""
     # contracts.py run-http itself can't serve: it wants a criterion ID, which reference
     # defects and spec gaps lack. No proxy from the environment: loopback stays on this machine.
+    # `_run_steps` opens through urllib's global opener, so the caller's is put back after.
+    previous = urllib.request._opener
     urllib.request.install_opener(urllib.request.build_opener(
         urllib.request.ProxyHandler({}), _SameBase(base), _RefusalCheck()))
     try:
@@ -339,8 +352,34 @@ def replay(steps: list[dict], base: str, env: dict) -> dict:
             return {"result": _bounded(message)}
         if not step or step[3]:
             return {"result": _bounded(f"not run: {message}")}
-        return {"result": "fail", "step": int(step[2]), "message": _bounded(step[1])}
+        n = int(step[2])
+        result = {"result": "fail", "step": n, "message": _bounded(step[1])}
+        check = _failed_check(step[1], n, steps[n - 1])
+        if check is not None:
+            result["check"] = check
+        return result
+    finally:
+        urllib.request.install_opener(previous)
     return {"result": "pass"}
+
+
+def _failed_check(message: str, step: int, request: dict) -> dict | None:
+    """The value check contracts' message reports, with the target's value, or None."""
+    # The one place contracts' wording is read; everything after works from this value.
+    checks = request["expect"].get("json") or []
+    pointers = [c["pointer"] for c in checks]
+    found = []
+    for check in checks:
+        if pointers.count(check["pointer"]) != 1:
+            continue  # two checks on one pointer: either could have written the message
+        try:
+            found.append({"pointer": check["pointer"],
+                          "value": _failed_value(message, step, check)})
+        except KeyError:
+            continue
+    if len(found) != 1 or not _check_ok(found[0]):
+        return None
+    return found[0]
 
 
 def _bounded(message: str) -> str:
@@ -415,16 +454,23 @@ def load_departures(spec: Path) -> list[dict]:
         data = contracts.parse_yaml(text)
     except ValueError as exc:  # YamlError
         raise BadDraft(f"{REGISTRY}: {exc}") from None
-    errors = [m for s, m in contracts.check_departures(data) if s == "error"]
+    issues = contracts.check_departures(data)
+    errors = [m for s, m in issues if s == "error"]
     if errors:
         raise BadDraft(f"{REGISTRY}: {errors[0]}")
+    digits = len(str(MAX_NUMBER))
+    if any(len(entry["id"]) > len("D-") + digits for entry in data):
+        # Not echoed: the ID itself is what is too long.
+        raise BadDraft(f"{REGISTRY}: a departure ID has more than {digits} digits")
+    for message in (m for s, m in issues if s == "blocked"):
+        print(f"warning: {REGISTRY}: {message}", file=sys.stderr)
     return data
 
 
 def _failed_value(message: str, step: int, check: dict):
     """The rebuild's value at the check's pointer, if contracts' message is that check's failure."""
     # contracts writes `step N <ptr>: got <json>, expected <json>` or
-    # `step N <ptr>: <json> does not satisfy rule <rule>`. A message cut by _bounded doesn't parse.
+    # `step N <ptr>: <json> does not satisfy rule <rule>`.
     rest = message.removeprefix(f"step {step} {check.get('pointer')}: ")
     if rest == message:
         raise KeyError(message)
@@ -453,31 +499,31 @@ def _in_scope(entry: dict, criterion: str | None) -> bool:
     return True
 
 
-def matching_departure(departures: list[dict], steps, rebuild: dict,
+def matching_departure(departures: list[dict], repro: dict, rebuild: dict,
                        criterion: str | None = None) -> str | None:
-    """The first accepted, in-scope departure whose HTTP match holds for the failing check."""
-    if not isinstance(steps, list) or not is_http(steps) or rebuild.get("result") != "fail":
+    """The first accepted, in-scope departure whose HTTP match holds for the failed check."""
+    check = rebuild.get("check")
+    if repro.get("runner") != "http" or rebuild.get("result") != "fail" \
+            or not _check_ok(check):
         return None
-    n = rebuild["step"]
+    steps, n = repro["steps"], rebuild["step"]
     # The failing check must be the repro's last: a check or step after it never ran, and
     # dropping the finding would hide whatever it would have shown.
     if n != len(steps):
         return None
     checks = steps[n - 1]["expect"].get("json") or []
-    # An earlier check on the same pointer could have written the same message.
-    if not checks or any(c.get("pointer") == checks[-1]["pointer"] for c in checks[:-1]):
-        return None
-    try:
-        value = _failed_value(rebuild["message"], n, checks[-1])
-    except KeyError:
+    pointer = check["pointer"]
+    # An earlier check on the same pointer could have been the one that failed.
+    if not checks or checks[-1]["pointer"] != pointer \
+            or any(c.get("pointer") == pointer for c in checks[:-1]):
         return None
     for entry in departures:
         # C5: a proposed entry blocks its gate until a person decides it; it never matches.
         if entry.get("status") == "proposed" or not _in_scope(entry, criterion):
             continue
         for item in entry.get("match") or []:
-            if (item.get("runner") == "http" and item.get("pointer") == checks[-1]["pointer"]
-                    and contracts._rule_ok(str(item["rule"]), value, {})):
+            if (item.get("runner") == "http" and item.get("pointer") == pointer
+                    and contracts._rule_ok(str(item["rule"]), check["value"], {})):
                 return entry["id"]
     return None
 
@@ -490,8 +536,8 @@ def with_reference(record: dict, text: str, oracle: Path | None,
                        "a playwright one")
     departure = None
     if oracle is not None:
-        departure = matching_departure(load_departures(oracle), record["repro"].get("steps"),
-                                       results[0], record["criterion"])
+        departure = matching_departure(load_departures(oracle), record["repro"], results[0],
+                                       record["criterion"])
     header = text.split("\n## ", 1)[0]
     verdict = classify(*results, covered=oracle is not None and record["class"] != "spec-gap",
                        defect=bool(DEFECT.search(header)), departure=departure,

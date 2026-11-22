@@ -136,6 +136,28 @@ def test_forwards_only_to_the_target(make_repo, tmp_path):
         ("/api/items", "page=2&q=a%20b"), ("/api/go", "")]
 
 
+def test_a_path_that_climbs_after_repeated_decoding_is_refused(make_repo, tmp_path):
+    # A target or front end that decodes twice reads `%252e%252e` as `..`.
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    stub, stub_base, stub_log = start_stub(tmp_path, [
+        {"path": "/api/items/100%25", "responses": [{"body": {"ok": 1}}]}])
+    write_targets(targets, {"uat": {"url": stub_base + "/api"}})
+    proxy, base = start_proxy(repo, "uat", env, tmp_path / "proxy.jsonl")
+    climbs = ["/%252e%252e/x", "/%25252e%25252e/x", "/%252E%252E/x", "/..%252fx",
+              "/%255c..%255cx", "/a/%2525252e%2525252e/x"]
+    try:
+        answers = {path: raw(base, f"GET {path} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+                   for path in climbs}
+        status, _, body = call(base + "/items/100%25")
+    finally:
+        stop(proxy, stub)
+    for path, answer in answers.items():
+        assert b" 400 " in answer, (path, answer)
+    assert status == 200 and json.loads(body) == {"ok": 1}
+    assert len(entries(stub_log)) == 1
+
+
 def call_no_redirect(url):
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):

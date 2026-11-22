@@ -33,9 +33,14 @@ REFUSALS = "/.bug-hunter/refusals"  # the proxy's own path: how many requests it
 NOT_FORWARDED = {"connection", "keep-alive", "proxy-connection", "proxy-authorization", "te",
                  "trailer", "transfer-encoding", "upgrade", "host", "content-length",
                  ACCOUNT_HEADER, REFUSED_HEADER.lower()}
-ROUTING_HEADERS = {"x-original-url", "x-rewrite-url", "x-forwarded-host", "x-forwarded-prefix",
-                   "x-forwarded-path", "x-forwarded-server", "x-forwarded-uri", "forwarded",
-                   "x-host", "x-original-host", "x-http-host-override"}
+# Beside another target, only these cross (and every `sec-` name a browser adds): a front end
+# may route by any other header, and no list of routing headers is ever complete.
+BESIDE_ANOTHER = {"accept", "accept-language", "authorization", "cache-control", "content-type",
+                  "cookie", "dnt", "if-match", "if-modified-since", "if-none-match", "if-range",
+                  "if-unmodified-since", "origin", "pragma", "priority", "range", "referer",
+                  "upgrade-insecure-requests", "user-agent", "x-csrf-token", "x-requested-with",
+                  "x-xsrf-token"}
+MAX_DECODES = 10
 MAX_BODY = 50 * 1024 * 1024
 HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 # Drafts write an account as "$<NAME>_AUTH", so its name must be a shell variable name.
@@ -255,11 +260,19 @@ def _place(target: dict) -> tuple:
 
 
 def _leaves_base(path: str) -> bool:
-    """Whether a request path could climb out of the target's base path once decoded."""
-    decoded = unquote(path.split("?", 1)[0])
-    return not path.startswith("/") or any(
-        segment in (".", "..") for segment in decoded.replace("\\", "/").split("/")
-    )
+    """Whether a request path could climb out of the target's base path, decoded any number
+    of times: a target or front end that decodes twice reads `%252e%252e` as `..`."""
+    if not path.startswith("/"):
+        return True
+    current = path.split("?", 1)[0]
+    for _ in range(MAX_DECODES):
+        if any(segment in (".", "..") for segment in current.replace("\\", "/").split("/")):
+            return True
+        decoded = unquote(current)
+        if decoded == current:
+            return False
+        current = decoded
+    return True  # still changing: encoded deeper than any real path
 
 
 def _forms(value: str) -> set[str]:
@@ -397,8 +410,11 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
     state.setdefault("logins", 0)  # bumped on every refresh, so each masker is rebuilt
     lock = state["lock"]
     refreshing = threading.Lock()
-    # Beside another target, headers a front end may route by could reach the other one.
-    dropped = NOT_FORWARDED | (ROUTING_HEADERS if others else set())
+    def crosses(name: str) -> bool:
+        name = name.lower()
+        return name not in NOT_FORWARDED and (
+            not others or name in BESIDE_ANOTHER or name.startswith("sec-"))
+
     masker: list = [None, -1]  # built on first use, once the proxies' own URLs are known
 
     def accounts() -> dict:
@@ -484,6 +500,11 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
                 "body": _redact_body(body, self.headers.get("Content-Type", ""), complete=True),
                 "body_bytes": len(body),
             }
+            held = sorted({k.lower() for k in self.headers if not crosses(k)} - NOT_FORWARDED)
+            if forwarded and held:
+                # So the hunter sees which of its headers never reached the target.
+                note = "; ".join(filter(None, (note, "headers not forwarded beside the "
+                                                     f"reference: {', '.join(held)}")))
             if note:
                 entry["note"] = note
             if forwarded:
@@ -618,7 +639,7 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
                 self.wfile.write(data)
 
         def _send(self, body: bytes, chosen: dict) -> tuple:
-            headers = {k: v for k, v in self.headers.items() if k.lower() not in dropped}
+            headers = {k: v for k, v in self.headers.items() if crosses(k)}
             if chosen:
                 headers = {k: v for k, v in headers.items()
                            if k.lower() not in {name.lower() for name in chosen}}
