@@ -214,6 +214,11 @@ def _plan(scratch: Path, env: dict[str, str],
         # start vi with no terminal and hang the call. `true` keeps git's prepared message.
         "GIT_EDITOR": "true",
         "GIT_PAGER": "cat",
+        # ssh finds ~ through the password database, not HOME, so without this git over ssh
+        # would use the owner's ~/.ssh config, keys and known hosts.
+        "GIT_SSH_COMMAND": "ssh -F /dev/null -o IdentityFile=none -o IdentitiesOnly=yes"
+                           " -o IdentityAgent=none -o UserKnownHostsFile=/dev/null"
+                           " -o StrictHostKeyChecking=yes -o BatchMode=yes",
     }
     if cache is not None:
         exports.update(_shared_caches(cache))
@@ -257,9 +262,32 @@ def _plan(scratch: Path, env: dict[str, str],
     named = {k for k in env if fold(k) in always or fold(k).startswith(GIT_PREFIX)}
     unset = {
         k for k in (*ALWAYS_UNSET, *named, *into_home, *secrets, *respelled)
-        if (k in respelled or fold(k) not in exported) and re.fullmatch(r"[A-Za-z_]\w*", k)
+        if k in respelled or fold(k) not in exported
     }
+    # Proxy routing survives, as in JAVA_TOOL_OPTIONS; proxy users and passwords never do.
+    for k, v in env.items():
+        if "PROXY" in k.upper() and k not in unset and fold(k) not in exported:
+            bare = _without_credentials(v)
+            if bare != v:
+                if _is_shell_name(k):
+                    exports[k] = bare
+                else:
+                    unset.add(k)
     return sorted(unset), exports
+
+
+def _is_shell_name(name: str) -> bool:
+    return re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is not None
+
+
+def _without_credentials(value: str) -> str:
+    """value with any user[:password]@ before a proxy's host removed."""
+    scheme, rest = re.fullmatch(r"(\s*[A-Za-z][A-Za-z0-9+.-]*://)?(.*)", value, re.S).groups()
+    # Up to the last @ anywhere, not just in the authority: a raw / or @ in a password must
+    # not leave part of it behind, and a proxy URL has no use for an @ in its path.
+    if "@" not in rest:
+        return value
+    return (scheme or "") + rest.rpartition("@")[2]
 
 
 def _proxy_flags(env: dict[str, str]) -> list[str]:
@@ -345,9 +373,12 @@ def _refuse_links(scratch: Path, folder: Path) -> None:
         return
     fd = _open_folder(scratch, folder)
     try:
-        for name in os.listdir(fd):
-            if os.path.islink(folder / name):
-                raise OSError(f"{folder / name} is a symlink; refusing to use this home")
+        # Through the descriptor: the path could name another folder by now.
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                if entry.is_symlink():
+                    raise OSError(f"{folder / entry.name} is a symlink; "
+                                  "refusing to use this home")
     finally:
         os.close(fd)
 
@@ -550,6 +581,12 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"error: can't prepare {scratch / 'home'}: {exc}", file=sys.stderr)
         return 1
     unset, exports = _plan(scratch, env, cache)
+    if stuck := [k for k in unset if not _is_shell_name(k)]:
+        # bash can't unset such a name, yet passes it on to every program it starts.
+        name = stuck[0].encode("ascii", "backslashreplace").decode()
+        print(f"error: the environment variable {name} must not reach agents, but its name "
+              "can't be unset from bash; unset it before starting Claude Code", file=sys.stderr)
+        return 1
     if args.browser:
         # The owner's installed browsers, used where they are: HOME and LOCALAPPDATA move
         # into the scratch folder, where Playwright would find none. The skip variable only
