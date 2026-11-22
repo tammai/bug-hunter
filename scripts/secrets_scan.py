@@ -147,6 +147,7 @@ def known_secret_in(text: str, prints: dict) -> bool:
 # No transport has this name, so a GIT_ALLOW_PROTOCOL list of it allows none.
 NO_PROTOCOL = "none-allowed"
 GIT_TIMEOUT = 300
+TIMED_OUT = 124  # the return code run_git gives a call that timed out, as timeout(1) does
 
 
 def run_git(repo: str, *args: str, config: dict[str, str] | None = None
@@ -171,7 +172,7 @@ def run_git(repo: str, *args: str, config: dict[str, str] | None = None
                               timeout=GIT_TIMEOUT)
     except subprocess.TimeoutExpired:
         # A failed call: every caller reads that as "can't say", a gap, never as clean.
-        return subprocess.CompletedProcess(command, 124, b"", b"timed out")
+        return subprocess.CompletedProcess(command, TIMED_OUT, b"", b"timed out")
 
 
 @functools.cache
@@ -203,12 +204,16 @@ def in_history(repo: str, name: str) -> bool | None:
     try:
         # A shallow clone lacks the history before its cut, so "not found" proves nothing.
         # The shallow file is what older git, without --is-shallow-repository, goes by too.
-        shallow = run_git(repo, "rev-parse", "--git-path", "shallow")
-        if shallow.returncode != 0 or (Path(repo) / os.fsdecode(shallow.stdout.strip())).exists():
-            return None
+        # Grafts rewrite parents the same way, and --no-replace-objects doesn't undo them.
+        for hidden in ("shallow", "info/grafts"):
+            where = run_git(repo, "rev-parse", "--git-path", hidden)
+            if where.returncode != 0 or (Path(repo) / os.fsdecode(where.stdout.strip())).exists():
+                return None
         # Literal: a target-named file like `:x` mustn't read as pathspec magic. rev-list
-        # shows no signatures, so the target's config can't make it run gpg.program.
-        result = run_git(repo, "--literal-pathspecs", "rev-list", "--all", "-1", "--", name)
+        # shows no signatures, so the target's config can't make it run gpg.program. Replace
+        # refs could graft a commit's parents away, so they're ignored.
+        result = run_git(repo, "--literal-pathspecs", "--no-replace-objects", "rev-list",
+                         "--all", "-1", "--", name)
     except OSError:
         return None
     return bool(result.stdout.strip()) if result.returncode == 0 else None
@@ -216,6 +221,8 @@ def in_history(repo: str, name: str) -> bool | None:
 
 def _git_names(repo: str, *args: str) -> list[str] | None:
     result = run_git(repo, "ls-files", "-z", *args)
+    if result.returncode == TIMED_OUT:
+        raise TimeoutError(repo)
     if result.returncode != 0:
         return None
     names = []
@@ -389,6 +396,9 @@ def _main(argv: list[str] | None = None) -> int:
         )
     except FileNotFoundError:
         print("error: git is not installed", file=sys.stderr)
+        return 1
+    except TimeoutError:
+        print(f"error: git timed out on {args.repo}", file=sys.stderr)
         return 1
     if tracked is None or ignored is None or untracked is None or ignored_env is None:
         print(f"error: not a git repo: {args.repo}", file=sys.stderr)

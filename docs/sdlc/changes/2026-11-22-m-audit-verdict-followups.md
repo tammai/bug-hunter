@@ -76,7 +76,9 @@ The verdict shipped in [2026-11-20-m-audit-verdict](2026-11-20-m-audit-verdict.m
 - **AC-015** (review r2 U1) Given a target with a submodule whose own config defines a clean filter, when `scope.py --focus security` runs, then no filter program runs, `coverage.submodules` names the submodule, and the report lists "submodule not checked for uncommitted changes" as a gap.
 - **AC-016** (review r2 M1) Given a local `.env` with a secret whose history git can't answer (an old git on a partial clone), when the scan runs, then the finding says `history_unknown`, and a report given that path in `--meta history_unknown` lists "couldn't tell whether git history holds" it as a gap.
 - **AC-017** (review r3 R3-H1) Given a never-committed pre-id secret whose legacy key a produced secret still shares (AC-013's B, or one whose same-shape secrets got their own numbers), when `recheck --repo` runs on later runs, then it stays open and untouched, never moved to `fixed/` as "no longer found".
-- **AC-018** (review r3 M-1) Given a shallow clone, when the history of a path is asked, then the answer is "can't say", the scan marks a local `.env` `history_unknown`, and its title doesn't claim "not committed".
+- **AC-018** (review r3 M-1) Given a shallow clone, when the history of a path is asked, then the answer is "can't say", the scan marks a local `.env` `history_unknown`, and neither its title nor its Impact claims it was never committed (review r4 L-2); its evidence line is unchanged.
+- **AC-019** (review r4 M-A) Given history hidden by a replace graft or an `info/grafts` file, when the history of a path its hidden commits held is asked, then the answer is never "not in history".
+- **AC-020** (review r4 L-3, L-4, L-5) Given every git call timing out, then `run_git` gives code 124, `in_history` "can't say", `browser._tracked` None, and `secrets_scan.py` and `scope.py` print "error: git timed out on <repo>". `browser.py`'s copied repo-variable set equals `throwaway._REPO_VARS`.
 
 F3 (a test split) has no AC: it changes no behaviour. `verify.py` checks it through the full suite.
 
@@ -102,6 +104,8 @@ F3 (a test split) has no AC: it changes no behaviour. `verify.py` checks it thro
 | AC-016 | tests/test_audit_scope.py › test_an_unknown_history_for_a_local_secret_is_a_gap | `uv run pytest tests/test_audit_scope.py::test_an_unknown_history_for_a_local_secret_is_a_gap` |
 | AC-017 | tests/test_findings.py › test_a_pre_id_secret_whose_key_is_still_produced_is_never_fixed | `uv run pytest tests/test_findings.py::test_a_pre_id_secret_whose_key_is_still_produced_is_never_fixed` |
 | AC-018 | tests/test_audit_scope.py › test_a_shallow_clone_cant_say_a_path_was_never_committed | `uv run pytest tests/test_audit_scope.py::test_a_shallow_clone_cant_say_a_path_was_never_committed` |
+| AC-019 | tests/test_audit_scope.py › test_replaced_history_cant_say_a_path_was_never_committed | `uv run pytest tests/test_audit_scope.py::test_replaced_history_cant_say_a_path_was_never_committed` |
+| AC-020 | tests/test_audit_scope.py › test_a_git_timeout_is_cant_say_never_clean | `uv run pytest tests/test_audit_scope.py::test_a_git_timeout_is_cant_say_never_clean` |
 
 ## Must never break
 

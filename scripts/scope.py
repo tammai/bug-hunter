@@ -8,7 +8,7 @@ import sys
 from pathlib import Path, PurePosixPath
 
 import browser
-from secrets_scan import CONFIG_BY_VARIABLE, git_version, run_git
+from secrets_scan import CONFIG_BY_VARIABLE, TIMED_OUT, git_version, run_git
 
 PART_SIZE = 5
 TOKENS_PER_HUNTER = 100_000
@@ -42,6 +42,8 @@ def _is_test(path: PurePosixPath) -> bool:
 def _tracked_files(repo: str) -> tuple[list[str], int] | None:
     """Tracked file names, and how many were skipped for not being UTF-8."""
     result = run_git(repo, "ls-files", "-z")
+    if result.returncode == TIMED_OUT:
+        raise TimeoutError(repo)
     if result.returncode != 0:
         return None
     names, skipped = [], 0
@@ -393,6 +395,9 @@ def _main(argv: list[str] | None = None) -> int:
         tracked = _tracked_files(args.repo)
     except FileNotFoundError:
         print("error: git is not installed", file=sys.stderr)
+        return 1
+    except TimeoutError:
+        print(f"error: git timed out on {args.repo}", file=sys.stderr)
         return 1
     if tracked is None:
         print(f"error: not a git repo: {args.repo}", file=sys.stderr)

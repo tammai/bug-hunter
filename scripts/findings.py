@@ -233,6 +233,8 @@ def _from_secrets_scan(data: object) -> list[str]:
             f"length={item.get('length', '?')} committed={str(committed).lower()}{ident}",
             "Anyone with read access to the repository or its history can use this credential."
             if committed else
+            "Maybe in git history already (git couldn't say); if not, it's one `git add -A` "
+            "from being committed." if item.get("history_unknown") is True else
             "Only on this machine for now, but it's one `git add -A` from being committed.",
             "Rotate the credential, remove it (and from git history if committed), and load it "
             "from the environment or a secret manager.",

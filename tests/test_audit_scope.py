@@ -467,3 +467,57 @@ def test_a_shallow_clone_cant_say_a_path_was_never_committed(tmp_path, capsys):
     assert run_script("findings", "from-secrets-scan", data, out).returncode == 0
     [text] = [p.read_text(encoding="utf-8") for p in out.glob("*.md")]
     assert "not committed" not in text.splitlines()[0]
+    impact = text.split("## Impact\n")[1].split("\n")[0]
+    assert impact.startswith("Maybe in git history already (git couldn't say)")
+    assert ".env:1 pattern=stripe-live-key" in text and "committed=false" in text
+
+
+def test_replaced_history_cant_say_a_path_was_never_committed(make_repo):
+    import subprocess
+
+    import secrets_scan
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
+                        *args], check=True, capture_output=True)
+
+    repo = make_repo({".env": "x\n", "app.js": "x\n"})
+    commit(repo)
+    git("rm", "-q", "--cached", ".env")
+    git("commit", "-qm", "untrack")
+    assert secrets_scan.in_history(str(repo), ".env") is True
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True,
+                          text=True).stdout.strip()
+    # A graft that makes HEAD a root hides the commit that held .env from a plain rev-list.
+    git("replace", "--graft", head)
+    assert secrets_scan.in_history(str(repo), ".env") is not False
+    git("replace", "-d", head)
+    (repo / ".git" / "info").mkdir(exist_ok=True)
+    (repo / ".git" / "info" / "grafts").write_text(head + "\n", encoding="utf-8")
+    assert secrets_scan.in_history(str(repo), ".env") is None
+
+
+def test_a_git_timeout_is_cant_say_never_clean(make_repo, monkeypatch, capsys):
+    import subprocess
+
+    import browser
+    import scope as scope_module
+    import secrets_scan
+    import throwaway
+    assert browser._REPO_VARS == frozenset(throwaway._REPO_VARS)
+
+    repo = make_repo({"app.js": "x\n"})
+    commit(repo)
+
+    def slow(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], kwargs.get("timeout") or 1)
+
+    monkeypatch.setattr(secrets_scan, "git_version", lambda: (2, 50, 1))
+    monkeypatch.setattr(subprocess, "run", slow)
+    assert secrets_scan.run_git(str(repo), "status").returncode == 124
+    assert secrets_scan.in_history(str(repo), "app.js") is None
+    assert browser._tracked(str(repo)) is None
+    for main in (secrets_scan._main, scope_module._main):
+        assert main([str(repo)]) == 1
+        err = capsys.readouterr().err
+        assert err.startswith(f"error: git timed out on {repo}"), err
