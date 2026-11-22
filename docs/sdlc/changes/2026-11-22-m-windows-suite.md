@@ -78,7 +78,11 @@ Every baseline row is a fixture problem, not a product one. While they stay red 
 
 No review ran: low risk, no trigger fired (tests and CI only, no product code, empty Public Surface); every AC with a test red then green (verify.py). AC-008 (manual): the 19 baseline rows are verified only by reasoning until the first windows-latest CI run on this PR; baseline rows stay until that run shows them passing. Ticket: post.py hangs instead of refusing a locked drafts folder on Windows with Python 3.12 (out of scope, product code).
 
-Code review r1 of the `scripts/` changes (run by the coordinator, report `.sdlc/.work/findings/2026-11-22-m-windows-suite/code-reviewer-r1.md`): FAIL on H1. Fixed test-first (AC-009, AC-010):
+The product fixes in `post.py` and `throwaway.py` triggered a code review, run by the coordinator:
+- r1 FAIL on H1 (`.sdlc/.work/findings/2026-11-22-m-windows-suite/code-reviewer-r1.md`).
+- r2 PASS, no high or medium (`.sdlc/.work/findings/2026-11-22-m-windows-suite/code-reviewer-r2.md`). Its two lows are tickets in `docs/sdlc/todo.md`: L-a, share `scratch.py`'s Windows read-only helper; L-b, the Windows-side tests lean on monkeypatching and there is no WinError 32 test.
+
+Code review r1 of the `scripts/` changes: FAIL on H1. Fixed test-first (AC-009, AC-010):
 - H1: `_rmtree(ignore_errors=True)` stopped at the first entry it couldn't remove. It now skips that entry and removes the rest, while callers that don't ignore still get the first error.
 - M1: the Windows retry decides from one `lstat` and never chmods a link or reparse point.
 - L2: added tests for the link guard and for a retry that fails again.

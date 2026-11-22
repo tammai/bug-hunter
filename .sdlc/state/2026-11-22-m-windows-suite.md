@@ -10,13 +10,13 @@ Started: 2026-11-22
 Base: fdd1072
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: 445d560 tree 67f9e8be7ad7c8604572a822ec523ddaa3fda636
-Current: Stage 3 – Review
+Verified: 89ba90b tree e8d8906348ab59652abbcd7b5302094e007380ab
+Current: Stage 4 – Ship
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
 - [x] 2 Build
-- [ ] 3 Review   — the change file's ## Review
+- [x] 3 Review   — the change file's ## Review
 - [x] 4 Ship     — PR: (Learn: knowledge, recurring-defects.md)
 
 ## How the build runs
@@ -49,6 +49,7 @@ inline
 - 2026-11-22 Stage 2: pass — no review: no trigger fired
 - 2026-11-22 Stage 4: pass — back from review r1 (FAIL H1): fixing H1, M1, L2, L3 test-first
 - 2026-11-22 Stage 2: pass — r1 fixes verified; round 2 check is the coordinator's
+- 2026-11-22 Stage 3: pass
 
 ## Deviations
 - 2026-11-22 test-change tests/test_portable_fixtures.py What: the lock test's finally called a misspelled name (unconftest.lock_dir) and now calls conftest.unlock_dir. Why: a typo from rewriting the imports into attribute access; the test was red for the missing helper either way, not weakened.
