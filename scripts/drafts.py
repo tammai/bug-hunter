@@ -332,6 +332,10 @@ DEFAULT_PORTS = {"http": 80, "ws": 80, "https": 443, "wss": 443}
 V6_END = r"(?![0-9A-Za-z_]|:[0-9A-Za-z_:])"
 # Anything up to the bracket, bounded so a hostile run of "[::1%" stays linear.
 ZONE = r"(?:%[^\]\s]{0,64}+)?"
+# Right boundaries are ASCII too, so a letter of another script after a host never hides it.
+WORD = "[0-9A-Za-z_]"
+# Where a host name ends with no port after it: not in a longer name or before a port.
+HOST_END = r"(?![0-9A-Za-z_.-]|:[0-9])"
 
 
 def _host(url) -> str:
@@ -366,7 +370,14 @@ def _loopback() -> str:
 
 def _port(port: int) -> str:
     # A URL parser reads :05000 as 5000.
-    return rf":0*+{port}(?!\d)"
+    return rf":0*+{port}(?![0-9])"
+
+
+def _ipv6(address: ipaddress.IPv6Address, port: int | None) -> list[str]:
+    """Every IPv6 spelling of `address` alone, and with `port` written after it unbracketed
+    (2001:db8::1:443)."""
+    tree = _ipv6_pattern(address)
+    return [tree + V6_END] + ([tree + _port(port)] if port else [])
 
 
 def _host_patterns(url, local_hosts: set[str]) -> list[str]:
@@ -376,9 +387,9 @@ def _host_patterns(url, local_hosts: set[str]) -> list[str]:
     # safe side. A right boundary only after a digit, so a longer port or address (the
     # proxy's own listener at 127.0.0.1:50003, 10.0.0.12) isn't the target.
     host, port = _host(url), url.port
-    # A URL's host position, with any user@. The scheme starts only where its run of scheme
-    # characters starts, so a long run of letters stays linear.
-    # The run is matched whole and its end checked, so scheme characters glued before it
+    effective = port or DEFAULT_PORTS.get(url.scheme)
+    # A URL's host position, with any user@. The scheme run is matched whole from its start
+    # and its end checked, so a long run stays linear and scheme characters glued before it
     # (git+http://, ...http://, -http://, an undecoded \057) never hide the URL.
     def at(ends: str = "") -> str:
         return rf"(?<![a-z0-9+.-])[a-z0-9+.-]++{ends}://(?:[^\s/@]*@)?"
@@ -387,37 +398,34 @@ def _host_patterns(url, local_hosts: set[str]) -> list[str]:
         # Any loopback spelling with exactly the target's port, the scheme's default when the
         # URL names none; a bare "localhost" gives nothing away.
         alias = _loopback()
-        port = port or DEFAULT_PORTS.get(url.scheme)
-        if port is None:
-            return [rf"{scheme}{alias}(?![\w.-]|:\d)"]
+        if effective is None:
+            return [rf"{scheme}{alias}{HOST_END}"]
         # A URL leaves out its own scheme's default port, whatever the target's scheme is.
-        found = [rf"{alias}{_port(port)}"]
+        found = [rf"{alias}{_port(effective)}"]
         prefix = {80: at("(?:(?<=http)|(?<=ws))"),
-                  443: at("(?:(?<=https)|(?<=wss))")}.get(port)
+                  443: at("(?:(?<=https)|(?<=wss))")}.get(effective)
         if prefix:
-            found.append(rf"{prefix}{alias}(?![\w.-]|:\d)")
+            found.append(rf"{prefix}{alias}{HOST_END}")
         return found
     address = _address(host)
     if address and address.version == 4:
         mapped = ipaddress.IPv6Address(f"::ffff:{address}")
-        return [rf"(?<!0){_octets(address)}(?!\d)", _ipv6_pattern(mapped) + V6_END]
+        return [rf"(?<!0){_octets(address)}(?![0-9])", *_ipv6(mapped, effective)]
     if address:  # every IPv6 spelling: compressed or not, zero-padded, with a dotted tail
-        found = [_ipv6_pattern(address) + V6_END]
-        if url.port:  # its port written after it unbracketed (2001:db8::1:8080)
-            found.append(_ipv6_pattern(address) + _port(url.port))
+        found = _ipv6(address, effective)
         if address.ipv4_mapped:
             port = f":{url.port}" if url.port else ""
             found += _host_patterns(urlsplit(f"{url.scheme}://{address.ipv4_mapped}{port}"),
                                     local_hosts)
         return found
     if "." in host or ":" in host:  # a domain: anywhere, subdomains included
-        tail = r"(?![0-9a-f])" if ":" in host else r"(?!\d)" if host[-1].isdigit() else ""
+        tail = r"(?![0-9a-f])" if ":" in host else r"(?![0-9])" if host[-1].isdigit() else ""
         return [re.escape(host) + tail]
     # A plain name ("ref") only after a scheme (and any user@) or with its port: elsewhere
     # every draft's own words ($REF_BASE, "reference", a /ref or //ref path, an @ref
     # decorator, qa@ref.com) would match. Known limit: a protocol-relative //ref is missed.
     name = re.escape(host) + r"\.?"
-    found = [rf"{scheme}{name}(?![\w-]|\.\w)"]
+    found = [rf"{scheme}{name}(?![0-9A-Za-z_-]|\.{WORD})"]
     if port:
         found.append(rf"{name}{_port(port)}")
     return found
@@ -442,10 +450,12 @@ def _link_pattern(url, local_hosts: set[str]) -> str:
     if port:
         tail = _port(port)
     else:
-        tail = (rf"(?:{_port(default)})?" if default else "") + r"(?![\w.-]|:\d)"
+        tail = (rf"(?:{_port(default)})?" if default else "") + HOST_END
     # Not where userinfo follows: in http://uat.acme.test@evil.test/ the host is evil.test.
+    # The look stops where a URL ends (a quote, a bracket, a comma), so a later address
+    # (admin@acme.test) doesn't count; possessive, so it stays linear.
     return (rf"(?<![a-z0-9+.-]){re.escape(url.scheme)}://{spelled}{tail}"
-            r"(?![^\s/?#@]{0,256}+@)")
+            r"(?![^\s/?#@\"'<>`\\,;()]*+@)")
 
 
 def _ipv6_pattern(address: ipaddress.IPv6Address) -> str:

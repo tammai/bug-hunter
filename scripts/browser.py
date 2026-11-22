@@ -146,13 +146,17 @@ export default defineConfig({{
 """
 
 
-def _message(text: str) -> str:
+def _kept(text: str) -> str:
     # Enough of the error (its Expected and Received lines) that two different wrong
     # behaviours don't read the same; never the stack.
     lines = [line.strip() for line in ANSI.sub("", text).split("\n")]
-    kept = "\n".join([line for line in lines if line and not line.startswith("at ")][:MAX_LINES])
+    return "\n".join([line for line in lines if line and not line.startswith("at ")][:MAX_LINES])
+
+
+def _message(text: str) -> str:
+    kept = _kept(text)
     if len(kept) <= MAX_MESSAGE:
-        return kept
+        return kept or "(no error message)"  # an empty one would read as no failure
     # A cut one keeps a digest of the whole, so it is never empty and two messages that differ
     # only past the cut still differ.
     digest = hashlib.sha256(kept.encode("utf-8")).hexdigest()[:16]
@@ -169,7 +173,8 @@ def _cut_whole(text: str, limit: int) -> str:
 def _failed(raw: str) -> dict:
     """A failing test's result: not run when the run itself broke, read before any cut."""
     message = _message(raw)
-    if NOT_THE_APP.search(ANSI.sub("", raw)):
+    # The kept lines, not the stack: a helper named net::ERR_… in a frame isn't the run's.
+    if NOT_THE_APP.search(_kept(raw)):
         return {"result": f"not run: {message.split(chr(10))[0]}"}
     return {"result": "fail", "step": 1, "message": message}
 
