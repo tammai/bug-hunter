@@ -1,7 +1,24 @@
+import hashlib
 import json
+import os
+import subprocess
 
 import pytest
 from conftest import git, run_script
+
+TEXTS = {
+    "F-TSK-01.AC1": 'Given 2 tasks, when a member creates "A", then TSK-3.',
+    "F-TSK-01.AC2": "Given a member, when the title is empty, then 400.",
+    "F-TSK-02.AC1": "Given tasks, then listed.",
+    "F-TSK-03.AC1": "Given tasks, then 2.",
+    "F-TSK-04.AC1": "Given x, then 1.",
+}
+
+
+def sha(text):
+    """A criterion's `text_sha256` as the lock holds it: its line after the ID, tag included."""
+    return hashlib.sha256(f"{text} `[docs]`".encode()).hexdigest()
+
 
 LOCK = {
     "contracts": "1.1.0",
@@ -9,7 +26,7 @@ LOCK = {
     "generated": "2026-11-08T10:00:00Z",
     "criteria": [
         {"id": cid, "feature": cid.split(".")[0], "file": f"features/{cid.split('.')[0]}.md",
-         "text_sha256": "0" * 64, "tag": "docs", "priority": "MVP", "level": level,
+         "text_sha256": sha(TEXTS[cid]), "tag": "docs", "priority": "MVP", "level": level,
          "test": None, "departures": []}
         for cid, level in [("F-TSK-01.AC1", 2), ("F-TSK-01.AC2", 2), ("F-TSK-02.AC1", 1),
                            ("F-TSK-03.AC1", 2), ("F-TSK-04.AC1", 0)]
@@ -31,13 +48,11 @@ SPEC = {
         "/api/tasks": {"post": {"operationId": "createTask", "x-features": ["F-TSK-01"]},
                        "get": {"operationId": "listTasks", "x-features": ["F-TSK-02"]}}}}),
     "spec/features/F-TSK-01.md": story(
-        "F-TSK-01", [("F-TSK-01.AC1", 'Given 2 tasks, when a member creates "A", then TSK-3.'),
-                     ("F-TSK-01.AC2", "Given a member, when the title is empty, then 400.")],
+        "F-TSK-01", [(c, TEXTS[c]) for c in ("F-TSK-01.AC1", "F-TSK-01.AC2")],
         ["Empty title → F-TSK-01.AC2", "Not signed in → F-TSK-01.AC1"],
         "Keys follow domain.md §Identifiers; only domain.md §Roles may create."),
-    "spec/features/F-TSK-02.md": story("F-TSK-02", [("F-TSK-02.AC1", "Given tasks, then listed.")]),
-    "spec/features/F-TSK-03.md": story("F-TSK-03", [("F-TSK-03.AC1", "Given tasks, then 2.")]),
-    "spec/features/F-TSK-04.md": story("F-TSK-04", [("F-TSK-04.AC1", "Given x, then 1.")]),
+    **{f"spec/features/{f}.md": story(f, [(f"{f}.AC1", TEXTS[f"{f}.AC1"])])
+       for f in ("F-TSK-02", "F-TSK-03", "F-TSK-04")},
 }
 
 CODE = {
@@ -189,12 +204,13 @@ def test_live_keeps_only_parts_serving_http(make_repo):
     assert stats["changed_lines"] == 7 * 14 + 3, stats
 
 
-def test_live_with_no_source_files_is_an_empty_plan(make_repo):
+def test_no_source_files_is_one_error_line(make_repo):
     repo = make_repo({})
     commit(repo, SPEC, "spec only")
-    result, out = scope(repo, "--live")
-    assert result.returncode == 0, result.stderr
-    assert (out["parts"], out["hunters"]) == ([], 0)
+    for args in ((), ("--live",)):
+        result, _ = scope(repo, *args)
+        assert result.returncode == 1 and result.stderr.startswith("error:"), (args, result.stdout)
+        assert result.stderr.count("\n") == 1 and "Traceback" not in result.stderr
 
 
 def test_spec_files_are_not_read_through_symlinks(make_repo, monkeypatch):
@@ -322,3 +338,181 @@ def test_a_bad_oracle_is_one_error_line(make_repo, tmp_path):
     result = run_script("oracle", "scope", repo, "--oracle", repo / "spec")
     assert result.returncode == 1 and result.stderr.startswith("error:")
     assert "Traceback" not in result.stderr
+
+
+def test_rule_citations_read_a_backticked_file_name_and_a_comma():
+    from oracle import rule_citations
+
+    for text in ("Per `domain.md` §Roles.", "Per domain.md, §Roles.", "Per `domain.md`, § Roles."):
+        assert rule_citations(text, ["Roles"]) == (["Roles"], 0), text
+
+
+@pytest.mark.parametrize("line", ["**Oracle: spec-gap**", "`Oracle: spec-gap`",
+                                  "**Oracle:** spec-gap", "Oracle: `spec-gap`"])
+def test_a_bold_or_backticked_spec_gap_line_counts(line):
+    from oracle import is_spec_gap
+
+    assert is_spec_gap(f"# Title\n{line}\n\n## What happens\nx\n")
+    assert not is_spec_gap(f"# Title\n{line.replace('spec-gap', 'spec-gaps')}\n")
+
+
+def test_standalone_criterion_ids_are_criteria(make_repo):
+    import oracle
+
+    assert oracle.CRITERION.findall("Per AC-001 and F-TSK-01.AC2, not XAC-002 or AC-01.") == \
+        ["AC-001", "F-TSK-01.AC2"]
+    lock = {"criteria": [{"id": "AC-001", "feature": "F-ONE", "file": "features/one.md",
+                          "text_sha256": sha("Given x, then 1."), "priority": "MVP",
+                          "level": 2}]}
+    repo = make_repo({})
+    commit(repo, {
+        "spec/criteria.lock.json": json.dumps(lock),
+        "spec/features/one.md": story("F-ONE", [("AC-001", "Given x, then 1.")]),
+        "src/one.py": "o = 1\n",
+        ".sdlc/state/2026-01-01-l-one.md": (
+            "# one\n\n## Tasks\n1. **One** — AC-001\n   - Files: `src/one.py`\n\n"
+            "## Criteria\n- AC-001 sha256:" + sha("Given x, then 1.") + "\n"),
+    }, "one")
+    result, out = scope(repo)
+    assert result.returncode == 0, result.stderr
+    [one] = out["parts"]
+    assert one["files"] == ["src/one.py"]
+    assert one["criteria"] == [{"id": "AC-001", "level": 2, "text": "Given x, then 1."}]
+
+
+def test_struck_through_criteria_are_not_read(make_repo):
+    repo = hunted_repo(make_repo)
+    text = story("F-TSK-01", [(c, TEXTS[c]) for c in ("F-TSK-01.AC1", "F-TSK-01.AC2")],
+                 extra="Only domain.md §Roles may create.")
+    text = text.replace("\n\n## Failure modes", (
+        "\n- [ ] ~~**F-TSK-01.AC1** Old keys per domain.md §Identifiers. `[docs]`~~ replaced"
+        "\n\n## Failure modes"))
+    commit(repo, {"spec/features/F-TSK-01.md": text}, "strike")
+    _, out = scope(repo)
+    create = next(p for p in out["parts"] if p["feature"] == "F-TSK-01")
+    assert create["criteria"][0] == {"id": "F-TSK-01.AC1", "level": 2,
+                                     "text": TEXTS["F-TSK-01.AC1"]}
+    assert create["domain_rules"] == ["Roles"]
+
+
+def test_an_edited_criterion_drops_to_level_0(make_repo):
+    repo = hunted_repo(make_repo)
+    commit(repo, {"spec/features/F-TSK-03.md": story(
+        "F-TSK-03", [("F-TSK-03.AC1", "Given tasks, then 3.")])}, "edit")
+    _, out = scope(repo)
+    stats = next(p for p in out["parts"] if p["feature"] == "F-TSK-03")
+    assert stats["criteria"][0]["level"] == 0 and stats["below_level_2"] is True
+    assert [p["feature"] for p in out["parts"]] == ["F-TSK-03", "F-TSK-02", "F-TSK-01"]
+
+
+def files_of(repo, feature):
+    _, out = scope(repo)
+    return next((p["files"] for p in out["parts"] if p["feature"] == feature), None)
+
+
+def test_a_commit_that_only_mentions_a_change_file_isnt_its_commit(make_repo):
+    repo = hunted_repo(make_repo)
+    view_change = "docs/sdlc/changes/2026-01-02-m-view.md"
+    commit(repo, {"src/mention.py": "m = 1\n"}, f"Tidy, as planned in {view_change}")
+    assert files_of(repo, "F-TSK-02") == ["src/view.py"]
+    commit(repo, {"src/view2.py": "w = 1\n"}, f"More view\n\nRecord: {view_change}\n")
+    assert files_of(repo, "F-TSK-02") == ["src/view.py", "src/view2.py"]
+
+
+def test_a_change_file_links_criteria_only_in_its_acceptance_criteria(make_repo):
+    repo = hunted_repo(make_repo)
+    other = "docs/sdlc/changes/2026-01-07-m-other.md"
+    commit(repo, {other: "# other\n\n## Failure modes\n- Empty → F-TSK-04.AC1\n",
+                  "src/other_x.py": "x = 1\n"}, f"Other ({other})")
+    assert files_of(repo, "F-TSK-04") is None
+
+
+def test_a_merge_commit_naming_a_change_lists_its_files(make_repo):
+    repo = hunted_repo(make_repo)
+    merged = "docs/sdlc/changes/2026-01-06-m-merged.md"
+    commit(repo, {merged: "# merged\n\n## Acceptance criteria\n- **AC-001** → F-TSK-04.AC1\n"},
+           "Record")
+    git(repo, "checkout", "-q", "-b", "side")
+    commit(repo, {"src/merged.py": "m = 2\n"}, "wip")
+    git(repo, "checkout", "-q", "-")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "merge", "-q", "--no-ff", "side",
+        "-m", f"Merge side ({merged})")
+    assert files_of(repo, "F-TSK-04") == ["src/merged.py"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="a Windows file name can't hold a quote")
+def test_paths_git_would_quote_still_match(make_repo):
+    repo = hunted_repo(make_repo)
+    four = "docs/sdlc/changes/2026-01-08-m-four.md"
+    commit(repo, {four: "# four\n\n## Acceptance criteria\n- **AC-001** → F-TSK-04.AC1\n",
+                  'src/say "hi".py': "a = 1\nb = 2\n"}, f"Four ({four})")
+    commit(repo, {'stats/q "1".py': "a = 1\nb = 2\nc = 3\n",
+                  ".sdlc/state/2026-01-03-m-stats.md": (
+                      '# stats\n\n## Tasks\n1. **Stats** — AC-001\n   - Files: `stats/q "1".py`'
+                      "\n\n## Criteria\n- F-TSK-03.AC1\n")}, "quoted")
+    _, out = scope(repo)
+    parts = {p["feature"]: p for p in out["parts"]}
+    assert (parts["F-TSK-04"]["files"], parts["F-TSK-04"]["changed_lines"]) == \
+        (['src/say "hi".py'], 2)
+    assert (parts["F-TSK-03"]["files"], parts["F-TSK-03"]["changed_lines"]) == \
+        (['stats/q "1".py'], 3)
+
+
+def test_headings_inside_code_fences_are_text(make_repo):
+    import oracle
+
+    assert oracle._section("## Criteria\n```\n## Tasks\n```\n- a\n", "Criteria") == \
+        ["```", "## Tasks", "```", "- a"]
+    repo = hunted_repo(make_repo)
+    (repo / "spec" / "domain.md").write_text(
+        "# Domain rules\n\n## Roles\n```\n## Fake\n```\n\n## Identifiers\nx\n", encoding="utf-8")
+    assert oracle.domain_headings(repo / "spec") == ["Roles", "Identifiers"]
+
+
+def test_install_warnings_are_printed_in_oracle_mode(make_repo):
+    repo = hunted_repo(make_repo)
+    commit(repo, {"we$ird/package-lock.json": "{}\n"}, "lockfile")
+    blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=repo, input=b"",
+                          capture_output=True).stdout.decode().strip()
+    subprocess.run([b"git", b"update-index", b"--add", b"--cacheinfo",
+                    f"100644,{blob},".encode() + b"bad\xff.py"],
+                   cwd=repo, check=True, capture_output=True)
+    result, _ = scope(repo)
+    assert result.returncode == 0, result.stderr
+    assert "aren't UTF-8" in result.stderr and "unsafe folder name" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_git_runs_a_fixed_number_of_times(make_repo, monkeypatch):
+    import oracle
+
+    repo = hunted_repo(make_repo)
+    calls = []
+    real = oracle._git
+    monkeypatch.setattr(oracle, "_git", lambda *a, **k: calls.append(a) or real(*a, **k))
+    oracle.build(str(repo), repo / "spec")
+    first = len(calls)
+    assert first <= 3, calls
+    for n in range(5, 9):
+        change = f"docs/sdlc/changes/2026-02-0{n}-m-x{n}.md"
+        commit(repo, {change: f"# x\n\n## Acceptance criteria\n- **AC-001** → F-TSK-0{n}.AC1\n",
+                      f"src/x{n}.py": "x = 1\n"}, f"X ({change})")
+    lock = json.loads(SPEC["spec/criteria.lock.json"])
+    lock["criteria"] += [{**lock["criteria"][-1], "id": f"F-TSK-0{n}.AC1",
+                          "feature": f"F-TSK-0{n}"} for n in range(5, 9)]
+    (repo / "spec" / "criteria.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+    calls.clear()
+    out = oracle.build(str(repo), repo / "spec")
+    assert len(out["parts"]) == 7 and len(calls) == first, calls
+
+
+def test_integrations_are_read_only_for_kept_parts(make_repo, monkeypatch, capsys):
+    import oracle
+
+    repo = hunted_repo(make_repo)
+    seen = []
+    monkeypatch.setattr(oracle.scope, "_calls_third_parties",
+                        lambda root, files: seen.append(list(files)) or False)
+    assert oracle._main(["scope", str(repo), "--oracle", str(repo / "spec"), "--max", "1"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert seen == [out["parts"][0]["files"]]

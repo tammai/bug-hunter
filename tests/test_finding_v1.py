@@ -247,3 +247,23 @@ def test_case_insensitive_names_never_hang(make_repo, tmp_path):
         assert full.returncode == 1 and full.stderr.startswith("error:"), name
         assert "Traceback" not in full.stderr
         (out / name).unlink()
+
+
+def test_a_spec_gap_draft_that_cites_a_criterion_is_a_build_defect(make_repo, tmp_path):
+    lock = {"criteria": [{"id": "F-TSK-01.AC2", "feature": "F-TSK-01", "file": "f.md",
+                          "level": 2}]}
+    repo = make_repo({"spec/domain.md": "# Domain rules\n\n## Roles\nx\n",
+                      "spec/criteria.lock.json": json.dumps(lock)})
+    for expected, criterion, rule in (("B2, per F-TSK-01.AC2.", "F-TSK-01.AC2", None),
+                                      ("Only a member (domain.md §Roles).", None,
+                                       "domain.md §Roles")):
+        text = DRAFT.replace("Severity: high\n", "Severity: high\nOracle: spec-gap\n")
+        draft = tmp_path / "gap.md"
+        draft.write_text(text.replace("## Expected\nB2.", "## Expected\n" + expected),
+                         encoding="utf-8")
+        result = run_script("finding_v1", "write", "--repo", repo, "--out", tmp_path / "out",
+                            "--draft", draft, "--oracle", repo / "spec")
+        assert result.returncode == 0, result.stderr
+        finding = json.loads(Path(result.stdout.strip()).read_text(encoding="utf-8"))
+        assert (finding["class"], finding["criterion"], finding["rule"], finding["route"]) == \
+            ("build-defect", criterion, rule, "sdlc"), expected
