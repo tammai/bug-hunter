@@ -123,3 +123,20 @@ def test_a_websocket_loopback_target_has_a_default_port():
     from drafts import leaks
 
     assert leaks("curl http://localhost:80/x", _target("ws://localhost"))
+
+
+def test_a_token_shaped_value_of_any_cookie_counts_anywhere():
+    from drafts import leaks
+
+    for cookie, token in ((".AspNetCore.Cookies=CfDJ8Kq9xZ7vL0pR", "CfDJ8Kq9xZ7vL0pR"),
+                          ("theme=qwxzkvbnmt; sid=qwxzkvbnmt", "qwxzkvbnmt")):
+        target = {"url": "http://127.0.0.1:5000", "accounts": {"member": {"Cookie": cookie}}}
+        assert leaks(f"got {token} back", target), cookie
+
+
+def test_a_cut_message_keeps_its_not_run_prefix_and_never_reads_empty():
+    from browser import _message
+    from finding_v1 import _bounded
+
+    assert _bounded("not run: " + "Z" * 600).startswith("not run: ")
+    assert _message("Z" * 600)
