@@ -225,12 +225,34 @@ Each finding has evidence at one of three levels:
 - **traced:** every step from input to problem is cited as `path:line` with the code;
 - **advisory:** a dependency advisory.
 
-Every finding an agent writes is checked by a second agent that gets only the finding and tries to disprove it. Only findings it can't disprove are kept; the rest are listed in the report as not confirmed.
+Every finding an agent writes is checked by a second agent that gets only the finding and tries to disprove it. Only findings it can't disprove are kept. The rest go under **Worth a look** in the report, unconfirmed: never numbered, and they never change the verdict.
+
+**The verdict.** `REPORT.md` opens with one of three verdicts, worked out by a script, worst first:
+- **Blocked:** a critical or high finding is open and not accepted. A secret or a dependency advisory counts too, even when no fixed version exists ("no fix known: replace the package or accept it with a date").
+- **Not verified:** nothing blocks, but something wasn't looked at. Each gap is named:
+  - a part `--max` left out, or a `paths…` argument;
+  - a stack or framework with no checklist of its own (Python, Go, Rust, PHP and React today);
+  - files in other languages;
+  - a lockfile with no dependency audit, or an audit that failed;
+  - a manifest with no lockfile;
+  - uncommitted changes;
+  - an earlier finding outside this run's scope, or one that couldn't be re-checked.
+- **Safe to deploy:** the whole repo was in scope, nothing was missed, and nothing critical or high is open. It names the commit and the date it covers, and that it is code only, no live environment.
+
+**Earlier findings are re-checked on every run.** A verifier looks at each open agent finding in scope, about 30k tokens each, shown on the cost screen. It finds the code even if it moved. A fixed finding moves to `audit/fixed/NN.md` with the date and the reason; numbers are never reused. A secret or advisory the scripts no longer find is fixed too, except a **committed** secret: it is still in git history, so it stays open until you rotate it.
+
+**Accepting a finding.** Write `~/.bug-hunter/<host>/<owner>/<repo>/accepted.md`, one line per finding:
+- `- 07 until 2026-12-31: <reason>` stops 07 blocking until that date; after it, the finding blocks again as "acceptance expired";
+- `- 03 rotated: <when, how>` closes a committed secret you have rotated, for good. It's allowed only for secrets findings.
+
+A line that doesn't fit, names no open finding or has a bad date accepts nothing and is listed as invalid. `/audit` never writes this file.
 
 **Output.** Findings go to `~/.bug-hunter/<host>/<owner>/<repo>/audit/NN.md`, readable only by you. Each has a Severity, Category, CWE, Proof, Where, Evidence, Impact and Fix. `REPORT.md` holds:
-- the table, sorted by severity;
+- the verdict, its blocking findings and its coverage gaps, and the acceptances in effect;
+- the table, sorted by severity, with each finding's OWASP Top 10 (2025) category worked out from its CWE;
+- an OWASP table: whether this run's checklists check each category, and the findings in it;
 - a PII inventory: each personal field, and where it's logged, returned, sent, stored and deleted;
-- what was dropped, and what wasn't covered.
+- Worth a look: the latest run's unconfirmed suspects, each with the verifier's verdict.
 
 Secret values never appear in any output. Every finding and report line is checked against the shapes of known key types (AWS, GitHub, Stripe, OpenAI, Anthropic, Slack, Google, JWTs, private keys, masked keys) and against fingerprints of every secret the scan found, so a known secret is caught anywhere in a line, and so are its 8-character slices (12 for all-lowercase or all-uppercase ones). Very short or word-like values (under 6 characters, numbers, `true`, a single short word) aren't fingerprinted, because ordinary text is full of them. A secret the scan didn't see and that has no known shape relies on the agents writing `<redacted>`, as they're told to; personal data relies on that rule too. Nothing is ever filed or posted: `/hunt-post` refuses audit findings.
 
@@ -241,7 +263,7 @@ Secret values never appear in any output. Every finding and report line is check
 
 Without it, an authorization finding that rests on an assumed rule says so and is capped at medium.
 
-**Not covered yet:** dependency audits for pnpm, Yarn, Python, Go, Rust, JVM and Ruby; security checklists beyond generic, Node and Vue; running services (findings that need a live database or API are traced, not proven); scanning deployed environments.
+**Not covered yet** (each shows as a gap, so the verdict says Not verified): dependency audits for pnpm, Yarn, Python, Go, Rust, JVM and Ruby; security checklists beyond generic, Node and Vue; running services (findings that need a live database or API are traced, not proven); scanning deployed environments.
 
 ## Safety
 

@@ -2,9 +2,11 @@
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -222,15 +224,63 @@ def _scan_file(repo: Path, name: str, committed: bool,
                     in_key = "-----END" not in line[match.end():]
                 severity = _severity(pattern, rel, value, committed)
                 hits.append((SEVERITY_RANK[severity], order, pattern["name"], len(value),
-                             severity))
+                             severity, value))
         if hits:
             # One finding per line, the most severe: a placeholder first on a minified line
             # mustn't hide a real key after it.
-            _, _, pattern_name, length, severity = min(hits)
-            # Only where and how long: the value, or any slice of it, is never output.
+            _, _, pattern_name, length, severity, value = min(hits)
+            # Only where and how long: the value, or any slice of it, is never output; _main
+            # turns it into a keyed id and drops it.
             found.append({"path": str(rel), "line": number, "pattern": pattern_name,
-                          "length": length, "committed": committed, "severity": severity})
+                          "length": length, "committed": committed, "severity": severity,
+                          "value": value})
     return found
+
+
+def _read_key(path: Path) -> bytes:
+    """An existing key: a plain file only the owner can read, never through a link."""
+    st = os.lstat(path)
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+        raise ValueError(f"{path} is a link or not a plain file; refusing it")
+    if os.name != "nt" and st.st_mode & 0o077:
+        raise ValueError(f"{path} isn't private (mode {stat.S_IMODE(st.st_mode):o}); "
+                         "make it chmod 600")
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
+    with os.fdopen(fd, "rb") as handle:
+        key = handle.read()
+    if len(key) < 32:
+        raise ValueError(f"{path} holds {len(key)} bytes, fewer than a 32-byte key")
+    return key
+
+
+def _id_key(path: Path) -> bytes:
+    """The owner's random key for secret ids, made on first use with mode 0600."""
+    try:
+        return _read_key(path)
+    except FileNotFoundError:
+        pass
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Written whole under a temp name, then linked in: a kill mid-write never leaves a short
+    # key, and of two first runs the second reads the key the first linked.
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".secret-id-")
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.write(os.urandom(32))
+            out.flush()
+            os.fsync(out.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            pass
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+    return _read_key(path)
+
+
+def _secret_id(key: bytes, value: str) -> str:
+    # Keyed, so the id tells two runs' secrets apart without a hash anyone could test guesses
+    # against: without the key, which never leaves the owner's folder, it says nothing.
+    return hmac.new(key, value.encode("utf-8", "surrogatepass"), hashlib.sha256).hexdigest()[:16]
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -240,7 +290,14 @@ def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo")
     parser.add_argument("--fingerprints", help="also write hashes of the found values here")
+    parser.add_argument("--id-key", help="give each finding an id keyed with this file's key "
+                                         "(made if missing), stable across runs")
     args = parser.parse_args(argv)
+    try:
+        key = _id_key(Path(args.id_key)) if args.id_key else None
+    except (OSError, ValueError) as exc:
+        print(f"error: can't use the id key: {exc}", file=sys.stderr)
+        return 1
     try:
         tracked = _git_names(args.repo)
         ignored = _git_names(args.repo, "--others", "--ignored", "--exclude-standard",
@@ -272,6 +329,10 @@ def _main(argv: list[str] | None = None) -> int:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(fingerprints(values), handle)
         os.replace(tmp, out)
+    for item in found:
+        value = item.pop("value")
+        if key is not None:
+            item["id"] = _secret_id(key, value)
     found.sort(key=lambda f: (f["path"], f["line"]))
     print(json.dumps(found, indent=2))
     return 0

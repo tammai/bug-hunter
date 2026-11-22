@@ -51,3 +51,6 @@ One line per defect: what it looks like, then the severity.
 - A retry or second upstream send (after a 401, a redirect, a refresh) that skips the budget and rate accounting the first send went through: high
 - A rule that infers "this request reached the target" from the absence of a log note, so a new note on forwarded lines makes budget restarts or clean-up lists undercount; log an explicit field: high
 - File names turned into bytes with `str.encode()` instead of `os.fsencode`, so a non-UTF-8 name (a Latin-1 branch on Linux) raises `UnicodeEncodeError`, a `ValueError` an `except OSError` doesn't catch: high
+- A record kept across runs whose facts are read only from its first sighting, while dedupe drops the later, truer copy (a secret since committed, an advisory rated up), so a blocking finding reads low; append what later runs learn and rank on the most severe: high
+- "Not produced again, so fixed" without checking the producer ran and could see it (a failed or skipped audit, a lockfile deleted only in the working tree, a secret still in git history): high
+- A target-controlled name (file, folder, lockfile) written into a line-structured record or report without escaping control characters, so a newline forges a heading or an evidence line the parser reads first: high

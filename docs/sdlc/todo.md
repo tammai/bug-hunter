@@ -76,9 +76,21 @@
   5. **Honest cost preview:** base it on the recorded runs (370k–1.8M processed tokens per hunter, not 100k) and show a range.
   6. **Outside check:** file 5–10 existing drafts upstream (godotenv exit code, json-server `_dependent` delete) and record whether each is accepted, fixed or closed as intended.
 - [ ] Make `/audit` say whether code is safe to deploy, in three projects in this order (planned for the week of 2026-11-23). From the 2026-11-20 brainstorm; CI is skipped for now (2026-11-20)
-  1. **Verdict and report:** build 2026-11-20-m-audit-verdict. Define is done and its design is approved; it stopped before Build. Resume with `/sdlc:start`, check the 12 ACs in `docs/sdlc/changes/2026-11-20-m-audit-verdict.md`, then build.
+  1. **Verdict and report:** build 2026-11-20-m-audit-verdict. Define is done and its design is approved; it stopped before Build. Resume with `/sdlc:start`, check the 12 ACs in `docs/sdlc/changes/2026-11-20-m-audit-verdict.md`, then build. Done in 2026-11-20-m-audit-verdict (2026-11-22).
   2. **Stack coverage:** brainstorm it, then build it. It covers checklists for React, TypeScript, Go, Rust, Python and PHP; OSV-Scanner for every lockfile; and Semgrep hits as leads the auditors must confirm, asking the owner to install a missing tool when it's needed. It also adds checklist items for OWASP 2025 A04 and A06–A10.
   3. **Live `/audit --target`:** brainstorm it, then build it. It proves code findings and probes headers, CORS, rate limits and logout on dev or UAT through `live_proxy.py`, with two or more test users of different roles and writes allowed. Never production.
+- [ ] `/audit` verdict follow-ups, from the reviews of 2026-11-20-m-audit-verdict (2026-11-22):
+  - an acceptance written for a finding's lower severity keeps accepting it after a `severity now` raise; show each accepted number's current severity in the Accepted list (R3-3, SR3-3);
+  - a secret raised by a later commit still reads "in a local file, not committed" in its title and Impact; add "since committed" in the report (R3-5, SR3-8);
+  - other facts frozen at first sight: "no fix known" after a fix is released (R3-6); a secret first seen after `git rm --cached` is rated low for good, though `_in_history` could raise it (SR3-4);
+  - the transition run after the upgrade: a legacy (no-id) secret can absorb a rotated key at the same path, or two same-shape keys in one file (N4, N8, SR2-9);
+  - npm advisory identity depends on the order of `via` (M6, unconfirmed);
+  - `recheck` without `--repo` skips the git-history check (N9; `/audit` always passes it);
+  - `secret-id.key` can't be made on a filesystem without hard links (N11, unconfirmed);
+  - PII inventory cells and the pre-existing git calls in `scope.py` and `secrets_scan.py` aren't hardened like the new code (control characters, inherited `GIT_DIR`) (N12, SR2-5, SR3-2);
+  - git config of a hostile target repo: `git status` filters and a treeless partial clone's lazy fetch can run its programs (S6, SR3-6, unconfirmed);
+  - agents could edit `accepted.md` or the audit folder during a run, and nothing detects it (S8);
+  - split `test_orphaned_advisories_and_accepted_md_edge_lines` into one behaviour per test (F3).
 
 ## Done
 

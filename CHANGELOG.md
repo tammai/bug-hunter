@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Added
+
+- **`/audit` ends with a deploy verdict** ([change](docs/sdlc/changes/2026-11-20-m-audit-verdict.md)). `REPORT.md` opens with **Blocked**, **Not verified** or **Safe to deploy**, computed by `findings.py report` from the findings, `scope.py`'s coverage facts, the run's facts and the re-check. Every coverage gap is named. Safe names the commit and date it covers.
+- **Earlier findings are re-checked each run.** `findings.py earlier` lists them, a `finding-verifier` in re-check mode checks each, and `findings.py recheck` moves fixed ones to `audit/fixed/`. Committed secrets stay open until rotated.
+- **`accepted.md`** beside `policy.md`: `- NN until YYYY-MM-DD: <reason>`, or `- NN rotated: <note>` for a secret.
+- **Worth a look:** unconfirmed suspects are kept in `audit/unconfirmed/` (`findings.py suspects`) and listed without blocking.
+- **OWASP Top 10 (2025)** category on each finding, and a per-category coverage table.
+- **`secrets_scan.py --id-key`:** each secret gets an id keyed with a private random key, so it keeps its finding number when its line moves.
+- **`scope.py --focus security`** reports `no_checklist` per part (React detected from `package.json`) and a `coverage` block.
+
+### Changed
+
+- **Constitution 1.3.0:** Principle I allows unconfirmed suspicions outside the findings; the Audit Bar defines the verdict.
+- **`findings.py report`** takes `--scope` and `--recheck`. Its `--meta` holds `secrets_scanned`, `audited`, `audit_failures` and `check_failed`; `skipped_parts`, `not_audited` and `dropped` are gone.
+- **`findings.py next`** counts `audit/fixed/` too, so a number is never reused.
+
 ## 0.6.0 — 2026-11-17
 
 Live targets can mint their own tokens. Short-lived bearer tokens no longer have to be pasted into `targets.json` before every `/hunt --target`.

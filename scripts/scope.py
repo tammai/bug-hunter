@@ -9,6 +9,7 @@ import sys
 from pathlib import Path, PurePosixPath
 
 import browser
+from throwaway import _REPO_VARS
 
 PART_SIZE = 5
 TOKENS_PER_HUNTER = 100_000
@@ -113,7 +114,8 @@ def _installs(files: list[str], rules: list[dict] | None = None) -> list[dict]:
                 continue
             dir_, command = str(folder), rule["command"]
             step = command if dir_ == "." else f"(cd '{dir_}' && {command})"
-            found[(dir_, command)] = {"dir": dir_, "command": command, "step": step}
+            found[(dir_, command)] = {"dir": dir_, "lockfile": path.as_posix(),
+                                      "command": command, "step": step}
     return sorted(found.values(), key=lambda i: (_natural_key(i["dir"]), i["command"]))
 
 
@@ -258,17 +260,76 @@ def _any_matches(root: Path, files: list[str], markers: re.Pattern,
     return False
 
 
-def _checklists(part: dict, root: Path, tracked: set[str]) -> list[str]:
+CHECKLIST_DIR = Path(__file__).resolve().parent.parent / "security"
+
+
+def _checklists(part: dict, root: Path, tracked: set[str]) -> tuple[list[str], list[str]]:
+    """The checklists a part gets, and its detected stacks and frameworks that have none."""
     rule = SECURITY["checklists"]
-    found = list(rule["always"])
-    found += [rule["stacks"][s] for s in part["stacks"] if s in rule["stacks"]]
-    vue = rule["vue"]
-    if any(PurePosixPath(f).suffix in vue["extensions"] for f in part["files"]) or (
-        "node" in part["stacks"]
-        and _depends_on(root, tracked, PurePosixPath(part["dir"]), vue["dependency"])
-    ):
-        found.append("vue")
-    return found
+    wanted = list(part["stacks"])
+    for framework in rule["frameworks"]:
+        if any(PurePosixPath(f).suffix in framework["extensions"] for f in part["files"]) or (
+            "node" in part["stacks"] and _depends_on(
+                root, tracked, PurePosixPath(part["dir"]), framework["dependency"])
+        ):
+            wanted.append(framework["name"])
+    found, missing = list(rule["always"]), []
+    for name in dict.fromkeys(wanted):
+        (found if (CHECKLIST_DIR / f"{name}.md").is_file() else missing).append(name)
+    return found, missing
+
+
+def _git_out(repo: str, *args: str) -> bytes | None:
+    """A git command's output, or None when it fails or git is missing."""
+    try:
+        # No optional index writes, and no fsmonitor hook from the target's own config.
+        result = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false",
+                                 "-C", repo, *args], capture_output=True,
+                                env={k: v for k, v in os.environ.items()
+                                     if k.upper() not in _REPO_VARS})
+    except OSError:
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def _coverage(repo: str, files: list[str], paths: list[str], parts: list[dict],
+              unsafe: list[str]) -> dict:
+    """What a security audit of this scope can't vouch for, beyond its parts."""
+    skip_dirs = TEST_DIRS | set(STACKS["fixture_dirs"])
+    in_scope = [f for f in files if (not paths or _under(f, paths))
+                and not any(p in skip_dirs for p in PurePosixPath(f).parent.parts)]
+    tracked = set(files)
+    other: dict[str, int] = {}
+    for part in parts:
+        for name in part["files"]:
+            suffix = PurePosixPath(name).suffix
+            if suffix in STACKS["other_extensions"]:
+                other[suffix] = other.get(suffix, 0) + 1
+    manifests = []
+    for name in in_scope:
+        path = PurePosixPath(name)
+        locks = STACKS["manifests"].get(path.name)
+        # A workspace member's lockfile sits in a folder above it.
+        if locks is not None and not any(
+            (folder / lock).as_posix() in tracked
+            for folder in (path.parent, *path.parent.parents) for lock in locks
+        ):
+            manifests.append(name)
+    audited = {a["lockfile"] for a in _installs(files, STACKS["audits"])}
+    commit = _git_out(repo, "rev-parse", "--verify", "-q", "HEAD^{commit}")
+    status = _git_out(repo, "status", "--porcelain=v1", "-z", "--untracked-files=normal",
+                      "--ignore-submodules=none")
+    return {
+        "paths": paths,
+        "commit": commit.decode("ascii", "replace").strip() or None if commit else None,
+        "dirty": None if status is None else bool(status),
+        "unsafe_folders": unsafe,
+        "other_files": dict(sorted(other.items())),
+        "manifests_without_lockfile": manifests,
+        "unaudited_lockfiles": sorted(
+            (f for f in in_scope if PurePosixPath(f).name in STACKS["dependency_lockfiles"]
+             and f not in audited), key=_natural_key),
+    }
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -364,16 +425,20 @@ def _main(argv: list[str] | None = None) -> int:
     if focus:
         tracked_set = set(files)
         for part in out["parts"] + out["skipped"]:
-            part["checklists"] = _checklists(part, root, tracked_set)
-    out["installs"] = _installs(files)
+            part["checklists"], part["no_checklist"] = _checklists(part, root, tracked_set)
+    # Only an audit names its lockfile: the report checks each one was audited.
+    out["installs"] = [{k: v for k, v in i.items() if k != "lockfile"} for i in _installs(files)]
     out["audits"] = _installs(files, STACKS["audits"])
     lockfiles = {r["lockfile"] for r in STACKS["installs"] + STACKS["audits"]}
-    for folder in sorted({
-        PurePosixPath(f).parent for f in files
+    unsafe = sorted({
+        str(PurePosixPath(f).parent) for f in files
         if PurePosixPath(f).name in lockfiles and not _safe_folder(PurePosixPath(f).parent)
-    }, key=str):
-        print(f"warning: no install or audit for {str(folder)!r}: unsafe folder name",
+    })
+    for folder in unsafe:
+        print(f"warning: no install or audit for {folder!r}: unsafe folder name",
               file=sys.stderr)
+    if focus:
+        out["coverage"] = _coverage(args.repo, files, paths, out["parts"], unsafe)
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 

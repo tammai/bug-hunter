@@ -1,6 +1,6 @@
 import json
 
-from conftest import run_script
+from conftest import commit, run_script
 
 
 def scope(repo, *args):
@@ -119,9 +119,52 @@ def test_lockfiles_give_dependency_audit_steps(make_repo):
     result = run_script("scope", repo)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["audits"] == [
-        {"dir": ".", "command": "npm audit --omit=dev --json",
+        {"dir": ".", "lockfile": "package-lock.json", "command": "npm audit --omit=dev --json",
          "step": "npm audit --omit=dev --json"},
-        {"dir": "php app", "command": "composer audit --no-plugins --no-scripts --format=json",
+        {"dir": "php app", "lockfile": "php app/composer.lock",
+         "command": "composer audit --no-plugins --no-scripts --format=json",
          "step": "(cd 'php app' && composer audit --no-plugins --no-scripts --format=json)"},
     ]
     assert "unsafe folder name" in result.stderr
+
+
+def test_scope_reports_coverage_gaps(make_repo):
+    repo = make_repo({
+        "src/app.py": "",
+        "web/src/App.jsx": "",
+        "web/package.json": json.dumps({"dependencies": {"react": "^18"}}),
+        "web/package-lock.json": "",
+        "packages/ui/index.js": "",
+        "packages/ui/package.json": "{}",
+        "package.json": "{}",
+        "pnpm-lock.yaml": "",
+        "api/server.js": "",
+        "api/package.json": "{}",
+        "deploy/run.sh": "",
+        "deploy/build.sh": "",
+        "tool/main.go": "",
+        "tool/go.mod": "module tool",
+        "svc/main.go": "",
+        "svc/go.mod": "module svc",
+        "svc/go.sum": "",
+        "tests/fixtures/x/package.json": "{}",
+    })
+    commit(repo)
+    out = scope(repo, "--focus", "security")
+    by_dir = {p["dir"]: p for p in out["parts"]}
+    assert by_dir["src"]["no_checklist"] == ["python"]
+    assert by_dir["web/src"]["no_checklist"] == ["react"]
+    assert "react" not in by_dir["web/src"]["checklists"]
+    assert by_dir["api"]["no_checklist"] == []
+    assert by_dir["tool"]["no_checklist"] == ["go"]
+    coverage = out["coverage"]
+    assert coverage["other_files"] == {".sh": 2}
+    assert coverage["manifests_without_lockfile"] == ["tool/go.mod"]
+    assert coverage["unaudited_lockfiles"] == ["pnpm-lock.yaml", "svc/go.sum"]
+    assert coverage["dirty"] is False and len(coverage["commit"]) == 40
+    assert coverage["paths"] == [] and coverage["unsafe_folders"] == []
+
+    (repo / "src/new.py").write_text("x = 1\n", encoding="utf-8")
+    assert scope(repo, "--focus", "security")["coverage"]["dirty"] is True
+    narrowed = scope(repo, "src", "--focus", "security")["coverage"]
+    assert narrowed["paths"] == ["src"]
