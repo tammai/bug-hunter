@@ -21,37 +21,37 @@
     },
     ".claude/rules/sdlc.md": {
       "class": "generated",
-      "sha256": "1c12b0d662b50c1b0c44f370e21bd8aa375489d27e6ff223e47e85fbd4bfe0ac",
+      "sha256": "621dcdce3ebc714b2e5f472d9e40cfc66162f68edb0ec32f24d75528fcd7b04c",
       "template": "templates/project/rules/sdlc.md"
     },
     ".claude/rules/sdlc-code-style.md": {
       "class": "generated",
-      "sha256": "2e798b0573ddb0d3cb93b3b8e7b621e8b4e8f7206eeca8dcd75fe9f150eca57e",
+      "sha256": "e20405d2b45441f16904b3d2da952c22fa5348db1d63f5f43d234a5e6f4b0686",
       "template": "templates/project/rules/code-style.md"
     },
     ".claude/rules/sdlc-tests.md": {
       "class": "generated",
-      "sha256": "cf465c30263cb410fe3f20bf97a239986750abb2337d5d3cc5b0a5029c179a13",
+      "sha256": "e5d6665957d20eb20402c47cd5224a1271263b8cba35ce2dc2b7123c63a66c96",
       "template": "templates/project/rules/tests.md"
     },
     ".claude/rules/sdlc-migrations.md": {
       "class": "generated",
-      "sha256": "ef4c9eb3710affa2533fde0a98c12b12bd37c174d7eedcaeb931c7233851a1d2",
+      "sha256": "f71889c3ce8c0fb9f3fe6132fff2efdbd849ebd2deb7179cee4162c9268247da",
       "template": "templates/project/rules/migrations.md"
     },
     ".claude/rules/sdlc-sensitive.md": {
       "class": "generated",
-      "sha256": "251b5bf623352e9a6d224d513fa24127880e3b175d3cd47190f78a1ac43b9e5a",
+      "sha256": "6c4731cecf6dfe539d1c1b7e8baec036e60fe4dea5cb40c5e8f6d3b00942236d",
       "template": "templates/project/rules/sensitive.md"
     },
     ".claude/rules/sdlc-ci.md": {
       "class": "generated",
-      "sha256": "bc1691c73470e7b5a88cc16973d13cde41ed2e359370a63e3eea59c07e8e74ec",
+      "sha256": "3e8dba94cb64c180c3dc6332f78f8ff2314f88457760a0d116697de8f5840114",
       "template": "templates/project/rules/ci.md"
     },
     ".claude/rules/sdlc-ui.md": {
       "class": "generated",
-      "sha256": "5c75e852beb24560c9ce7156fb443eb39bff5c647480eef1b5e545692bb9755a",
+      "sha256": "7ec673fb89bacc5e3fb7c64d52e17db5f5afa0d595258da9747fcfb4f6bb5f7c",
       "template": "templates/project/rules/ui.md"
     },
     ".claude/hookify/sdlc-console-log.md": {
