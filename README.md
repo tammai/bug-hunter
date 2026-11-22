@@ -245,7 +245,11 @@ Every finding an agent writes is checked by a second agent that gets only the fi
 - `- 07 until 2026-12-31: <reason>` stops 07 blocking until that date; after it, the finding blocks again as "acceptance expired";
 - `- 03 rotated: <when, how>` closes a committed secret you have rotated, for good. It's allowed only for secrets findings.
 
-A line that doesn't fit, names no open finding or has a bad date accepts nothing and is listed as invalid. `/audit` never writes this file.
+A line that doesn't fit, names no open finding or has a bad date accepts nothing and is listed as invalid. `/audit` never writes this file. The report shows each accepted finding's current severity, and says so when a later run raised it since it was first found, so you can see when an acceptance covers more risk than you accepted.
+
+**Sealed during a run.** Before any agent starts, `/audit` runs `findings.py seal`: one hash of `accepted.md`, `policy.md` and every finding in the audit folder. If any of them changed by the time the findings are merged (an agent edited an acceptance, deleted a finding or planted one), it moves nothing, writes no report and tells you. Don't edit those files while `/audit` runs.
+
+**Facts a later run learns are added, never rewritten.** A secret first seen in a local file and committed since reads "(since committed)" and blocks at its new severity. A local `.env` whose path git history already holds (untracked with `git rm --cached`) counts as committed. An advisory whose fix was released after it was first reported stops saying "no fix known". Each npm advisory is its own finding, so a package gaining a second advisory doesn't change the first one's number.
 
 **Output.** Findings go to `~/.bug-hunter/<host>/<owner>/<repo>/audit/NN.md`, readable only by you. Each has a Severity, Category, CWE, Proof, Where, Evidence, Impact and Fix. `REPORT.md` holds:
 - the verdict, its blocking findings and its coverage gaps, and the acceptances in effect;

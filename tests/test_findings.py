@@ -720,7 +720,7 @@ def test_accepted_findings_expire_and_bad_lines_accept_nothing(tmp_path):
     blocking = top.split("## Verdict: Blocked")[1].split("\n\n")[1]
     assert "02 (high)" in blocking and "acceptance expired" in blocking
     assert "01 (high)" not in blocking
-    assert "01 until 2999-12-31" in report and "fixing in sprint 4" in report
+    assert "01 (high) until 2999-12-31" in report and "fixing in sprint 4" in report
     invalid = report.split("Invalid lines in accepted.md")[1]
     assert invalid.count("- line ") == 7, invalid
     assert "Traceback" not in report
@@ -751,8 +751,11 @@ NPM = {"vulnerabilities": {"lodash": {
     "fixAvailable": {"name": "lodash", "version": "4.17.21"}}}}
 
 
-def test_scripted_findings_fixed_when_gone_but_committed_secrets_need_rotation(tmp_path):
+def test_scripted_findings_fixed_when_gone_but_committed_secrets_need_rotation(tmp_path,
+                                                                              make_repo):
     scope, meta, _ = clean_facts(tmp_path)
+    # A repo whose history never held .env, and whose composer.lock is still there.
+    repo = make_repo({"composer.lock": "{}"})
     advisory = scripted(tmp_path, "from-npm-audit", NPM, "npm")
     local = scripted(tmp_path, "from-secrets-scan",
                      [{**SECRET_SCAN[0], "committed": False, "id": "aaaa"}], "local")
@@ -767,7 +770,7 @@ def test_scripted_findings_fixed_when_gone_but_committed_secrets_need_rotation(t
     assert result["fixed"] == [] and len(list(audit.glob("0*.md"))) == 4
 
     result = recheck(tmp_path, audit, scope, "--found", found, "--secrets-scanned",
-                     "--audited", "package-lock.json")
+                     "--audited", "package-lock.json", "--repo", repo)
     assert sorted(f["number"] for f in result["fixed"]) == ["01", "02"]
     for n in ("01", "02"):
         assert not (audit / f"{n}.md").exists()
@@ -1190,23 +1193,30 @@ def test_rejected_suspects_and_missing_verdicts_reach_the_report(tmp_path):
     assert "agent-1.md" in look and "agent-2.md" in look and "broken" not in look
 
 
-def test_orphaned_advisories_and_accepted_md_edge_lines(tmp_path):
-    scope, meta, recheck_ = clean_facts(tmp_path)
+def test_an_advisory_whose_lockfile_wasnt_audited_is_cannot_check(tmp_path):
+    scope, _, _ = clean_facts(tmp_path)
     audit = audit_with(tmp_path, scripted(tmp_path, "from-composer-audit", COMPOSER, "c"))
     result = recheck(tmp_path, audit, scope, "--audited", "package-lock.json")
     assert [c["number"] for c in result["cannot_check"]] == ["01"]
     assert "composer.lock" in result["cannot_check"][0]["reason"]
 
+
+def test_accepted_md_takes_a_bom_and_counts_other_list_markers_invalid(tmp_path):
+    scope, meta, recheck_ = clean_facts(tmp_path)
+    audit = audit_with(tmp_path, scripted(tmp_path, "from-composer-audit", COMPOSER, "c"))
     (audit.parent / "accepted.md").write_bytes(
         "﻿- 01 until 2999-12-31: BOM first\n* 01 until 2999-12-31: star\n".encode())
     report = report_for(tmp_path, audit, scope, meta, recheck_)
-    assert "01 until 2999-12-31: BOM first" in report
+    assert "01 (high) until 2999-12-31: BOM first" in report
     assert report.split("Invalid lines in accepted.md")[1].count("- line ") == 1
 
+
+def test_npm6_with_no_patched_version_is_no_fix_known(tmp_path):
+    scope, meta, recheck_ = clean_facts(tmp_path)
     npm6 = {"advisories": {"9": {"module_name": "x", "severity": "high", "title": "t",
                                  "vulnerable_versions": "*", "patched_versions": "<0.0.0"}}}
     text = scripted(tmp_path, "from-npm-audit", npm6, "npm6")
-    report = report_for(tmp_path, audit_with(tmp_path / "six", text), scope, meta, recheck_)
+    report = report_for(tmp_path, audit_with(tmp_path, text), scope, meta, recheck_)
     assert "no fix known" in report
 
 
@@ -1402,3 +1412,193 @@ def test_recheck_results_carry_no_control_characters(tmp_path):
     recheck(tmp_path, audit, scope, "--audited", "a\\x1b[2J.lock")
     assert "\x1b" not in (tmp_path / "recheck.json").read_text(encoding="utf-8")
     assert "\x1b" not in (audit / "fixed" / "01.md").read_text(encoding="utf-8")
+
+
+# --- 2026-11-22-m-audit-verdict-followups ---
+
+
+def raised(text, *lines):
+    return text.rstrip("\n") + "".join(f"\n\n**Status ({TODAY}):** {line}" for line in lines) + "\n"
+
+
+def test_accepted_lines_show_the_current_severity_and_a_raise(tmp_path):
+    scope, meta, recheck_ = clean_facts(tmp_path)
+    audit = audit_with(tmp_path, raised(MEDIUM, "severity now critical (found again at it)"),
+                       MEDIUM)
+    (audit.parent / "accepted.md").write_text(
+        "- 01 until 2999-12-31: dev only\n- 02 until 2999-12-31: fine\n", encoding="utf-8")
+    report = report_for(tmp_path, audit, scope, meta, recheck_)
+    accepted = report.split("Accepted")[1].split("\n\n")[0]
+    assert ("- 01 (critical, raised from medium since it was first found) until 2999-12-31: "
+            "dev only") in accepted
+    assert "- 02 (medium) until 2999-12-31: fine" in accepted
+
+
+def test_a_secret_committed_since_says_so_in_the_report(tmp_path):
+    scope, meta, recheck_ = clean_facts(tmp_path)
+    local = scripted(tmp_path, "from-secrets-scan",
+                     [{**SECRET_SCAN[0], "committed": False, "severity": "low"}], "local")
+    audit = audit_with(tmp_path, local)
+    found = tmp_path / "found"
+    data = tmp_path / "s.json"
+    data.write_text(json.dumps(SECRET_SCAN), encoding="utf-8")
+    assert run_script("findings", "from-secrets-scan", data, found).returncode == 0
+    recheck(tmp_path, audit, scope, "--found", found, "--secrets-scanned")
+    assert run_script("findings", "dedupe", found, audit).returncode == 0
+    text = (audit / "01.md").read_text(encoding="utf-8")
+    assert text.startswith(local.rstrip("\n"))
+    report = report_for(tmp_path, audit, scope, meta, recheck_)
+    blocking = report.split("Blocking")[1].split("\n\n")[0]
+    assert ("01 (critical): Secret (stripe-live-key) in a local file, not committed: .env "
+            "(since committed)") in blocking
+    row = next(line for line in report.splitlines() if line.startswith("| 01 |"))
+    assert "(since committed)" in row
+
+
+def test_a_fix_released_later_reaches_the_report(tmp_path):
+    scope, meta, recheck_ = clean_facts(tmp_path)
+    no_fix = json.loads(json.dumps(NPM))
+    no_fix["vulnerabilities"]["lodash"]["fixAvailable"] = False
+    audit = audit_with(tmp_path, scripted(tmp_path, "from-npm-audit", no_fix, "nofix"))
+    assert "no fix known" in report_for(tmp_path, audit, scope, meta, recheck_)
+    for round_ in (1, 2):
+        found = tmp_path / f"found{round_}"
+        data = tmp_path / "n.json"
+        data.write_text(json.dumps(NPM), encoding="utf-8")
+        assert run_script("findings", "from-npm-audit", data, found).returncode == 0
+        assert run_script("findings", "dedupe", found, audit).returncode == 0
+    text = (audit / "01.md").read_text(encoding="utf-8")
+    assert text.count("fix now upgrade lodash to 4.17.21") == 1
+    report = report_for(tmp_path, audit, scope, meta, recheck_)
+    assert "01 (high)" in report and "no fix known" not in report
+    planted = write(tmp_path, raised(GOOD, "fix now upgrade x to 2"), "planted.md")
+    assert run_script("findings", "check", planted, "--agent").returncode == 1
+
+
+def test_legacy_secrets_pair_only_unambiguously_and_never_when_rotated(tmp_path):
+    legacy_item = {k: v for k, v in SECRET_SCAN[0].items() if k != "id"}
+
+    def case(name, produced, accepted=""):
+        base = tmp_path / name
+        base.mkdir()
+        scope, _, _ = clean_facts(base)
+        audit = audit_with(base, scripted(base, "from-secrets-scan", [legacy_item], "legacy"))
+        if accepted:
+            (audit.parent / "accepted.md").write_text(accepted, encoding="utf-8")
+        found = base / "found"
+        data = base / "s.json"
+        data.write_text(json.dumps(produced), encoding="utf-8")
+        assert run_script("findings", "from-secrets-scan", data, found).returncode == 0
+        result = recheck(base, audit, scope, "--found", found, "--secrets-scanned")
+        assert result["fixed"] == [] and result["still_open"] == ["01"]
+        assert run_script("findings", "dedupe", found, audit).returncode == 0
+        return (audit / "01.md").read_text(encoding="utf-8"), len(list(found.glob("*.md")))
+
+    at = {**SECRET_SCAN[0], "id": "aaaa0000aaaa0000"}
+    below = {**SECRET_SCAN[0], "line": 5, "id": "bbbb0000bbbb0000"}
+    text, new = case("rotated", [at], "- 01 rotated: rotated 2026-11-01\n")
+    assert "secret id" not in text and new == 1
+    text, new = case("by-line", [at, below])
+    assert "secret id aaaa0000aaaa0000" in text and "bbbb0000bbbb0000" not in text
+    assert new == 1
+    elsewhere = [{**below, "line": 7}, {**below, "line": 9, "id": "cccc0000cccc0000"}]
+    text, new = case("ambiguous", elsewhere)
+    assert "secret id" not in text and new == 2
+
+
+def test_npm_advisory_identity_survives_a_reordered_via(tmp_path):
+    scope, meta, recheck_ = clean_facts(tmp_path)
+    a = {"title": "Prototype Pollution", "cwe": ["CWE-1321"], "severity": "high",
+         "url": "https://github.com/advisories/GHSA-a"}
+    b = {"title": "ReDoS", "cwe": ["CWE-1333"], "severity": "critical",
+         "url": "https://github.com/advisories/GHSA-b"}
+
+    def npm(via):
+        return {"vulnerabilities": {"lodash": {"name": "lodash", "severity": "critical",
+                                               "range": "<4.17.21", "via": via,
+                                               "fixAvailable": False}}}
+
+    audit = audit_with(tmp_path, scripted(tmp_path, "from-npm-audit", npm([a]), "first"))
+    (audit.parent / "accepted.md").write_text("- 01 until 2999-12-31: not reachable\n",
+                                              encoding="utf-8")
+    found = tmp_path / "found"
+    data = tmp_path / "n.json"
+    data.write_text(json.dumps(npm([b, a])), encoding="utf-8")
+    assert run_script("findings", "from-npm-audit", data, found).returncode == 0
+    result = recheck(tmp_path, audit, scope, "--found", found, "--audited", "package-lock.json")
+    assert result["fixed"] == [] and result["still_open"] == ["01"]
+    assert run_script("findings", "dedupe", found, audit).returncode == 0
+    [left] = found.glob("*.md")
+    assert "GHSA-b" in left.read_text(encoding="utf-8")
+    report = report_for(tmp_path, audit, scope, meta, recheck_)
+    assert "- 01 (high) until 2999-12-31: not reachable" in report
+
+
+def test_recheck_without_repo_never_fixes_a_local_secret(tmp_path):
+    scope, _, _ = clean_facts(tmp_path)
+    local = [{**SECRET_SCAN[0], "committed": False}]
+    audit = audit_with(tmp_path, scripted(tmp_path, "from-secrets-scan", local, "l"))
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    result = recheck(tmp_path, audit, scope, "--found", empty, "--secrets-scanned")
+    assert result["fixed"] == [] and result["still_open"] == ["01"]
+    assert (audit / "01.md").exists()
+
+
+def test_recheck_refuses_an_audit_folder_changed_during_the_run(tmp_path):
+    import shutil
+    scope, _, _ = clean_facts(tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    advisory = scripted(tmp_path, "from-composer-audit", COMPOSER, "c")
+    scope_file = tmp_path / "scope.json"
+    scope_file.write_text(json.dumps(scope), encoding="utf-8")
+
+    def fresh():
+        audit = tmp_path / "home" / "audit"
+        shutil.rmtree(audit.parent, ignore_errors=True)
+        (audit / "fixed").mkdir(parents=True)
+        (audit / "01.md").write_text(advisory, encoding="utf-8")
+        (audit / "fixed" / "02.md").write_text(GOOD, encoding="utf-8")
+        (audit / "inventory.md").write_text("| field |\n", encoding="utf-8")
+        (audit.parent / "accepted.md").write_text("- 01 until 2999-12-31: x\n", "utf-8")
+        (audit.parent / "policy.md").write_text("admins see all\n", encoding="utf-8")
+        result = run_script("findings", "seal", audit)
+        assert result.returncode == 0, result.stderr
+        assert len(result.stdout.strip()) == 64
+        return audit, result.stdout.strip()
+
+    def edit(path, text=None):
+        if text is None:
+            path.unlink()
+        else:
+            path.write_text(text, encoding="utf-8")
+
+    mutations = {
+        "accepted.md": lambda a: edit(a.parent / "accepted.md", "- 01 until 2999-12-31: y\n"),
+        "accepted.md removed": lambda a: edit(a.parent / "accepted.md"),
+        "policy.md": lambda a: edit(a.parent / "policy.md", "everyone sees all\n"),
+        "NN.md changed": lambda a: edit(a / "01.md", advisory + "\n"),
+        "NN.md added": lambda a: edit(a / "03.md", GOOD),
+        "fixed removed": lambda a: edit(a / "fixed" / "02.md"),
+        "inventory.md": lambda a: edit(a / "inventory.md", "| field | x |\n"),
+    }
+    for name, mutate in mutations.items():
+        audit, digest = fresh()
+        mutate(audit)
+        result = run_script("findings", "recheck", audit, "--scope", scope_file, "--out",
+                            tmp_path / "r.json", "--repo", repo, "--seal", digest)
+        assert result.returncode == 1 and result.stderr.startswith("error:"), name
+        assert "Traceback" not in result.stderr, name
+        assert (audit / "01.md").exists() and not (audit / "fixed" / "01.md").exists(), name
+
+    audit, digest = fresh()
+    result = recheck(tmp_path, audit, scope, "--repo", repo, "--seal", digest)
+    assert [f["number"] for f in result["fixed"]] == ["01"]
+
+    root = Path(__file__).resolve().parent.parent
+    body = (root / "commands/audit.md").read_text(encoding="utf-8")
+    assert body.index('findings.py" seal') < body.index("owner's yes")
+    assert body.index("reap.py\" \"$RUN\"` (it stops") < body.index('findings.py" recheck')
+    assert "--seal" in body.split('findings.py" recheck')[1].split("\n")[0]
+    assert "seal" in (root / "README.md").read_text(encoding="utf-8")

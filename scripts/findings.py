@@ -2,10 +2,10 @@
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 import tempfile
 from pathlib import Path, PurePosixPath
@@ -15,11 +15,11 @@ from secrets_scan import (
     PATTERNS,
     SEVERITY_RANK,
     counts,
+    in_history,
     is_placeholder,
     known_secret_in,
     load_prints,
 )
-from throwaway import _REPO_VARS
 
 SEVERITIES = ["critical", "high", "medium", "low"]
 CATEGORIES = ["authz", "injection", "secrets", "session", "pii-logged", "pii-exposed",
@@ -55,6 +55,7 @@ SECRET_ID = re.compile(
 SECRET_ID_IN_EVIDENCE = re.compile(r" committed=(?:true|false) id=([0-9a-f]{8,64})\s*$", re.M)
 SEEN_COMMITTED = re.compile(r"^\*\*Status \([0-9]{4}-[0-9]{2}-[0-9]{2}\):\*\* seen committed\s*$",
                             re.M)
+FIX_NOW = re.compile(r"^\*\*Status \([0-9]{4}-[0-9]{2}-[0-9]{2}\):\*\* fix now (\S.*?)\s*$", re.M)
 REJECTED = ".unconfirmed-refused.json"
 SCRIPT_ONLY = [
     (re.compile(r"^\*\*Proof:\*\*\s*advisory\s*$", re.M),
@@ -217,7 +218,9 @@ def _from_secrets_scan(data: object) -> list[str]:
             raise _Malformed(f"secrets scan finding without {exc}") from exc
         if severity not in SEVERITIES:
             raise _Malformed(f"secrets scan severity {severity!r} isn't one of {SEVERITIES}")
-        where = "committed to the repository" if committed else "in a local file, not committed"
+        where = ("in a local file whose path is in git history" if item.get("history") is True
+                 else "committed to the repository" if committed
+                 else "in a local file, not committed")
         ident = item.get("id")
         ident = f" id={ident}" if isinstance(ident, str) and re.fullmatch(
             r"[0-9a-f]{8,64}", ident) else ""
@@ -270,16 +273,21 @@ def _from_npm_audit(data: object, lockfile: str = "package-lock.json") -> list[s
     for name, vuln in (data.get("vulnerabilities") or {}).items():
         if not isinstance(vuln, dict):
             raise _Malformed(f"npm audit entry for {name} isn't an object")
-        via = [v for v in vuln.get("via", []) if isinstance(v, dict)]
-        first = via[0] if via else {}
-        cwes = first.get("cwe") or []
+        # One finding per advisory: which one npm lists first changes from run to run, and
+        # each is what an earlier finding and its acceptance are matched by.
+        via = [v for v in vuln.get("via", []) if isinstance(v, dict)] or [{}]
+        severity = NPM_SEVERITY.get(vuln.get("severity"), "medium")
         fix = vuln.get("fixAvailable")
-        found.append(_npm_finding(
-            str(vuln.get("name", name)), NPM_SEVERITY.get(vuln.get("severity"), "medium"),
-            str(first.get("title") or f"through {', '.join(map(str, vuln.get('via', [])))}"),
-            cwes[0] if isinstance(cwes, list) and cwes else "CWE-1395",
-            str(first.get("url") or first.get("source") or "see npm audit"),
-            str(vuln.get("range", "?")), _fix_text(str(vuln.get("name", name)), fix), lockfile))
+        for advisory in via:
+            cwes = advisory.get("cwe") or []
+            found.append(_npm_finding(
+                str(vuln.get("name", name)), NPM_SEVERITY.get(advisory.get("severity"), severity),
+                str(advisory.get("title")
+                    or f"through {', '.join(map(str, vuln.get('via', [])))}"),
+                cwes[0] if isinstance(cwes, list) and cwes else "CWE-1395",
+                str(advisory.get("url") or advisory.get("source") or "see npm audit"),
+                str(vuln.get("range", "?")), _fix_text(str(vuln.get("name", name)), fix),
+                lockfile))
     for key, adv in (data.get("advisories") or {}).items():
         if not isinstance(adv, dict):
             raise _Malformed(f"npm audit advisory {key} isn't an object")
@@ -327,7 +335,7 @@ def _rows(lines: list[str], inside_only: bool) -> list[list[str]]:
         if line.strip().startswith("===") and inside_only:
             inside = False
             continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        cells = [_printable(c.strip()) for c in line.strip().strip("|").split("|")]
         if not inside or len(cells) != len(INVENTORY_COLUMNS) or not cells[0]:
             continue
         if cells[0].lower() == "field" or set(cells[0]) <= set("-: "):
@@ -449,6 +457,37 @@ def _identities(text: str, new: bool = False) -> set[tuple]:
     return set()
 
 
+def _secret_line(text: str) -> str | None:
+    found = SECRET_EVIDENCE.search(_evidence(text))
+    return found["line"] if found else None
+
+
+def _legacy_pick(text: str, candidates: list[str]) -> list[str]:
+    """Of the produced secrets with a pre-id finding's key, the one it is, if that's clear."""
+    if len(candidates) <= 1:
+        return candidates
+    same = [c for c in candidates if _secret_line(c) == _secret_line(text)]
+    return same if len(same) == 1 else []
+
+
+def _rotated(audit: Path) -> set[int]:
+    """Numbers accepted.md says were rotated: such a finding's old key names the old secret."""
+    try:
+        text = (audit.parent / "accepted.md").read_bytes().decode("utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return set()
+    return {int(m[1]) for line in text.splitlines()
+            if (m := ACCEPT.fullmatch(line.strip())) and m[3]}
+
+
+def _fix(text: str) -> str:
+    """An advisory's fix: the latest a later run reported, else its own."""
+    later = FIX_NOW.findall(text)
+    return later[-1] if later else next(
+        (line[5:].strip() for line in _evidence(text).splitlines() if line.startswith("fix: ")),
+        "")
+
+
 def _committed_secret(text: str) -> bool:
     found = SECRET_EVIDENCE.search(_evidence(text))
     return (bool(found) and found["committed"] == "true") or bool(SEEN_COMMITTED.search(text))
@@ -509,30 +548,46 @@ def _dedupe(new: Path, audit: Path, repo: Path | None = None) -> list[str]:
     if new.resolve() == audit.resolve():
         raise _Malformed("dedupe needs two folders; given the same folder twice")
     seen_before: dict[tuple, Path] = {}
-    for _, earlier in _open(audit):
+    rotated = _rotated(audit)
+    for number, earlier in _open(audit):
         for key in _keys(earlier.read_text(encoding="utf-8", errors="replace"), repo):
-            seen_before.setdefault(key, earlier)
+            if key[0] != "secret-legacy" or number not in rotated:
+                seen_before.setdefault(key, earlier)
     today = datetime.date.today().isoformat()
     candidates = []
     for path in sorted(new.glob("*.md")):
         text = path.read_text(encoding="utf-8", errors="replace")
         severity = _parse(text)[0].get("Severity", "low")
         candidates.append((SEVERITY_RANK.get(severity, 3), path.name, path,
-                           _keys(text, repo, new=True), _keys(text, repo)))
+                           _keys(text, repo, new=True), _keys(text, repo), text))
+    # A pre-id finding's key is shared by every same-shape secret in its file: it stands for
+    # one of them only when the pairing is clear.
+    legacy_match: dict[tuple, str | None] = {}
+    for key, earlier in seen_before.items():
+        if key[0] == "secret-legacy":
+            sharing = [c[5] for c in candidates if key in c[3]]
+            picked = _legacy_pick(earlier.read_text(encoding="utf-8", errors="replace"),
+                                  sharing)
+            legacy_match[key] = picked[0] if picked else None
     kept: dict[tuple, Path] = {}
     removed = []
-    for _, _, path, matching, own in sorted(candidates, key=lambda c: c[:2]):
-        if hits := [seen_before[k] for k in matching if k in seen_before]:
+    for _, _, path, matching, own, text in sorted(candidates, key=lambda c: c[:2]):
+        if hits := [seen_before[k] for k in matching if k in seen_before
+                    and (k[0] != "secret-legacy" or legacy_match.get(k) is text)]:
             # Found again at a higher severity (a secret since committed, a revised advisory):
             # the earlier number now carries it, below its untouched evidence.
-            text = path.read_text(encoding="utf-8", errors="replace")
             severity = _parse(text)[0].get("Severity")
             for earlier in dict.fromkeys(hits):
-                current = _severity(earlier.read_text(encoding="utf-8", errors="replace"))
+                earlier_text = earlier.read_text(encoding="utf-8", errors="replace")
+                current = _severity(earlier_text)
                 if severity in SEVERITIES and SEVERITIES.index(severity) < SEVERITIES.index(
                         current if current in SEVERITIES else "low"):
                     _append(earlier, f"**Status ({today}):** severity now {severity} "
                                      "(found again at it)")
+                # A fix released since: the report stops saying no fix is known.
+                fix = _one_line(_fix(text))
+                if _identities(text) and _fix(text) and fix != _fix(earlier_text):
+                    _append(earlier, f"**Status ({today}):** fix now {fix}")
             path.unlink()
             removed.append(path.name)
         # Within one run only a finding's own keys merge: two keys at one place aren't one.
@@ -796,20 +851,25 @@ def _suspects(folder: Path, rejected: list[dict]) -> list[str]:
 def _report(folder: Path, meta: dict | None, scope: dict | None = None,
             recheck: dict | None = None) -> str:
     today = datetime.date.today()
-    good, skipped = [], []
+    good, skipped, written = [], [], {}
     for number, path in _open(folder):
         text = path.read_text(encoding="utf-8", errors="replace")
         if _problems(text):
             skipped.append(path.name)
             continue
         fields, sections = _parse(text)
+        written[number] = fields["Severity"]
         fields = {**fields, "Severity": _severity(text)}
         where = _latest_spot(text) or next((PATH_LINE.search(line)[0]
                                             for line in sections["Where"]
                                             if PATH_LINE.search(line)), "")
-        no_fix = any(line.startswith("fix: ") and line[5:].strip() in NO_FIX
-                     for line in _evidence(text).splitlines())
-        good.append((SEVERITIES.index(fields["Severity"]), number, fields, title(path), where,
+        no_fix = bool(_identities(text)) and _fix(text) in NO_FIX
+        head = title(path)
+        local = SECRET_EVIDENCE.search(_evidence(text))
+        if (fields["Category"] == "secrets" and local and local["committed"] == "false"
+                and _committed_secret(text)):
+            head += " (since committed)"
+        good.append((SEVERITIES.index(fields["Severity"]), number, fields, head, where,
                      no_fix))
     good.sort(key=lambda g: (g[0], g[1]))
     accepted, expired, invalid = _accepted(folder.parent / "accepted.md",
@@ -840,8 +900,16 @@ def _report(folder: Path, meta: dict | None, scope: dict | None = None,
         out += ["Coverage gaps (each keeps this from reading Safe to deploy):",
                 *[f"- {g}" for g in gaps], ""]
     if accepted:
+        severity = {g[1]: g[2]["Severity"] for g in good}
+
+        def rated(n: int) -> str:
+            if severity[n] == written[n]:
+                return severity[n]
+            return f"{severity[n]}, raised from {written[n]} since it was first found"
+
         out += ["Accepted (doesn't block until its date; rotated secrets for good):",
-                *[f"- {n:02d} {entry}" for n, entry in sorted(accepted.items())], ""]
+                *[f"- {n:02d} ({rated(n)}) {entry}" for n, entry in sorted(accepted.items())],
+                ""]
     if expired:
         out += ["Expired acceptances (they no longer accept anything):",
                 *[f"- {n:02d} {entry}" for n, entry in sorted(expired.items())], ""]
@@ -878,7 +946,9 @@ def _report(folder: Path, meta: dict | None, scope: dict | None = None,
         out.append(f"| {cat} | {name} | {state} | " + " | ".join(map(str, counts_)) + " |")
     inventory_file = folder / "inventory.md"
     if inventory_file.is_file():
-        out += ["", "## PII inventory", "", inventory_file.read_text(encoding="utf-8").rstrip()]
+        # Cells are agent text; an inventory written before cells were escaped may hold ESC.
+        out += ["", "## PII inventory", "",
+                *map(_printable, inventory_file.read_text(encoding="utf-8").rstrip().split("\n"))]
     out += ["", "## Worth a look (unconfirmed, doesn't block)", "",
             *_suspects(folder, rejected)]
     out += [f"- {_piece(f['file'])}: " + "; ".join(map(_piece, f["problems"]))
@@ -939,19 +1009,19 @@ def _move_fixed(path: Path, reason: str, today: str) -> None:
     path.unlink()
 
 
-def _in_history(repo: Path, name: str) -> bool:
-    """Whether git history holds the path; True when git can't say, so nothing is fixed blind."""
-    try:
-        # Literal: a target-named file like `:x` mustn't read as pathspec magic. rev-list
-        # shows no signatures, so the target's config can't make it run gpg.program.
-        result = subprocess.run(["git", "-c", "core.fsmonitor=false", "--literal-pathspecs",
-                                 "--no-optional-locks", "-C", str(repo), "rev-list", "--all",
-                                 "-1", "--", name], capture_output=True,
-                                env={k: v for k, v in os.environ.items()
-                                     if k.upper() not in _REPO_VARS})
-    except OSError:
-        return True
-    return result.returncode != 0 or bool(result.stdout.strip())
+def _seal(audit: Path) -> str:
+    """One hash of what the run reads and agents must not change: acceptances, policy, findings."""
+    digest = hashlib.sha256()
+    files = [audit.parent / "accepted.md", audit.parent / "policy.md",
+             *sorted(p for p in audit.glob("*.md") if p.name != "REPORT.md"),
+             *sorted((audit / "fixed").glob("*.md"))]
+    for path in files:
+        name = os.fsencode(path.relative_to(audit.parent))
+        # Length-framed, so no two sets of files hash alike; a missing file counts too.
+        data = path.read_bytes() if path.exists() else None
+        digest.update(len(name).to_bytes(8, "big") + name)
+        digest.update(b"\0" if data is None else b"\1" + len(data).to_bytes(8, "big") + data)
+    return digest.hexdigest()
 
 
 def _verdict_spot(spot: str, repo: Path | None) -> str | None:
@@ -986,6 +1056,7 @@ def _recheck(audit: Path, scope: dict, found: Path | None, verdicts: dict[str, s
         for key in _identities(text, new=True):
             produced.setdefault(key, []).append(text)
     audited_set = {_lockfile(a) for a in audited}
+    rotated = _rotated(audit)
     result: dict[str, list] = {"fixed": [], "still_open": [], "cannot_check": [],
                                "not_rechecked": []}
     for number, path in numbered(audit):
@@ -1013,6 +1084,15 @@ def _recheck(audit: Path, scope: dict, found: Path | None, verdicts: dict[str, s
             elif not secrets_scanned:
                 continue  # the report already names the scan that didn't run
             matches = [t for key in idents for t in produced.get(key, [])]
+            if kind == "secret-legacy":
+                if number in rotated:
+                    matches = []  # its old key names the old secret, not the one there now
+                elif matches and not _legacy_pick(text, matches):
+                    # Still there, but which of the same-shape secrets it is isn't clear.
+                    result["still_open"].append(nn)
+                    continue
+                else:
+                    matches = _legacy_pick(text, matches)
             if matches:
                 if kind != "dependency":
                     new_ids = {i for t in matches for i in SECRET_ID_IN_EVIDENCE.findall(t)}
@@ -1025,8 +1105,9 @@ def _recheck(audit: Path, scope: dict, found: Path | None, verdicts: dict[str, s
             if kind != "dependency":
                 secret_path = SECRET_EVIDENCE.search(_evidence(text))["path"]
                 # Deleting a committed secret leaves it in history: it stays until rotated.
-                if _committed_secret(text) or (repo is not None
-                                               and _in_history(repo, secret_path)):
+                # Without the repo, or when git can't say, nothing is fixed blind.
+                if (_committed_secret(text) or repo is None
+                        or in_history(str(repo), secret_path) is not False):
                     result["still_open"].append(nn)
                     continue
             reason = ("no longer found by the secrets scan" if kind != "dependency" else
@@ -1146,6 +1227,9 @@ def _main(argv: list[str] | None = None) -> int:
     p.add_argument("--audited", action="append", default=[], help="a lockfile audited this run")
     p.add_argument("--repo")
     p.add_argument("--fingerprints")
+    p.add_argument("--seal", help="what `seal` printed before any agent ran")
+    sub.add_parser("seal", help="hash accepted.md, policy.md and the findings, before agents "
+                                "run").add_argument("dir")
     p = sub.add_parser("suspects", help="replace dir/unconfirmed with this run's suspects")
     p.add_argument("src")
     p.add_argument("dir")
@@ -1184,7 +1268,15 @@ def _main(argv: list[str] | None = None) -> int:
             inside, outside = _earlier(Path(args.dir), _check_scope(_load(args.scope)), repo)
             print(json.dumps({"recheck": inside, "outside": outside}))
             return 0
+        if args.command == "seal":
+            print(_seal(Path(args.dir)))
+            return 0
         if args.command == "recheck":
+            # Checked before anything moves, so a tampered folder is left as it was found.
+            if args.seal is not None and _seal(Path(args.dir)) != args.seal:
+                raise _Malformed("accepted.md, policy.md or the audit folder changed since the "
+                                 "run began, so nothing was moved: look at what changed, then "
+                                 "run /audit again")
             verdicts = _load(args.verdicts) if args.verdicts else {}
             if not isinstance(verdicts, dict) or not all(
                     isinstance(v, str) for v in verdicts.values()):
