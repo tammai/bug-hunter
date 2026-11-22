@@ -267,7 +267,7 @@ def finding(text: str) -> dict:
 
 def classify_by_oracle(record: dict, text: str, spec: Path) -> dict:
     """Set class, criterion, rule and route from what Expected cites (spec §B1, without B2)."""
-    from oracle import CRITERION, BadOracle, cited_rules, domain_headings, is_spec_gap
+    from oracle import CRITERION, BadOracle, domain_headings, is_spec_gap, rule_citations
 
     try:
         problems = oracle_problems(text, spec)
@@ -275,11 +275,12 @@ def classify_by_oracle(record: dict, text: str, spec: Path) -> dict:
         raise BadDraft(str(exc)) from None
     if problems:
         raise BadDraft(problems[0])
-    if is_spec_gap(text):
-        return {**record, "class": "spec-gap", "route": "rspec"}
     expected = expected_body(text)
     ids = CRITERION.findall(expected)
-    rules = cited_rules(expected, domain_headings(spec))
+    rules = rule_citations(expected, domain_headings(spec))[0]
+    # A citation outweighs the mark: the spec does cover the behaviour.
+    if is_spec_gap(text) and not ids and not rules:
+        return {**record, "class": "spec-gap", "route": "rspec"}
     return {**record, "criterion": ids[0] if ids else None,
             "rule": f"domain.md §{rules[0]}" if rules and not ids else None}
 
@@ -484,8 +485,6 @@ def matching_departure(departures: list[dict], steps, rebuild: dict,
 def with_reference(record: dict, text: str, oracle: Path | None,
                    results: tuple[dict, dict]) -> dict:
     """The record classified from its replay results against the rebuild and the reference."""
-    from oracle import is_spec_gap
-
     if record["repro"]["runner"] not in ("http", "playwright"):
         raise BadDraft("--rebuild and --reference need an HTTP repro (a list of C4 steps) or "
                        "a playwright one")
@@ -494,7 +493,7 @@ def with_reference(record: dict, text: str, oracle: Path | None,
         departure = matching_departure(load_departures(oracle), record["repro"].get("steps"),
                                        results[0], record["criterion"])
     header = text.split("\n## ", 1)[0]
-    verdict = classify(*results, covered=oracle is not None and not is_spec_gap(text),
+    verdict = classify(*results, covered=oracle is not None and record["class"] != "spec-gap",
                        defect=bool(DEFECT.search(header)), departure=departure,
                        alone=record["class"])
     fresh = dict(zip(SIDES, results, strict=True))

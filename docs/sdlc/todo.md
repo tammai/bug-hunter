@@ -6,32 +6,20 @@
   - A word after a second word between field and value is missed: `<input name="password" value="member">`, `{"name":"token","value":"member"}`, `the password is member` (round 2, M-2).
   - A lowercase-only random token of 6–15 letters (`qwxzkvbnmt`) is treated as a word and counts only in credential context (round 2, L-2).
 
-- [ ] `oracle.py` (part 2) review tickets, unverified, from a code review of 8dcab0e that was meant for part 3; triaged as tickets by the orchestrator (msg_34addfc88592). The `--live` and symlink findings were fixed in 2026-11-08-m-review-followups. 2026-11-08-m-review-followups (2026-11-08)
-  - **Citations:**
-    - `rule_citations` misses `` `domain.md` §X `` (backticked file name) and a comma between file and §;
-    - `is_spec_gap` misses a bold or backticked `Oracle: spec-gap`;
-    - an `Oracle: spec-gap` draft that also cites a valid criterion is classed `spec-gap`;
-    - `CRITERION` doesn't match standalone `AC-nnn` IDs from an sdlc-l lock;
-    - struck-through (removed) story criteria are parsed as active text.
-  - **Scope:**
-    - with no feature having source files, `oracle.py scope` exits 0 with zero hunters (`scope.py` exits 1);
-    - `load_lock` ignores `text_sha256` drift, so an edited criterion still ranks at its locked level;
-    - the verifier's "Cited criteria" use only the part's own criteria, while the check accepts any ID in the lock;
-    - the commit fallback counts commits that only mention a change file, and merge commits list no files (no `-m`);
-    - numstat and name-only output is parsed without `-z`, so C-quoted paths never match;
-    - `_section` and `domain_headings` ignore code fences;
-    - change files are linked by any `→ ID`, not only in their Acceptance criteria;
-    - the non-UTF-8-name and unsafe-folder install warnings are dropped in oracle mode.
-  - **Efficiency:**
-    - integration markers are read for parts `--max` or `--budget` later skip;
-    - one `git log` runs per feature;
-    - `_commits_naming` dedupes in quadratic time;
-    - `classify_by_oracle` parses the spec twice.
-  - **Reuse:**
-    - three section parsers (`drafts.expected_body`, `finding_v1._sections`, `oracle._section` beside `contracts._section`);
-    - the max, budget and live cuts are duplicated from `scope.py`;
-    - `cited_rules` is a one-line wrapper;
-    - `_repo_path` duplicates `scope._relative`.
+- [x] `oracle.py` (part 2) review tickets: the Citations and Scope groups, and the Efficiency and Reuse tickets that needed no file another lane owned. Done in 2026-11-22-m-oracle-tickets; what was left is the next item (2026-11-22)
+- [ ] `oracle.py` tickets left by 2026-11-22-m-oracle-tickets (each needs `drafts.py`, `scope.py` or `contracts.py`, or wasn't asked for): 2026-11-22-m-oracle-tickets (2026-11-22)
+  - the verifier's "Cited criteria" come only from the part's own criteria, while `drafts.py check` accepts any ID in the lock;
+  - `classify_by_oracle` parses the spec twice (`drafts.oracle_problems` would return what it loaded);
+  - four section parsers (`drafts.expected_body`, `finding_v1._sections`, `oracle._section`, `contracts._section`);
+  - the max, budget and live cuts duplicated from `scope.py`;
+  - `_repo_path` beside `scope._relative` (not equivalent: `_relative` resolves absolute paths and maps `docs_dir: "."` to the default);
+  - the install warnings repeated from `scope._main`;
+  - every commit message is read even when no record names a change (CR-9);
+  - a named merge and its named branch commits are counted twice (CR-10);
+  - `_git` doesn't pin `log.showRoot`, `log.diffMerges`, `diff.algorithm` or `GIT_DIR` (R2-3);
+  - the all-history numstat walk's cost on large repos (R2-4);
+  - the hunter's brief comes from the first criterion's story file only (R2-5);
+  - contracts' `check_lock` and `check_criteria` read stories differently (R2-6).
 - [ ] Leak scan (`drafts.leaks`) known limits and tickets, from the follow-up reviews: 2026-11-08-m-review-followups (2026-11-08)
   - a host or login cut by the 500-character message cap leaves a prefix (C4-8, S-7);
   - a trailing-dot host;
