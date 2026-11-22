@@ -3,6 +3,7 @@ import os
 import shutil
 from pathlib import Path
 
+import pytest
 from conftest import run_script
 from test_drafts import GOOD
 
@@ -130,6 +131,24 @@ def test_shows_url_when_recording_fails_after_filing(tmp_path, fake_gh):
     assert not [p for p in drafts.iterdir() if p.name.startswith(".posted-")]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows keeps dropping the folder: symlinks there "
+                    "need Developer Mode or admin")
+def test_the_gh_guard_keeps_other_tools_in_gh_folders(tmp_path, monkeypatch):
+    from conftest import gh_free_path
+    folder = tmp_path / "brew bin"
+    folder.mkdir()
+    for name in ("gh", "uv"):
+        (folder / name).write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        (folder / name).chmod(0o755)
+    path = gh_free_path(str(folder), tmp_path / "shims")
+    assert shutil.which("uv", path=path)
+    assert not shutil.which("gh", path=path)
+    # A relative PATH entry (node_modules/.bin) links to the same tools, not dangling names.
+    monkeypatch.chdir(tmp_path)
+    path = gh_free_path("brew bin", tmp_path / "shims2")
+    assert shutil.which("uv", path=path) and not shutil.which("gh", path=path)
+
+
 def test_tests_can_never_reach_a_logged_in_real_gh():
     # A placeholder, not an unset name: gh would otherwise use a login from the OS keyring.
     for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
@@ -139,3 +158,5 @@ def test_tests_can_never_reach_a_logged_in_real_gh():
     for folder in os.environ["PATH"].split(os.pathsep):
         if folder and shutil.which("gh", path=folder):
             assert shutil.which("git", path=folder), f"a real gh is reachable in {folder}"
+    if os.name != "nt":
+        assert shutil.which("gh") is None

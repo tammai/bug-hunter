@@ -26,14 +26,35 @@ def no_real_gh(tmp_path_factory):
             mp.setenv(name, "test-no-token")
         mp.setenv("GH_CONFIG_DIR", str(tmp_path_factory.mktemp("no-gh-config")))
         mp.setenv("GH_PROMPT_DISABLED", "1")
-        # A folder that also holds git (/usr/bin on CI) stays; there the placeholder tokens
-        # make any reached gh fail its login.
-        mp.setenv("PATH", os.pathsep.join(
-            folder for folder in os.environ.get("PATH", "").split(os.pathsep)
-            if not (folder and shutil.which("gh", path=folder))
-            or shutil.which("git", path=folder)
-        ))
+        mp.setenv("PATH", gh_free_path(os.environ.get("PATH", ""),
+                                       tmp_path_factory.mktemp("gh-free-path")))
         yield
+
+
+def gh_free_path(path: str, shims: Path) -> str:
+    """PATH with no real gh on it, keeping the other tools that share a folder with one."""
+    kept = []
+    for n, folder in enumerate(path.split(os.pathsep)):
+        if not (folder and shutil.which("gh", path=folder)):
+            kept.append(folder)
+        elif os.name == "nt":
+            # Symlinks need privilege there, so the folder goes, unless it also holds git;
+            # the placeholder tokens then make any reached gh fail its login.
+            if shutil.which("git", path=folder):
+                kept.append(folder)
+        else:
+            # A folder of links to everything but gh, in the folder's place, so Homebrew's
+            # other tools stay on PATH in the same order.
+            shim = shims / str(n)
+            shim.mkdir(parents=True)
+            # Absolute, or links from a relative entry (node_modules/.bin) would dangle.
+            for entry in os.scandir(os.path.abspath(folder)):
+                if entry.name != "gh":
+                    os.symlink(entry.path, shim / entry.name)
+            # Another spelling (GH on a case-insensitive volume) would still be found.
+            assert not shutil.which("gh", path=str(shim)), f"gh still reachable via {folder}"
+            kept.append(str(shim))
+    return os.pathsep.join(kept)
 
 
 def git(repo: Path, *args: str) -> None:

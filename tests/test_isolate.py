@@ -638,6 +638,195 @@ def test_git_config_from_the_environment_is_dropped(tmp_path):
     assert "sshcommand" not in result.stdout.lower()
 
 
+GIT_OVERRIDES = ["GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_PROXY_COMMAND",
+                 "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR", "GIT_EXTERNAL_DIFF", "GIT_PAGER",
+                 "GIT_EDITOR", "GIT_CONFIG", "GIT_CONFIG_SYSTEM", "GIT_TRACE",
+                 "GIT_ALTERNATE_OBJECT_DIRECTORIES"]
+
+
+def test_every_inherited_git_override_is_dropped(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    # Outside the real home, so only the git rule can drop them.
+    elsewhere = tmp_path / "elsewhere"
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "real"),
+           **{name: str(elsewhere / name.lower()) for name in GIT_OVERRIDES},
+           "GIT_SSL_CAINFO": str(elsewhere / "ca.pem"),
+           "GIT_CONFIG_GLOBAL": str(elsewhere / "owner.gitconfig"),
+           "GIT_CONFIG_NOSYSTEM": "0", "GIT_TERMINAL_PROMPT": "1"}
+    if WINDOWS:
+        env.update({"SYSTEMROOT": os.environ["SYSTEMROOT"], "Git_Trace2": "1"})
+    got = isolated_env(scratch, env)
+    allowed = {"GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT", "GIT_SSL_CAINFO",
+               "GIT_EDITOR", "GIT_PAGER"}
+    assert [n for n in got if n.upper().startswith("GIT_") and n.upper() not in allowed] == []
+    assert got["GIT_EDITOR"] == "true" and got["GIT_PAGER"] == "cat"
+    assert "SSH_ASKPASS" not in got
+    assert got["GIT_SSL_CAINFO"] == str(elsewhere / "ca.pem")
+    assert got["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert got["GIT_CONFIG_NOSYSTEM"] == "1" and got["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_an_inherited_git_dir_cant_send_git_to_the_target(tmp_path):
+    target, scratch = tmp_path / "target", tmp_path / "s"
+    for repo in (target, scratch / "copy"):
+        repo.mkdir(parents=True)
+        git(repo, "init", "-q")
+        (repo / "f.txt").write_text("x", encoding="utf-8")
+    git(target, "add", "f.txt")
+    index = (target / ".git/index").read_bytes()
+    command = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch)])
+    script = (f'ISO="$({command})" && eval "$ISO" || exit 1; '
+              "git rev-parse --absolute-git-dir && git add -A && git rm -q --cached f.txt")
+    env = {**os.environ, "HOME": str(tmp_path / "real"), "GIT_DIR": str(target / ".git"),
+           "GIT_WORK_TREE": str(target), "GIT_INDEX_FILE": str(target / ".git/index")}
+    result = subprocess.run([BASH, "-c", script], cwd=tmp_path, capture_output=True, text=True,
+                            env=env)
+    assert result.returncode == 0, result.stderr
+    assert Path(result.stdout.strip()).resolve() == (scratch / "copy/.git").resolve()
+    assert (target / ".git/index").read_bytes() == index
+
+
+def test_points_into_expands_windows_short_names(monkeypatch):
+    monkeypatch.setattr(isolate, "WINDOWS", True)
+    # What GetLongPathNameW answers on Windows, for a home whose 8.3 name is TAMMAI~1.
+    monkeypatch.setattr(isolate, "_long_name", lambda p: p.replace("TAMMAI~1", "Tam Mai Long"),
+                        raising=False)
+    root = r"C:\Users\Tam Mai Long"
+    assert isolate._points_into(r"D:\t;C:\Users\TAMMAI~1\.cargo\bin", root)
+    assert isolate._points_into(r"C:\Users\Tam Mai Long\x", r"C:\Users\TAMMAI~1")
+    assert not isolate._points_into(r"C:\Users\OTHER~1\x", root)
+
+
+@windows_only
+def test_a_short_name_for_the_home_is_dropped_on_windows(tmp_path):
+    import ctypes
+    real = tmp_path / "a rather long home folder"
+    real.mkdir()
+    buf = ctypes.create_unicode_buffer(32768)
+    ctypes.windll.kernel32.GetShortPathNameW(str(real), buf, len(buf))
+    if not buf.value or buf.value.lower() == str(real).lower():
+        pytest.skip("this volume has 8.3 short names turned off")
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    env = {"PATH": os.environ["PATH"], "SYSTEMROOT": os.environ["SYSTEMROOT"],
+           "HOME": str(real), "USERPROFILE": str(real),
+           "Short_Tools": buf.value + r"\tools\not made yet"}
+    assert "Short_Tools" not in isolated_env(scratch, env)
+
+
+def test_points_into_matches_whitespace_inside_quotes(monkeypatch):
+    monkeypatch.setattr(isolate, "WINDOWS", True)
+    root = r"C:\Users\X"
+    assert isolate._points_into(r'" C:\Users\X\tools "', root)
+    assert isolate._points_into(r'D:\a;"  C:\Users\X\b";D:\c', root)
+    assert not isolate._points_into(r'" C:\Users\X2\tools "', root)
+
+
+def test_an_unencodable_environment_value_gives_a_one_line_error(tmp_path, monkeypatch, capsys):
+    # What a Windows environment can hold: UTF-16 with an unpaired surrogate.
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "h"),
+           "JAVA_HOME": "C:\\jdk-\ud800-secret"}
+    monkeypatch.setattr(isolate, "_environ", lambda: dict(env))
+    code = isolate._main([str(tmp_path / "s")])
+    out, err = capsys.readouterr()
+    assert code == 1 and out == ""
+    assert err.startswith("error:") and len(err.splitlines()) == 1
+    assert "JAVA_HOME" in err and "secret" not in err and "Traceback" not in err
+
+
+def test_the_path_fallback_checks_each_level_with_one_lstat(tmp_path, monkeypatch):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    calls = []
+    lstat, stat_ = os.lstat, os.stat
+
+    def counted(name, real):
+        def call(path, *args, **kwargs):
+            calls.append(name)
+            return real(path, *args, **kwargs)
+        return call
+
+    monkeypatch.setattr(os, "lstat", counted("lstat", lstat))
+    monkeypatch.setattr(os, "stat", counted("stat", stat_))
+    isolate._check_folder(scratch, scratch / "a" / "b")
+    assert calls == ["lstat", "lstat"]
+
+
+def test_git_runs_no_editor_or_pager_the_owner_chose(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    command = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch)])
+    script = (f'ISO="$({command})" && eval "$ISO" || exit 1; '
+              "git var GIT_EDITOR && git var GIT_PAGER")
+    owner = str(tmp_path / "owner-program")
+    env = {**os.environ, "HOME": str(tmp_path / "real"), "GIT_EDITOR": owner,
+           "GIT_PAGER": owner, "VISUAL": owner, "EDITOR": owner, "PAGER": owner}
+    result = subprocess.run([BASH, "-c", script], cwd=tmp_path, capture_output=True, text=True,
+                            env=env)
+    assert result.returncode == 0, result.stderr
+    # `true` accepts git's prepared message, as a non-interactive agent needs.
+    assert result.stdout.split() == ["true", "cat"]
+
+
+@pytest.mark.skipif(WINDOWS, reason="a POSIX Python built without _ctypes; Windows Pythons "
+                    "always ship ctypes, which short-name matching needs there")
+def test_isolation_runs_on_a_python_without_ctypes(tmp_path):
+    code = ("import sys; sys.modules['ctypes'] = None; sys.path.insert(0, sys.argv[1]); "
+            "import isolate; sys.exit(isolate._main(sys.argv[2:]))")
+    result = subprocess.run([sys.executable, "-I", "-c", code, str(SCRIPTS), str(tmp_path / "s")],
+                            env={**os.environ, "HOME": str(tmp_path / "h")},
+                            capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("unset ")
+
+
+def test_the_encoding_error_names_the_inherited_variable(tmp_path, monkeypatch, capsys):
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "h-\ud800")}
+    monkeypatch.setattr(isolate, "_environ", lambda: dict(env))
+    assert isolate._main([str(tmp_path / "s")]) == 1
+    out, err = capsys.readouterr()
+    assert out == "" and "variable HOME " in err
+
+    # Only what reaches the shell line counts: an unset secret is never printed.
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "h"),
+           "MY_SECRET_TOKEN": "\ud800", "JAVA_HOME": "C:\\jdk-\udc81"}
+    assert isolate._main([str(tmp_path / "s2")]) == 1
+    out, err = capsys.readouterr()
+    assert out == "" and "variable JAVA_HOME " in err and "MY_SECRET_TOKEN" not in err
+
+
+def test_long_name_expands_the_longest_existing_prefix_and_skips_unc(monkeypatch):
+    import ctypes
+    monkeypatch.setattr(isolate, "WINDOWS", True)
+    asked = []
+
+    def get_long_path_name(path, buf, size):
+        asked.append(path)
+        if path != r"C:\Users\TAMMAI~1":
+            return 0
+        buf.value = r"C:\Users\Tam Mai"
+        return len(buf.value)
+
+    def get_drive_type(root):
+        return 4 if root.upper().startswith("Z") else 3  # DRIVE_REMOTE for Z:, else DRIVE_FIXED
+
+    kernel32 = type("Kernel32", (), {"GetLongPathNameW": staticmethod(get_long_path_name),
+                                     "GetDriveTypeW": staticmethod(get_drive_type)})
+    monkeypatch.setattr(ctypes, "windll", type("WinDLL", (), {"kernel32": kernel32}),
+                        raising=False)
+    assert isolate._long_name(r"C:\Users\TAMMAI~1\not made\yet") == r"C:\Users\Tam Mai\not made\yet"
+    assert asked == [r"C:\Users\TAMMAI~1\not made\yet", r"C:\Users\TAMMAI~1\not made",
+                     r"C:\Users\TAMMAI~1"]
+    asked.clear()
+    # Asking about a network path would make Windows connect to that host with the owner's
+    # login, or wait on a disconnected drive.
+    for unc in (r"\\host\share\A~1\b", "//host/share/A~1/b", r"\??\UNC\host\s\A~1\b",
+                r"Z:\TOOLS~1\bin"):
+        assert isolate._long_name(unc) == unc
+    assert asked == []
+
+
 def test_isolation_that_cant_be_set_up_exits_with_a_clear_error(tmp_path):
     scratch = tmp_path / "s"
     scratch.mkdir()
@@ -656,7 +845,8 @@ def test_the_descriptor_path_is_used_where_cpython_supports_it(monkeypatch):
     assert isolate._dir_fd()
 
 
-@pytest.mark.skipif(WINDOWS, reason="Windows environment values are UTF-16, never stray bytes")
+@pytest.mark.skipif(WINDOWS, reason="Windows has no byte environment; its unpaired surrogates "
+                    "are tested by test_an_unencodable_environment_value_gives_a_one_line_error")
 def test_undecodable_environment_bytes_dont_break_isolation(tmp_path):
     scratch = tmp_path / "s"
     scratch.mkdir()

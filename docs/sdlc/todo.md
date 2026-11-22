@@ -54,15 +54,20 @@
   - classify's departure rows sit in two test tables, and the registry test covers several cases (R2-11, R2-12).
 
 - [ ] Make the test suite pass on Windows: the 19 Windows-only failures in `.sdlc/baseline.md` (fake `gh` that Windows can run without passing titles through `cmd.exe`, `USERPROFILE` in the drafts and findings fixtures, POSIX-mode asserts, read-only git objects, CRLF and forbidden names in fixtures, symlink privilege), then add a `windows-latest` CI runner — left out of the Windows isolation change on purpose; 2026-11-06-m-windows-isolation (2026-11-06)
-- [ ] Small `isolate.py` follow-ups from the Windows isolation review:
+- [x] Small `isolate.py` follow-ups from the Windows isolation review:
   - match 8.3 short names (needs `GetLongPathNameW`);
   - match a quoted value with a space inside the quotes;
   - give a one-line error instead of a traceback for an unpaired UTF-16 surrogate in a Windows env value, and fix that test's skip reason;
   - drop the extra `lstat` calls in the path fallback;
   - narrow the test guard's PATH filter so it stops hiding Homebrew's other tools on macOS.
 
-  Review tickets (CR5, CR10, R3-1, R3-2, S4). Not bugs on the command path; 2026-11-06-m-windows-isolation (2026-11-06)
-- [ ] `isolate.py` passes every other inherited `GIT_*` override through: `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_PROXY_COMMAND`, `GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`, `GIT_EXTERNAL_DIFF`, `GIT_PAGER`/`GIT_EDITOR`, `GIT_CONFIG`/`GIT_CONFIG_SYSTEM`, and `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` (caught only when they point into the home; a `GIT_DIR` at the target would let a hunter edit it). Structural fix: unset every inherited `GIT_*` except an allowlist (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM`, `GIT_TERMINAL_PROMPT`, `GIT_SSL_CAINFO`). Security review S1 of 2026-11-22-s-git-config-env (2026-11-22)
+  Review tickets (CR5, CR10, R3-1, R3-2, S4). Not bugs on the command path; 2026-11-06-m-windows-isolation (2026-11-06). Done in 2026-11-22-m-git-env-allowlist (2026-11-22)
+- [x] `isolate.py` passes every other inherited `GIT_*` override through: `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_PROXY_COMMAND`, `GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`, `GIT_EXTERNAL_DIFF`, `GIT_PAGER`/`GIT_EDITOR`, `GIT_CONFIG`/`GIT_CONFIG_SYSTEM`, and `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` (caught only when they point into the home; a `GIT_DIR` at the target would let a hunter edit it). Structural fix: unset every inherited `GIT_*` except an allowlist (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM`, `GIT_TERMINAL_PROMPT`, `GIT_SSL_CAINFO`). Security review S1 of 2026-11-22-s-git-config-env (2026-11-22). Done in 2026-11-22-m-git-env-allowlist (2026-11-22)
+- [ ] `isolate.py` follow-ups from the review of 2026-11-22-m-git-env-allowlist (2026-11-22):
+  - `GIT_SSL_CAPATH` and `GIT_PROXY_SSL_CAINFO` are now dropped, so git TLS breaks behind a corporate proxy that sets only those; keeping `GIT_SSL_CAPATH` was declined at Define, so revisit only if an owner hits it (R2-2, CR4);
+  - plain `ssh` finds the owner's `~/.ssh` through the password database, not `HOME`, so git over SSH can still use the owner's keys; an isolation `GIT_SSH_COMMAND` with `-F /dev/null` and no identity would close it (CR5);
+  - `_refuse_links` on the descriptor path checks entries by path (`os.path.islink(folder / name)`), not through the opened descriptor (R2-7);
+  - variable names that aren't shell identifiers (`npm_config_//registry.npmjs.org/:_authToken`) can't be unset, so they survive; proxy URLs with credentials pass through (security, outside the diff).
 - [ ] Improve how well `/hunt` finds bugs, in this order (planned to start the week of 2026-11-23); from the 19 B0 runs in `knowledge/runs/`, which measured only that kept drafts reproduce, not missed bugs or maintainer acceptance (2026-11-20)
   1. **Scoring benchmark:** 2–3 pinned repos per stack, about 10 planted bugs each with no hints in comments; score how many it finds, how many kept drafts are wrong, how often the verifier passes a bad draft, and cost per real bug. Run before and after each change.
   2. **Stricter verifier:** a checklist (every claim shown in its output, every cited line holds the quoted code), a script that checks line contents rather than just that the line exists, and bad drafts planted in the benchmark (defects 5, 8 and 10).
