@@ -83,3 +83,30 @@ Left as tickets, each needing a file another parallel change owns:
 - **Scope:** the verifier's "Cited criteria" come only from the part's own criteria while `drafts.py check` accepts any lock ID. The fix is to restrict the check to the part's criteria (`drafts.py`), or give the verifier every cited criterion's text; a `hunt.md`-only fix can't supply text for a `not_hunted` feature.
 - **Efficiency:** `classify_by_oracle` parses the spec twice; the fix is for `drafts.oracle_problems` to return what it loaded.
 - **Reuse:** the section parsers (`drafts.expected_body`, `finding_v1._sections`, `oracle._section`, `contracts._section`); the max, budget and live cuts duplicated from `scope.py`; `_repo_path` beside `scope._relative` (not equivalent, see Decisions: a shared text-only helper would need `scope.py`); and, new here, the install warnings repeated from `scope._main`.
+
+## Review
+
+- **Recommended and chosen:** code, because `## Public Surface` isn't `- none` (`cited_rules` and `STORY_LINE` removed, `CRITERION` widened, `build()`'s `warnings` key). Risk is low, so Security didn't fire. The owner deferred every lane's reviews to the end of the builds; the coordinator ran them.
+- **Verdicts:**
+  - Code, round 1: `.sdlc/.work/findings/2026-11-22-m-oracle-tickets/code-reviewer-r1.md` → FAIL — CR-1 (no highs; CR-1 to CR-8 and CR-11 bugs, CR-9 and CR-10 tickets).
+  - Code, round 2: `code-reviewer-r2.md` → PASS (no highs). Its low bugs R2-1, R2-2, R2-7 and R2-8 were fixed test-first and closed by `verify.py`, without another round.
+- **Fixed** (tests in `tests/test_oracle_review.py`):
+  - CR-1: a missing or non-text `text_sha256` gives level 0, a CRLF story keeps its level (`test_a_lock_hash_that_is_missing_or_not_text_gives_level_0`, `test_a_crlf_story_with_matching_hashes_keeps_its_level`); a failing `git log` is one `error:` line (`test_a_git_log_that_fails_is_one_error_line`, now on a corrupt commit object).
+  - CR-2: named commits use `-m --first-parent` (every git version); `_git` raises `BadOracle` instead of returning empty output (same test).
+  - CR-3: `_git` pins `log.showSignature` and `log.follow`; a commit starts only on a 40- or 64-hex hash (`test_git_pins_signature_and_follow_config`, `test_numstat_starts_a_commit_only_on_a_hash`).
+  - CR-4: the all-history walk has no pathspec and filters in Python; an `OSError` running git is one `error:` line (`test_an_os_error_running_git_is_one_error_line`).
+  - CR-5: each criterion is read from its own story file (`test_each_criterion_is_read_from_its_own_story`).
+  - CR-6: stories are read as `contracts.py` reads them: the Acceptance criteria section, split on `\n`, first ID wins (`test_story_criteria_are_read_as_the_lock_producer_reads_them`).
+  - CR-7: one rule for markup and punctuation between `domain.md` and `§` (`test_markup_and_punctuation_between_the_file_and_section_sign`).
+  - CR-8: AC-014 reworded to count `_git` calls.
+  - CR-11: README.md and commands/hunt.md wording; `scope.LOCKFILES`; Public Surface deviation; one-line `_story` docstring.
+  - R2-1: a branch with no commits yet is empty history (`test_a_repo_with_no_commits_yet_is_empty_history`).
+  - R2-2: a bad commit header resets the counts (`test_numstat_starts_a_commit_only_on_a_hash`, both orders).
+  - R2-7: git's `fatal:`/`error:` line is reported; an `OSError` inside `_git` is a `BadOracle`.
+  - R2-8: a left boundary before `domain.md` (`test_another_file_ending_in_domain_md_is_no_citation`).
+- **Tickets** (in `docs/sdlc/todo.md`): the verifier's Cited criteria (needs `drafts.py`); `classify_by_oracle` parses the spec twice; four section parsers; the cuts duplicated from `scope.py`; `_repo_path` beside `scope._relative`; the install warnings repeated from `scope._main`; CR-9 (every commit message read); CR-10 (named merge and branch commits counted twice); R2-3 (`log.showRoot`, `log.diffMerges`, `diff.algorithm`, `GIT_DIR` not pinned); R2-4 (all-history numstat cost); R2-5 (brief from the first story file only); R2-6 (`check_lock` vs `check_criteria` reading).
+- **Drift and manual checks:**
+  - Deviations: `tests/test_oracle_followups.py` (a second AC-003 test through `--rebuild`/`--reference`, and the `docs_dir: "."` guard); `_repo_path` kept instead of `scope._relative`; review deferred by the owner; `is_spec_gap` matches more spellings; the round 1 fixes; AC-014 reworded; Public Surface additions (`STORY_LINE`, `warnings`); the round 2 fixes.
+  - Base moved from 635113a to 7790f3e after rebasing onto main (PR #44); `verify.py` passed again on the rebased tree.
+  - Every AC test was seen failing on 635113a, then passing. No `manual` AC.
+- **Lessons filed:** none. No high findings, so no recurring-defects line.

@@ -1,5 +1,5 @@
 # 2026-11-22-m-oracle-tickets
-Status: active
+Status: done
 Process: 3
 Change: docs/sdlc/changes/2026-11-22-m-oracle-tickets.md   (this feature's record for people)
 Track: M   (sized up because: —; footprint: 7 files)
@@ -7,15 +7,16 @@ Risk: low   (untrusted spec and repo history, but every file read stays behind _
 Top model: opus   (fable only if the user chose it)
 Commands: test: `uv run pytest`
 Started: 2026-11-22
-Base: 635113a
+Base: 7790f3e
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Current: Stage 2 – Build
+Verified: 6266fed tree e3f6be01ea67ad85a4412244f5c0389e87b22053
+Current: Stage 4 – Ship
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
-- [ ] 2 Build
-- [ ] 3 Review   — the change file's ## Review
+- [x] 2 Build
+- [x] 3 Review   — the change file's ## Review
 - [ ] 4 Ship     — PR: (Learn: knowledge, recurring-defects.md)
 
 ## How the build runs
@@ -49,6 +50,9 @@ inline
 - 2026-11-22 tickets from review r1: CR-9 (every commit message read even when no record names a change), CR-10 (a named merge and its named branch commits counted twice)
 - 2026-11-22 review r2 (coordinator): code PASS; low bugs R2-1, R2-2 and cheap R2-7, R2-8 fixed test-first without another round
 - 2026-11-22 tickets from review r2: R2-3 (log.showRoot, log.diffMerges, diff.algorithm, GIT_DIR not pinned in _git), R2-4 (all-history numstat cost), R2-5 (brief from the first story file only), R2-6 (check_lock vs check_criteria reading)
+- 2026-11-22 Base What: moved from 635113a to 7790f3e. Why: rebased onto main after PR #44. Effect: diff and drift checks cover only this change.
+- 2026-11-22 Stage 2: pass — reviews run at the end by the coordinator: code r1 FAIL CR-1, r2 PASS
+- 2026-11-22 Stage 3: pass — review: code r1 FAIL CR-1, r2 PASS; fixes verified
 
 ## Deviations
 - 2026-11-22 tests/test_oracle_followups.py What: a new test file with a second AC-003 test (write --rebuild/--reference on a spec-gap draft citing a criterion) and a docs_dir '.' guard. Why: AC-003's first test didn't reach with_reference's covered= rule; seen failing with the old rule. Effect: AC-003 has two rows.
