@@ -4,8 +4,11 @@ import shutil
 from pathlib import Path
 
 import pytest
-from conftest import run_script
+from conftest import MKSTEMP_SPINS_ON_A_LOCKED_DIR, lock_dir, run_script, unlock_dir
 from test_drafts import GOOD
+
+SPINS = ("this Python's tempfile retries a refused mkstemp 2**31 times on Windows, so post.py "
+         "spins on a locked folder instead of refusing it (fixed in Python 3.13)")
 
 
 def make_drafts(tmp_path, count=3):
@@ -45,6 +48,23 @@ def test_files_named_drafts_once(tmp_path, fake_gh):
     ]
     posted = json.loads((drafts / "posted.json").read_text(encoding="utf-8"))
     assert sorted(posted) == ["01", "02", "03"]
+
+
+def test_odd_bytes_from_gh_never_become_a_traceback(tmp_path, fake_gh):
+    env, calls = fake_gh
+    drafts = make_drafts(tmp_path, count=1)
+    # Invalid UTF-8, and bytes cp1252 leaves undefined.
+    env["FAKE_GH_STDERR_HEX"] = "ff81c5"
+    result = run_script("post", drafts, "1", "--label", "bug", env=env)
+    assert result.returncode == 0, result.stderr
+    assert "Traceback" not in result.stderr
+    assert "https://github.com/o/r/issues/1" in result.stdout
+
+    env["FAKE_GH_FAIL_AT"] = "2"
+    (drafts / "02.md").write_bytes((drafts / "01.md").read_bytes())
+    failed = run_script("post", drafts, "2", "--label", "bug", env=env)
+    assert failed.returncode == 1 and "Traceback" not in failed.stderr
+    assert "could not create issue" in failed.stderr
 
 
 def test_refuses_before_filing_and_keeps_partial_progress(tmp_path, fake_gh):
@@ -107,23 +127,27 @@ def test_refuses_odd_numbers_duplicates_and_unusable_record(tmp_path, fake_gh):
     assert "Traceback" not in as_dir.stderr
     (drafts / "posted.json").rmdir()
 
-    drafts.chmod(0o555)
+    if MKSTEMP_SPINS_ON_A_LOCKED_DIR:
+        pytest.skip(SPINS)
+    lock_dir(drafts)
     try:
         locked = run_script("post", drafts, "1", "--label", "bug", env=env)
     finally:
-        drafts.chmod(0o755)
+        unlock_dir(drafts)
     assert locked.returncode == 1 and "writable" in locked.stderr
     assert creates(calls) == []
 
 
 def test_shows_url_when_recording_fails_after_filing(tmp_path, fake_gh):
+    if MKSTEMP_SPINS_ON_A_LOCKED_DIR:
+        pytest.skip(SPINS)
     env, calls = fake_gh
     drafts = make_drafts(tmp_path)
     env["FAKE_GH_CHMOD_DIR"] = str(drafts)
     try:
         result = run_script("post", drafts, "1", "2", "--label", "bug", env=env)
     finally:
-        drafts.chmod(0o755)
+        unlock_dir(drafts)
     assert result.returncode == 1
     assert "https://github.com/o/r/issues/1" in result.stdout + result.stderr
     assert "not recorded" in result.stderr and "Traceback" not in result.stderr

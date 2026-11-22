@@ -10,6 +10,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+WINDOWS = os.name == "nt"
+
 # What `git rev-parse --local-env-vars` lists: set inside a hook or alias of another repo, these
 # would send every command (the clone, the origin removal, the patch) to that repo instead.
 _REPO_VARS = {
@@ -27,6 +29,33 @@ def _git(*args: str, **kwargs) -> subprocess.CompletedProcess:
     kwargs.setdefault("env", {k: v for k, v in os.environ.items()
                               if k.upper() not in _REPO_VARS})
     return subprocess.run(["git", "--no-optional-locks", *args], capture_output=True, **kwargs)
+
+
+def _clear_read_only(func, failed: str, exc: OSError) -> None:
+    """On Windows, retry a refused unlink or rmdir after clearing the read-only flag git sets."""
+    if not WINDOWS or func not in (os.unlink, os.rmdir) or not isinstance(exc, PermissionError):
+        raise exc
+    # One lstat decides: a link or junction is never chmod-ed, since chmod follows it on 3.13+.
+    info = os.lstat(failed)
+    if stat.S_ISLNK(info.st_mode) or (getattr(info, "st_file_attributes", 0)
+                                      & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+        raise exc
+    os.chmod(failed, stat.S_IWRITE)
+    func(failed)
+
+
+def _rmtree(path: Path, ignore_errors: bool = False) -> None:
+    """shutil.rmtree that also removes git's object files, which Windows keeps read-only."""
+
+    def onexc(func, failed, exc) -> None:
+        try:
+            _clear_read_only(func, failed, exc)
+        except OSError:
+            # Ignoring means skipping this entry and removing the rest, as shutil's own flag does.
+            if not ignore_errors:
+                raise
+
+    shutil.rmtree(path, onexc=onexc)
 
 
 def _escaping_links(root: Path) -> list[str]:
@@ -266,7 +295,7 @@ def _make(repo: Path, dest: Path, base: Path | None = None) -> str | None:
         return f"git clone failed: {clone.stderr.decode(errors='replace').strip()}"
     # Without this, a repro's `git push` would write into the real repo.
     if _git("-C", str(dest), "remote", "remove", "origin").returncode != 0:
-        shutil.rmtree(dest)
+        _rmtree(dest)
         return "couldn't remove the copy's origin remote, which points at the real repo"
 
     # Pinned options, since the owner's diff config (noprefix, color, external tools) would
@@ -276,12 +305,12 @@ def _make(repo: Path, dest: Path, base: Path | None = None) -> str | None:
         "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
     )
     if diff.returncode != 0:
-        shutil.rmtree(dest)
+        _rmtree(dest)
         return "couldn't read the repo's uncommitted changes"
     if diff.stdout:
         applied = _git("-C", str(dest), "apply", "--whitespace=nowarn", input=diff.stdout)
         if applied.returncode != 0:
-            shutil.rmtree(dest)
+            _rmtree(dest)
             return "couldn't apply the repo's uncommitted changes to the copy"
 
     if why := _refuse_escaping_links(dest):
@@ -289,7 +318,7 @@ def _make(repo: Path, dest: Path, base: Path | None = None) -> str | None:
     (dest / ".git" / MARKER).write_text(str(repo), encoding="utf-8")
     sealed = _seal(dest)
     if sealed is None:
-        shutil.rmtree(dest)
+        _rmtree(dest)
         return "couldn't read the copy's .git and status to seal it"
     (dest / ".git" / SEAL).write_text(sealed, encoding="utf-8")
     return None
@@ -297,7 +326,7 @@ def _make(repo: Path, dest: Path, base: Path | None = None) -> str | None:
 
 def _refuse_escaping_links(dest: Path) -> str | None:
     if links := _escaping_links(dest):
-        shutil.rmtree(dest)
+        _rmtree(dest)
         return "symlinks point outside the copy, so code run in it could change files there: " + (
             ", ".join(links)
         )
@@ -374,13 +403,13 @@ def _copy_base(repo: Path, base: Path, dest: Path) -> str | None:
     except OSError:
         copied = False
     if not copied:
-        shutil.rmtree(dest, ignore_errors=True)
+        _rmtree(dest, ignore_errors=True)
         shutil.copytree(base, dest, symlinks=True)
     if _git_links(dest) or _git_points_out(dest / ".git"):
-        shutil.rmtree(dest)
+        _rmtree(dest)
         return "the copy's .git changed while copying to reach outside the copy"
     if not _unchanged(base, sealed):
-        shutil.rmtree(dest)
+        _rmtree(dest)
         return changed
     return _refuse_escaping_links(dest)
 
@@ -408,7 +437,7 @@ def _main(argv: list[str] | None = None) -> int:
     except FileNotFoundError:
         why = "git is not installed"
     except OSError as exc:
-        shutil.rmtree(dest, ignore_errors=True)
+        _rmtree(dest, ignore_errors=True)
         why = f"couldn't copy: {exc}"
     if why:
         print(f"error: {why}", file=sys.stderr)

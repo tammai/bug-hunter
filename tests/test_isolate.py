@@ -957,12 +957,23 @@ CHILD_ENV = ("import json, os\n"
              "try:\n    import nt\n    e = dict(nt.environ)\n"
              "except ImportError:\n    e = dict(os.environ)\n"
              "print(json.dumps(e))")
+# Windows' own environment block, which also holds the =C: drive-folder names Python's
+# environ hides.
+RAW_CHILD_ENV = ("import ctypes, json\n"
+                 "k = ctypes.windll.kernel32\n"
+                 "k.GetEnvironmentStringsW.restype = ctypes.c_void_p\n"
+                 "p, off, e = k.GetEnvironmentStringsW(), 0, {}\n"
+                 "while s := ctypes.wstring_at(p + off * 2):\n"
+                 "    name, _, value = s[1:].partition('=')\n"
+                 "    e[s[0] + name] = value\n"
+                 "    off += len(s) + 1\n"
+                 "print(json.dumps(e))")
 
 
-def child_env(scratch: Path, env: dict) -> dict:
+def child_env(scratch: Path, env: dict, code: str = CHILD_ENV) -> dict:
     """The environment a program started from the isolated shell gets."""
     command = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch)])
-    child = shlex.join([sys.executable, "-I", "-c", CHILD_ENV])
+    child = shlex.join([sys.executable, "-I", "-c", code])
     script = f'ISO="$({command})" && eval "$ISO" || exit 1; {child}'
     result = subprocess.run([BASH, "-c", script], env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
@@ -1076,10 +1087,12 @@ def test_a_variable_bash_cant_unset_stops_isolation(tmp_path):
     env = {"PATH": os.environ["PATH"], "HOME": str(real), **odd}
     if WINDOWS:
         env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
-    got = child_env(scratch, env)
+    got = child_env(scratch, env, RAW_CHILD_ENV if WINDOWS else CHILD_ENV)
     folded = {k.upper(): v for k, v in got.items()} if WINDOWS else got
     for name, value in odd.items():
-        assert folded[name.upper() if WINDOWS else name] == value, name
+        # MSYS hands !C: back to a native program under its Windows name, =C:.
+        seen = ("=C:" if name == "!C:" else name.upper()) if WINDOWS else name
+        assert folded[seen] == value, name
 
 
 def test_error_lines_escape_control_characters_in_names(tmp_path, monkeypatch, capsys):
