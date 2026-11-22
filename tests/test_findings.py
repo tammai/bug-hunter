@@ -1627,6 +1627,14 @@ def test_legacy_pairing_is_one_to_one_and_a_rotated_fix_says_why(tmp_path):
     assert "secret id" not in (audit / "02.md").read_text(encoding="utf-8")
     assert run_script("findings", "dedupe", found, audit).returncode == 0
     assert list(found.glob("*.md")) == []
+    assert (audit / "02.md").read_text(encoding="utf-8") == b
+    # The next run's scan finds the same secret: A holds it, so B, once its sibling, can't.
+    assert run_script("findings", "from-secrets-scan", data, found).returncode == 0
+    recheck(tmp_path, audit, scope, "--found", found, "--secrets-scanned")
+    assert "secret id" not in (audit / "02.md").read_text(encoding="utf-8")
+    assert run_script("findings", "dedupe", found, audit).returncode == 0
+    assert list(found.glob("*.md")) == []
+    assert (audit / "02.md").read_text(encoding="utf-8") == b
 
     # A rotated, never-committed legacy secret gone from the scan: fixed, saying why.
     base = tmp_path / "rot"

@@ -90,7 +90,8 @@ From each reply:
    - `secrets_scanned`: true only if the scan and its conversion succeeded;
    - `audited`: the lockfiles whose audit succeeded;
    - `audit_failures`: `{"lockfile", "reason"}` for each audit that failed;
-   - `check_failed`: the findings that failed `check`, as recorded in §5, step 1.
+   - `check_failed`: the findings that failed `check`, as recorded in §5, step 1;
+   - `history_unknown`: the `path` of each entry in `$RUN/secrets.json` with `"history_unknown": true` (git couldn't say whether its history holds that local file).
 9. Run `python3 "$PLUGIN/scripts/findings.py" report "$AUDIT" --seal <the same value> --scope "$RUN/scope.json" --meta "$RUN/meta.json" --recheck "$RUN/recheck.json" --fingerprints "$RUN/fingerprints.json"`. The verdict is computed there, never by you.
 10. Tell the owner you're cleaning up the run, then run `python3 "$PLUGIN/scripts/scratch.py" clean "$RUN"`, which removes the fingerprints too. Show its two lines: the run's size, and the space freed.
 

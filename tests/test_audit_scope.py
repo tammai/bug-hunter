@@ -338,3 +338,96 @@ def test_an_old_git_fails_closed_and_no_transport_runs(make_repo, tmp_path, monk
     monkeypatch.setattr(secrets_scan, "git_version", lambda: (2, 50, 1))
     assert secrets_scan.run_git(str(clone), "fetch", "-q", "origin").returncode != 0
     assert not marker.exists()
+    # Even when the target's own config allows the transport by name.
+    for name in ("file", "ext"):
+        git(clone, "config", f"protocol.{name}.allow", "always")
+    assert secrets_scan.run_git(str(clone), "fetch", "-q", "origin").returncode != 0
+    assert not marker.exists()
+
+    # browser.py stays standalone, but its one git call is hardened the same way.
+    import browser
+    other = tmp_path / "other"
+    other.mkdir()
+    git(other, "init", "-q")
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+    assert browser._tracked(str(repo)) == ["app.js"]
+
+
+def test_submodules_are_a_gap_and_their_filters_never_run(make_repo, tmp_path):
+    import os
+    import subprocess
+
+    import pytest
+    if os.name == "nt":
+        pytest.skip("filter commands here are POSIX shell")
+
+    def git(repo, *args):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    git(sub, "init", "-q")
+    (sub / ".gitattributes").write_text("* filter=evil\n", encoding="utf-8")
+    (sub / "lib.js").write_text("x\n", encoding="utf-8")
+    git(sub, "add", "-A")
+    git(sub, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i")
+    repo = make_repo({"app.js": "x\n"})
+    git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(sub), "sub")
+    commit(repo)
+    marker = tmp_path / "ran"
+    git(repo / "sub", "config", "filter.evil.clean", f"touch {marker}; cat")
+    later = os.stat(repo / "sub" / "lib.js").st_mtime + 5
+    os.utime(repo / "sub" / "lib.js", (later, later))
+    cover = scope(repo, "--focus", "security")["coverage"]
+    assert not marker.exists()
+    assert cover["submodules"] == ["sub"]
+
+    audit = tmp_path / "audit"
+    audit.mkdir()
+    facts = tmp_path / "scope.json"
+    facts.write_text(json.dumps({"parts": [], "skipped": [], "audits": [],
+                                 "coverage": cover}), encoding="utf-8")
+    assert run_script("findings", "report", audit, "--scope", facts).returncode == 0
+    report = (audit / "REPORT.md").read_text(encoding="utf-8")
+    assert "submodule not checked for uncommitted changes: sub" in report
+
+
+def test_an_unknown_history_for_a_local_secret_is_a_gap(tmp_path, monkeypatch, capsys):
+    import subprocess
+
+    import secrets_scan
+
+    def git(repo, *args):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    stripe = "sk_" + "live_" + "a1" * 12
+    src = tmp_path / "src"
+    src.mkdir()
+    git(src, "init", "-q")
+    (src / ".env").write_text(f"STRIPE={stripe}\n", encoding="utf-8")
+    (src / "app.js").write_text("x\n", encoding="utf-8")
+    git(src, "add", "-A")
+    git(src, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i")
+    git(src, "rm", "-q", "--cached", ".env")
+    (src / ".gitignore").write_text(".env\n", encoding="utf-8")
+    git(src, "add", ".gitignore")
+    git(src, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "untrack")
+    git(src, "config", "uploadpack.allowFilter", "true")
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", "--filter=blob:none", src.as_uri(), str(clone)],
+                   check=True, capture_output=True)
+    (clone / ".env").write_text(f"STRIPE={stripe}\n", encoding="utf-8")
+    monkeypatch.setattr(secrets_scan, "git_version", lambda: (2, 45, 0))
+    assert secrets_scan._main([str(clone)]) == 0
+    [item] = [f for f in json.loads(capsys.readouterr().out) if f["path"] == ".env"]
+    assert item["committed"] is False and item["history_unknown"] is True
+
+    audit = tmp_path / "audit"
+    audit.mkdir()
+    meta = tmp_path / "meta.json"
+    meta.write_text(json.dumps({"secrets_scanned": True, "history_unknown": [".env"]}),
+                    encoding="utf-8")
+    assert run_script("findings", "report", audit, "--meta", meta).returncode == 0
+    report = (audit / "REPORT.md").read_text(encoding="utf-8")
+    assert "couldn't tell whether git history holds .env" in report

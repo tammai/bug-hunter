@@ -337,10 +337,19 @@ def _coverage(repo: str, files: list[str], paths: list[str], parts: list[dict],
     # Status re-hashes changed files through their clean filter, a program the target's config
     # can name: blanked, a filtered file reads dirty or a required one fails, both a gap.
     blank = _blank_filters(repo)
+    # A submodule's own config can name filters too, which nothing here blanks: status doesn't
+    # enter submodules, and each one is a gap instead.
     status = None if blank is None else _git_out(
         repo, "status", "--porcelain=v1", "-z", "--untracked-files=normal",
-        "--ignore-submodules=none", config=blank)
+        "--ignore-submodules=all", config=blank)
+    stage = _git_out(repo, "ls-files", "-z", "--stage")
+    submodules = [] if stage is None else [
+        entry.split(b"\t", 1)[1].decode("utf-8", "replace")
+        for entry in stage.split(b"\0") if entry.startswith(b"160000 ") and b"\t" in entry]
+    if stage is None:
+        status = None
     return {
+        "submodules": submodules,
         "paths": paths,
         "commit": commit.decode("ascii", "replace").strip() or None if commit else None,
         "dirty": None if status is None else bool(status),

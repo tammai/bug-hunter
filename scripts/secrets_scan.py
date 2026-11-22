@@ -144,19 +144,24 @@ def known_secret_in(text: str, prints: dict) -> bool:
                if _single_case(w))
 
 
+NO_PROTOCOL = "none-allowed"
+
+
 def run_git(repo: str, *args: str, config: dict[str, str] | None = None
             ) -> subprocess.CompletedProcess:
     """git on the target repo, steered neither by the caller's repo variables nor its config."""
     env = {k: v for k, v in os.environ.items() if k.upper() not in _REPO_VARS}
     # A treeless partial clone would fetch missing trees through the target's remote config.
     env["GIT_NO_LAZY_FETCH"] = "1"
+    # No fetch may start a program the target's remote config names. protocol.allow=never is
+    # only a default the target's protocol.<name>.allow=always overrides; this list, naming no
+    # real protocol, overrides every config, on any git since 2.12, and children inherit it.
+    env["GIT_ALLOW_PROTOCOL"] = NO_PROTOCOL
     if config:
         # Passed by variable, not -c: a target-chosen name may hold "=".
         env["GIT_CONFIG_COUNT"] = str(len(config))
         for n, (key, value) in enumerate(config.items()):
             env[f"GIT_CONFIG_KEY_{n}"], env[f"GIT_CONFIG_VALUE_{n}"] = key, value
-    # protocol.allow=never refuses every transport, on any git since 2.12, so no fetch can start
-    # a program the target's remote config names, whatever the variables above do.
     return subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false",
                            "-c", "protocol.allow=never", "-C", repo, *args],
                           capture_output=True, env=env)
@@ -386,9 +391,11 @@ def _main(argv: list[str] | None = None) -> int:
     for name in local_env:
         # A file untracked since (`git rm --cached`) is still in history, so it counts as
         # committed; only a definite answer raises it, never a git failure.
-        history = in_history(args.repo, name) is True
-        for item in _scan_file(repo, name, history, values):
-            found.append({**item, "history": True} if history else item)
+        answer = in_history(args.repo, name)
+        for item in _scan_file(repo, name, answer is True, values):
+            # Unknown stays local and low, and the report names it as a gap.
+            found.append({**item, "history": True} if answer is True else
+                         {**item, "history_unknown": True} if answer is None else item)
     if args.fingerprints:
         out = Path(args.fingerprints)
         fd, tmp = tempfile.mkstemp(dir=out.parent, prefix=".fingerprints-")

@@ -467,19 +467,23 @@ def _legacy_pairs(earlier: list[tuple[int, str]], produced: list[str],
     """Which produced secret each pre-id finding is, one to one; None where that isn't clear.
 
     The pre-id key (path, pattern, length) is shared by every same-shape secret in a file. A
-    lone finding takes the only secret with its key, or the only one at its line; several
-    findings sharing a key go by their own lines only. A rotated one names the old secret.
+    secret an open finding already holds by id is never paired again. A lone finding takes the
+    only secret with its key, or the only one at its line; with siblings on its key (with an
+    id or without), it goes by its own line only. A rotated one names the old secret.
     """
+    held = {k for _, text in earlier for k in _identities(text) if k[0] == "secret"}
+    produced = [t for t in produced if not _identities(t) & held]
     groups: dict[tuple, list[tuple[int, str]]] = {}
     for number, text in earlier:
-        idents = _identities(text)
-        key = next(iter(idents)) if len(idents) == 1 else None
-        if key and key[0] == "secret-legacy" and number not in rotated:
+        key = next((k for k in _identities(text, new=True) if k[0] == "secret-legacy"), None)
+        if key:
             groups.setdefault(key, []).append((number, text))
     pairs: dict[int, str | None] = {}
     for key, group in groups.items():
         sharing = [t for t in produced if key in _identities(t, new=True)]
         for number, text in group if sharing else []:
+            if _identities(text) != {key} or number in rotated:
+                continue  # it holds an id already, or its old key names the old secret
             same = [t for t in sharing if _secret_line(t) == _secret_line(text)]
             picked = sharing if len(group) == 1 and len(sharing) == 1 else same
             pairs[number] = picked[0] if len(picked) == 1 else None
@@ -643,6 +647,7 @@ def _check_meta(meta: object) -> dict:
     for item in _records(meta.get("check_failed", []), "--meta check_failed",
                          {"file": str, "problems": list}):
         _strings(item["problems"], "--meta check_failed problems")
+    _strings(meta.get("history_unknown", []), "--meta history_unknown")
     return meta
 
 
@@ -664,7 +669,8 @@ def _check_scope(scope: object) -> dict:
     if not isinstance(cover, dict):
         raise _Malformed("--scope coverage must be an object")
     # A missing fact is a gap in the report; a fact of the wrong type is an error.
-    for key in ("paths", "unsafe_folders", "manifests_without_lockfile", "unaudited_lockfiles"):
+    for key in ("paths", "unsafe_folders", "manifests_without_lockfile", "unaudited_lockfiles",
+                "submodules"):
         if key in cover:
             _strings(cover[key], f"--scope coverage {key}")
     other = cover.get("other_files", {})
@@ -730,6 +736,8 @@ def _gaps(scope: dict | None, meta: dict | None, recheck: dict | None,
                  for m in cover.get("manifests_without_lockfile", [])]
         gaps += [f"lockfile with no dependency audit: {p(f)}"
                  for f in cover.get("unaudited_lockfiles", [])]
+        gaps += [f"submodule not checked for uncommitted changes: {p(s)}"
+                 for s in cover.get("submodules", [])]
         if "commit" in cover and not cover["commit"]:
             gaps.append("couldn't tell which commit was audited")
         if cover.get("dirty") is True:
@@ -754,6 +762,8 @@ def _gaps(scope: dict | None, meta: dict | None, recheck: dict | None,
             gaps.append("secrets scan didn't run")
         gaps += [f"{p(f['file'])} failed the format check, so no verifier saw it: "
                  + "; ".join(map(p, f["problems"])) for f in meta.get("check_failed", [])]
+        gaps += [f"couldn't tell whether git history holds {p(name)}, so its secret may be "
+                 "committed" for name in meta.get("history_unknown", [])]
     if recheck is None:
         gaps.append("earlier findings' re-check not reported (no --recheck)")
     else:

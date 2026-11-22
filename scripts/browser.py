@@ -48,9 +48,16 @@ def browsers_dir(env: dict[str, str]) -> Path:
 
 
 def _tracked(repo: str) -> list[str] | None:
+    # Standalone, so hardened here: no repo variables from the caller, no fsmonitor hook or
+    # transport from the target's config.
+    env = {k: v for k, v in os.environ.items()
+           if k.upper() not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")}
+    env["GIT_ALLOW_PROTOCOL"] = "none-allowed"
     try:
-        out = subprocess.run(["git", "-C", repo, "-c", "core.quotepath=off", "ls-files", "-z"],
-                             capture_output=True, check=True).stdout
+        out = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false",
+                              "-c", "protocol.allow=never", "-C", repo, "-c",
+                              "core.quotepath=off", "ls-files", "-z"],
+                             capture_output=True, check=True, env=env).stdout
     except (OSError, subprocess.CalledProcessError):
         return None
     return [name.decode("utf-8", "replace") for name in out.split(b"\0") if name]
