@@ -260,6 +260,29 @@ def test_a_check_matches_when_either_equals_or_rule_fails():
     assert matching_departure([D1], both, KEY_FAIL) == "D-001"
 
 
+def test_a_deeply_nested_repro_is_written_whole_or_not_at_all(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""})
+    deep = "[" * 990 + "1" + "]" * 990
+    text = (PAIR / "drafts" / "departure.md").read_text(encoding="utf-8")
+    draft = tmp_path / "deep.md"
+    draft.write_text(text.replace('"rule": "regex:^TSK-[1-9][0-9]*$"', f'"equals": {deep}', 1),
+                     encoding="utf-8")
+    fail = {"result": "fail", "step": 1, "message": "step 1: status 500, expected 201"}
+    r1, r2 = results_for(tmp_path, fail)
+    out = tmp_path / "out"
+    got = run_script("finding_v1", "write", "--repo", repo, "--out", out, "--draft", draft,
+                     "--rebuild", r1, "--reference", r2)
+    assert "Traceback" not in got.stderr, got.stderr
+    written = list(out.iterdir()) if out.exists() else []
+    if got.returncode == 0:
+        assert len(written) == 1, written
+        steps = json.loads(written[0].read_text(encoding="utf-8"))["repro"]["steps"]
+        assert json.dumps(steps[0]["expect"]["json"][0]["equals"]) == deep
+    else:
+        assert got.stderr.startswith("error:") and got.stderr.count("\n") == 1, got.stderr
+        assert written == [], written
+
+
 def test_registry_with_an_equivalence_trace_is_read_and_never_matches(tmp_path):
     # product-rebuild's equiv.py writes this entry when a person accepts a red equivalence trace.
     trace = ('- id: D-002\n  kind: deliberate-change\n  summary: accepted trace\n'

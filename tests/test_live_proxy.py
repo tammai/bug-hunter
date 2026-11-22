@@ -166,10 +166,13 @@ def test_every_spelling_of_a_dot_segment_leaves_the_base():
                  "/%252e%252e%253fx", "/.../x", "/.. /x", "/..%20/x", "/.%20/x", "/..\t/x",
                  "/%u002e%u002e/x", "/%U002E%U002E/x", "/a/%252e%252e%252e/x",
                  "/%c0%ae%c0%ae/x", "/%C0%AE./x", "/..%00/x", "/%00", "/%ef%bc%8e%ef%bc%8e/x",
-                 "/%25ef%25bc%258e%25ef%25bc%258e/x"):
+                 "/%25ef%25bc%258e%25ef%25bc%258e/x", "/%e0%80%ae%e0%80%ae/x", "/..%e0%80%afx",
+                 "/%f0%80%80%ae%f0%80%80%ae/x", "/%e0%2580%25ae%e0%2580%25ae/x", "/a%f5b",
+                 "/a%ffb"):
         assert _leaves_base(path), path
     for path in ("/items/100%25", "/items/a;b", "/v1.2/x", "/file.tar.gz", "/.well-known/x",
-                 "/a/b?q=..", "/", "/a..b/c", "/..a/x"):
+                 "/a/b?q=..", "/", "/a..b/c", "/..a/x", "/caf%C3%A9", "/%E6%97%A5%E6%9C%AC",
+                 "/%F0%9F%98%80", "/caf%e9", "/%e0%a0%80", "/%f0%90%80%80"):
         assert not _leaves_base(path), path
 
 

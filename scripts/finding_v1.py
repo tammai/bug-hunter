@@ -641,10 +641,14 @@ def write(repo: str, out: Path, draft: Path, oracle: Path | None = None,
     out.mkdir(parents=True, exist_ok=True)
     record["id"] = f"BH-{_next_number(out):04d}"
     path = out / f"{record['id']}.json"
+    # Serialized first: a failure mid-dump would leave an empty BH-NNNN.json behind.
+    try:
+        data = json.dumps(record, ensure_ascii=False, indent=2) + "\n"
+    except RecursionError:
+        raise BadDraft("the draft's repro is nested too deeply to write") from None
     try:
         with path.open("x", encoding="utf-8") as f:
-            json.dump(record, f, ensure_ascii=False, indent=2)
-            f.write("\n")
+            f.write(data)
     except FileExistsError:
         raise BadDraft(f"{path.name} already exists in --out; nothing was overwritten") from None
     return path
@@ -730,6 +734,10 @@ def _main(argv: list[str] | None = None) -> int:
         what = "check the registry" if args.command == "departures" \
             else f"{args.command} the draft"
         print(f"error: cannot {what}: {_printable(f'{type(exc).__name__}: {exc}')}",
+              file=sys.stderr)
+        return 1
+    except RecursionError:
+        print(f"error: cannot {args.command}: the input is nested too deeply to read",
               file=sys.stderr)
         return 1
     return 0
