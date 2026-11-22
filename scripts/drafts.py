@@ -336,6 +336,8 @@ V6_END = rf"(?!{WORD}|:(?:{WORD}|:))"
 ZONE = r"(?:%[^\]\s]{0,64}+)?"
 # Where a host name ends with no port after it: not in a longer name or before a port.
 HOST_END = r"(?!(?-i:[0-9A-Za-z_.-])|:[0-9])"
+# An `@` written as an HTML reference (with or without `;`) or a JSON escape.
+AT = r"(?:&(?:#0*64(?![0-9])|#x0*40(?![0-9a-f])|commat;)|\\u0040)"
 # The addresses a loopback target is reached at besides "localhost": 0.0.0.0 reaches the same
 # server.
 LOOPBACK = tuple(map(ipaddress.ip_address, ("127.0.0.1", "0.0.0.0", "::1")))
@@ -458,14 +460,16 @@ def _link_pattern(url, local_hosts: set[str]) -> str:
         tail = _port(port)
     else:
         tail = (rf"(?:{_port(default)})?" if default else "") + HOST_END
-    # Not before a non-ASCII letter (http://localhost失): that is no link the listener serves,
-    # so the host is masked instead. Not where userinfo follows, plain or as an entity: in
-    # http://uat.acme.test;@evil.test/ the host is evil.test. The look stops only where a
-    # URL's authority ends (space, /, ?, #, a double quote, <, >, a backtick, a backslash),
-    # so a later address in the text (admin@acme.test) doesn't count; possessive, so linear.
+    # Not before a non-ASCII character (http://localhost失), case-sensitively so re.I can't
+    # fold K or ſ into ASCII: that is no link the listener serves, so the host is masked
+    # instead. Not where userinfo follows, plain, as an entity or a JSON escape: in
+    # http://uat.acme.test;@evil.test/ the host is evil.test. Other entities (&amp;) are
+    # stepped over whole; the look stops only where a URL's authority ends (space, /, ?, #,
+    # a double quote, <, >, a backtick, a backslash), so a later address in the text
+    # (admin@acme.test) doesn't count; possessive, so linear.
     return (rf"(?<![a-z0-9+.-]){re.escape(url.scheme)}://{spelled}{tail}"
-            r"(?![^\x00-\x7f])"
-            r"(?![^\s/?#@\"<>`\\&]*+(?:@|&(?:#0*64|#x0*40|commat);))")
+            r"(?!(?-i:[^\x00-\x7f]))"
+            rf"(?!(?:[^\s/?#@\"<>`\\&]|(?!{AT})&#?[0-9a-z]*+;?)*+(?:@|{AT}))")
 
 
 def _ipv6_pattern(address: ipaddress.IPv6Address) -> str:
