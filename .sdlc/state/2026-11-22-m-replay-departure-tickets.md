@@ -7,7 +7,7 @@ Risk: high   (untrusted input: request paths and headers at the proxy that holds
 Top model: opus   (fable only if the user chose it)
 Commands: test: `uv run pytest`
 Started: 2026-11-22
-Base: fdd1072
+Base: e333ca6
 Owner: tam.mai@bigin.vn
 Tool: claude-code
 Verified: 7b99ff2 tree 026357f484dd9bfb934ed164244e6e48ff3f3cd3
@@ -54,6 +54,7 @@ inline in this session
 - 2026-11-22 review: ran security and code (Risk high; Public Surface changed), deferred by the owner to the end of all builds; r1 FAIL, r2 FAIL (owner allowed round 3), r3 PASS both; CHANGELOG written at Ship on the coordinator's instruction
 - 2026-11-22 Stage 3: pass
 - 2026-11-22 CI fix (PR 47): verify PASS head 24f427a tree d2776a32b5968acc2344ecd7c1fb09be5eae3dc5
+- 2026-11-22 merged origin/main e333ca6 (PR 48, isolate.py) into the PR branch; conflict only in docs/sdlc/recurring-defects.md, both lanes' lines kept; Base moved from fdd1072 so drift counts only this change
 
 ## Deviations
 - 2026-11-22 test-change tests/test_reference.py What: AC-002's test lists the routing header names itself instead of importing ROUTING_HEADERS; test_replay_reports_pass_fail_and_not_run expects the new check field on its failed value check Why: ROUTING_HEADERS is replaced by the allow-list BESIDE_ANOTHER; a failed equals check now carries check (AC-003)

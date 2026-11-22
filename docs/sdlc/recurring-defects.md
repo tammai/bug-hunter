@@ -57,3 +57,5 @@ One line per defect: what it looks like, then the severity.
 - A left boundary or lookbehind added to a leak or host matcher to cut over-refusal or scan cost, so a prefix (another scheme, a dot, a digit, an undecoded escape) now hides the value the matcher must refuse; anchor at a run's start and check the run's end instead: high
 - A decode check that runs on str after `unquote`, so bytes that aren't UTF-8 (overlong forms such as `%c0%ae`, `%e0%80%ae`) become U+FFFD and slip past a dot or separator check; check each decode round as bytes: high
 - An error or warning line that prints untrusted text (a registry, a draft, a parser's message quoting either) without escaping control and bidi characters or bounding its length, so a newline forges another `error:` line or an escape sequence rewrites the terminal: high
+- A value cleaner that splits a list on separators before stripping credentials, so a password containing the separator (or digits that read as a port) leaves a fragment: high
+- An exemption chosen from a variable's name alone, without checking what its value is (`BASH_FUNC_` with a non-function value): high

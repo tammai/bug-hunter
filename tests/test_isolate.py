@@ -1,5 +1,7 @@
+import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -658,9 +660,10 @@ def test_every_inherited_git_override_is_dropped(tmp_path):
         env.update({"SYSTEMROOT": os.environ["SYSTEMROOT"], "Git_Trace2": "1"})
     got = isolated_env(scratch, env)
     allowed = {"GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT", "GIT_SSL_CAINFO",
-               "GIT_EDITOR", "GIT_PAGER"}
+               "GIT_EDITOR", "GIT_PAGER", "GIT_SSH_COMMAND"}
     assert [n for n in got if n.upper().startswith("GIT_") and n.upper() not in allowed] == []
     assert got["GIT_EDITOR"] == "true" and got["GIT_PAGER"] == "cat"
+    assert got["GIT_SSH_COMMAND"].startswith("ssh -F /dev/null ")
     assert "SSH_ASKPASS" not in got
     assert got["GIT_SSL_CAINFO"] == str(elsewhere / "ca.pem")
     assert got["GIT_CONFIG_GLOBAL"] == "/dev/null"
@@ -944,3 +947,271 @@ def test_cache_marker_check_never_raises(tmp_path):
                 parent, result.stderr)
     finally:
         unsearchable.chmod(0o700)
+
+
+ISOLATION_SSH_OPTIONS = ["IdentityFile=none", "IdentitiesOnly=yes", "IdentityAgent=none",
+                         "UserKnownHostsFile=/dev/null", "StrictHostKeyChecking=yes",
+                         "BatchMode=yes"]
+# Python, not bash's compgen -e, which can't see names that aren't shell identifiers.
+CHILD_ENV = ("import json, os\n"
+             "try:\n    import nt\n    e = dict(nt.environ)\n"
+             "except ImportError:\n    e = dict(os.environ)\n"
+             "print(json.dumps(e))")
+
+
+def child_env(scratch: Path, env: dict) -> dict:
+    """The environment a program started from the isolated shell gets."""
+    command = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch)])
+    child = shlex.join([sys.executable, "-I", "-c", CHILD_ENV])
+    script = f'ISO="$({command})" && eval "$ISO" || exit 1; {child}'
+    result = subprocess.run([BASH, "-c", script], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_git_over_ssh_runs_isolations_ssh_not_the_owners(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    args, owner_ran = tmp_path / "ssh-args", tmp_path / "owner-ran"
+    fake = bin_dir / "ssh"
+    fake.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$@\" > {shlex.quote(args.as_posix())}\n"
+                    "exit 1\n", encoding="utf-8")
+    fake.chmod(0o755)
+    owner = tmp_path / "owner-ssh"
+    owner.write_text(f"#!/bin/sh\n: > {shlex.quote(owner_ran.as_posix())}\nexit 1\n",
+                     encoding="utf-8")
+    owner.chmod(0o755)
+    path = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
+    env = {**os.environ, "HOME": str(tmp_path / "real"), "PATH": path,
+           "GIT_SSH_COMMAND": owner.as_posix()}
+    command = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch)])
+    script = (f'ISO="$({command})" && eval "$ISO" || exit 1; '
+              "git ls-remote ssh://git@example.invalid/repo.git; true")
+    result = subprocess.run([BASH, "-c", script], cwd=tmp_path, capture_output=True, text=True,
+                            env=env)
+    assert result.returncode == 0, result.stderr
+    assert not owner_ran.exists()
+    got = args.read_text(encoding="utf-8").splitlines()
+    assert got[got.index("-F") + 1] == "/dev/null"
+    options = {got[i + 1] for i, arg in enumerate(got) if arg == "-o"}
+    assert set(ISOLATION_SSH_OPTIONS) <= options, got
+
+
+@pytest.mark.skipif(shutil.which("ssh") is None, reason="needs an OpenSSH client")
+def test_isolations_ssh_finds_nothing_in_the_owners_ssh_folder(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    try:
+        import pwd
+        owner_home = pwd.getpwuid(os.getuid()).pw_dir
+    except ImportError:
+        # Windows has no password database; its ssh finds ~ through the profile.
+        owner_home = Path.home().as_posix()
+    command = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch)])
+    script = f'ISO="$({command})" && eval "$ISO" || exit 1; $GIT_SSH_COMMAND -G example.com'
+    result = subprocess.run([BASH, "-c", script], capture_output=True, text=True,
+                            env={**os.environ, "HOME": str(tmp_path / "real")})
+    assert result.returncode == 0, result.stderr
+    lines = [line.split(" ", 1) for line in result.stdout.splitlines() if " " in line]
+    assert [value for key, value in lines if key == "identityfile"] == ["none"]
+    assert [value for key, value in lines if key == "userknownhostsfile"] == ["/dev/null"]
+    for key, value in lines:
+        if key in ("identityfile", "certificatefile", "userknownhostsfile", "identityagent"):
+            assert owner_home not in value and not value.startswith("~"), (key, value)
+
+
+@pytest.mark.skipif(not isolate.DIR_FD, reason="only the descriptor path opens the folder")
+def test_refuse_links_checks_the_folder_it_opened_not_the_path(tmp_path, monkeypatch):
+    scratch = tmp_path / "s"
+    (scratch / "home").mkdir(parents=True)
+    os.symlink(tmp_path, scratch / "home" / "planted")
+    opened = isolate._open_folder
+
+    def then_swapped(base, folder):
+        fd = opened(base, folder)
+        os.rename(folder, tmp_path / "moved")
+        folder.mkdir()
+        return fd
+
+    monkeypatch.setattr(isolate, "_open_folder", then_swapped)
+    with pytest.raises(OSError, match="symlink"):
+        isolate._refuse_links(scratch, scratch / "home")
+
+
+def test_a_variable_bash_cant_unset_stops_isolation(tmp_path):
+    real = tmp_path / "real"
+    cases = {
+        "npm_config_//registry.npmjs.org/:_authToken": "npm_SECRETVALUE",
+        "corp-proxy": "http://me:SECRETVALUE@proxy.corp:8080",
+        "ÜBER_TOKEN": "SECRETVALUE",
+        "GIT_SSH COMMAND": "ssh -i SECRETVALUE",
+    }
+    for name, value in cases.items():
+        env = {"PATH": os.environ["PATH"], "HOME": str(real), name: value}
+        if WINDOWS:
+            env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        result = run_script("isolate", tmp_path / "s", env=env)
+        assert result.returncode == 1 and result.stdout == "", name
+        assert result.stderr.startswith("error:") and len(result.stderr.splitlines()) == 1, name
+        shown = name.encode("unicode_escape").decode("ascii")
+        assert shown in result.stderr and "SECRETVALUE" not in result.stderr, name
+        assert "Traceback" not in result.stderr, name
+    # Every stuck name, so the owner fixes them all in one go.
+    env = {"PATH": os.environ["PATH"], "HOME": str(real), "a//:_authToken": "x",
+           "b//:_authToken": "y"}
+    if WINDOWS:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    result = run_script("isolate", tmp_path / "s", env=env)
+    assert result.returncode == 1 and len(result.stderr.splitlines()) == 1
+    assert "a//:_authToken" in result.stderr and "b//:_authToken" in result.stderr
+    # Odd names that hold no credential never stop it: Windows always has ProgramFiles(x86),
+    # JetBrains adds "PyCharm Community Edition" pointing into the profile, and MSYS shows
+    # cmd.exe's drive folders as !C:.
+    scratch = tmp_path / "s2"
+    scratch.mkdir()
+    odd = {"a-b": "1", "Program Data(x86)": "D:\\data",
+           "Tool Dir": str(real / "tools"), "!C:": str(real / "proj")}
+    env = {"PATH": os.environ["PATH"], "HOME": str(real), **odd}
+    if WINDOWS:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    got = child_env(scratch, env)
+    folded = {k.upper(): v for k, v in got.items()} if WINDOWS else got
+    for name, value in odd.items():
+        assert folded[name.upper() if WINDOWS else name] == value, name
+
+
+def test_error_lines_escape_control_characters_in_names(tmp_path, monkeypatch, capsys):
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "real"),
+           "x\nTOKEN\x1b[2J": "SECRETVALUE"}
+    result = run_script("isolate", tmp_path / "s", env=env)
+    assert result.returncode == 1 and len(result.stderr.splitlines()) == 1, result.stderr
+    assert "x\\nTOKEN\\x1b[2J" in result.stderr and "\x1b" not in result.stderr
+    assert "SECRETVALUE" not in result.stderr
+    # The encoding error names the owner's variables the same way.
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "h-\ud800"),
+           "odd\nname": "v-\ud800"}
+    monkeypatch.setattr(isolate, "_environ", lambda: dict(env))
+    assert isolate._main([str(tmp_path / "s2")]) == 1
+    out, err = capsys.readouterr()
+    assert out == "" and len(err.splitlines()) == 1 and "odd\\nname" in err
+
+
+def function_body(real: Path) -> str:
+    """A valid bash function whose body names a path in the real home, so isolation drops it."""
+    return f"() {{  x=1{os.pathsep}{real}/bin\n}}"
+
+
+def test_exported_bash_functions_are_removed_not_refused(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    real = tmp_path / "real"
+    env = {"PATH": os.environ["PATH"], "HOME": str(real),
+           "BASH_FUNC_mkcd%%": function_body(real)}
+    if WINDOWS:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    got = child_env(scratch, env)
+    assert not [k for k in got if "mkcd" in k]
+
+
+def test_only_real_functions_that_hold_no_credential_skip_the_checks(tmp_path):
+    real = tmp_path / "real"
+    # Each could carry a credential: a secret name (function or not) or a proxy URL with a
+    # password. bash can't remove them, so isolation stops.
+    for name, value in {"BASH_FUNC_TOKEN%%": "SECRETVALUE",
+                        "BASH_FUNC_proxy%%": "http://u:SECRETVALUE@h",
+                        "BASH_FUNC_get_token%%": "() {  echo SECRETVALUE\n}",
+                        "corp-proxy": f"{real}/x:http://u:SECRETVALUE@h:8080"}.items():
+        env = {"PATH": os.environ["PATH"], "HOME": str(real), name: value}
+        if WINDOWS:
+            env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        result = run_script("isolate", tmp_path / "s", env=env)
+        assert result.returncode == 1 and result.stdout == "", name
+        assert "SECRETVALUE" not in result.stderr, name
+    # The older BASH_FUNC_name() form (bash 4.2 with the 2014 patches): no function of that
+    # name is left in the isolated shell, whether this bash imported it or not.
+    scratch = tmp_path / "s2"
+    scratch.mkdir()
+    env = {"PATH": os.environ["PATH"], "HOME": str(real), "BASH_FUNC_greet()": function_body(real)}
+    if WINDOWS:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    command = shlex.join([sys.executable, "-I", str(SCRIPTS / "isolate.py"), str(scratch)])
+    script = (f'ISO="$({command})" && eval "$ISO" || exit 1; '
+              'bash -c "declare -F greet" || echo gone')
+    result = subprocess.run([BASH, "-c", script], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "gone"
+    # Every bash imports the %% form, so there the variable itself must be gone too.
+    env = {"PATH": os.environ["PATH"], "HOME": str(real), "BASH_FUNC_greet%%": function_body(real)}
+    if WINDOWS:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    got = child_env(tmp_path / "s2", env)
+    assert not [k for k in got if k.startswith("BASH_FUNC_greet")]
+
+
+SENTINEL = "4711"
+
+
+def test_a_credentialed_list_keeps_the_scheme_of_the_surviving_entry(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    wanted = {
+        "PROXY_A": (f"http://a,https://u:{SENTINEL}@b", "https://b"),
+        "PROXY_B": (f"socks5://a|http://u:{SENTINEL}@b:1080", "http://b:1080"),
+        "PROXY_C": (f"http://a,u:{SENTINEL}@b", "http://b"),
+        # A scheme-looking piece inside the password is never carried over.
+        "PROXY_D": (f"http://u:x://{SENTINEL}@h", "h"),
+    }
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "real"),
+           **{name: given for name, (given, _) in wanted.items()}}
+    if WINDOWS:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    got = child_env(scratch, env)
+    folded = {k.upper(): v for k, v in got.items()}
+    for name, (_, expected) in wanted.items():
+        assert folded[name] == expected and SENTINEL not in folded[name], name
+
+
+def test_proxy_values_never_keep_part_of_a_password(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    shapes = [f"http://u:{SENTINEL}{{sep}}b://x@h", f"u:{SENTINEL}{{sep}}x://y@proxy:3128",
+              f"http://u:{{sep}}x://{SENTINEL}@h", f"http://u:{SENTINEL}/q{{sep}}b://x@h",
+              f"http://[u:{SENTINEL}]{{sep}}x://y@h",
+              f"https://proxy.golang.org{{sep}}https://u:{SENTINEL}@athens.corp"]
+    cases = {f"PROXY_CASE_{i}_{j}": shape.format(sep=sep)
+             for i, shape in enumerate(shapes) for j, sep in enumerate([",", "|", " "])}
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "real"), **cases,
+           "GOPROXY": "https://proxy.golang.org,https://athens.corp|direct"}
+    if WINDOWS:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    got = child_env(scratch, env)
+    folded = {k.upper(): v for k, v in got.items()}
+    for name, given in cases.items():
+        assert SENTINEL not in folded[name] and "@" not in folded[name], (given, folded[name])
+    assert got["GOPROXY"] == "https://proxy.golang.org,https://athens.corp|direct"
+
+
+def test_proxy_credentials_are_dropped_and_routing_kept(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    wanted = {
+        "https_proxy": ("http://me:hunter2@proxy.corp:8080/", "http://proxy.corp:8080/"),
+        "HTTP_PROXY": ("me:hunter2@proxy:3128", "proxy:3128"),
+        "ALL_PROXY": ("socks5://justme@socks.corp:1080", "socks5://socks.corp:1080"),
+        "npm_config_https_proxy": ("http://me:hun@ter2@proxy.corp:8080",
+                                   "http://proxy.corp:8080"),
+        "ftp_proxy": ("http://u:hunter2@[::1]:8080", "http://[::1]:8080"),
+        "npm_config_proxy": ("http://proxy.corp:8080", "http://proxy.corp:8080"),
+        "NO_PROXY": ("localhost,.corp", "localhost,.corp"),
+    }
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "real"),
+           **{name: given for name, (given, _) in wanted.items()}}
+    if WINDOWS:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    got = child_env(scratch, env)
+    folded = {k.upper(): v for k, v in got.items()} if WINDOWS else got
+    for name, (_, expected) in wanted.items():
+        assert folded[name.upper() if WINDOWS else name] == expected, name
+    assert not [k for k, v in got.items() if "hunter2" in v or "ter2@" in v or "justme" in v]
