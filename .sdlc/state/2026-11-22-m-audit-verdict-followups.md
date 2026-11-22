@@ -7,7 +7,7 @@ Risk: high   (secrets, deploy verdict, untrusted target git config)
 Top model: opus   (fable only if the user chose it)
 Commands: test: `uv run pytest`
 Started: 2026-11-22
-Base: fdd1072
+Base: 5eea35f
 Owner: tam.mai@bigin.vn
 Tool: claude-code
 Verified: a965e7d tree f2cb64a9af495a2b0d6b56f68172d4390549a68a
@@ -70,6 +70,7 @@ inline, one session; S8 first to ticket if context runs short
 - 2026-11-22 rebased onto origin/main fdd1072 (C3 and oracle merged), no conflicts; Base set to fdd1072
 - 2026-11-22 Stage 2: pass — build done after r1-r4 fixes; reviews ran at the end by owner instruction
 - 2026-11-22 Stage 3: pass — review: security r3 PASS, code r4 PASS; r2 and r3 past the cap with the owner's OK
+- 2026-11-22 merged origin/main 5eea35f (isolate #48, leak-scan #49) into the PR branch; conflicts in CHANGELOG.md and docs/sdlc/recurring-defects.md, both sides kept; Base set to 5eea35f
 
 ## Deviations
 - 2026-11-22 test-change tests/test_audit_scope.py What: the hostile repo gets a tracked app.js (scope.py refused a repo with no source files) and expects dirty False, not true-or-null; the partial-clone check asserts in_history is not False instead of rev-list exiting 0. Why: blanked filters that change nothing honestly read clean, so AC-010's 'dirty is true or null' wording was wrong for this fixture; with GIT_NO_LAZY_FETCH git can't read the missing tree and exits 128, which is the safe 'can't say'. Effect: AC-010 now asserts no marker, a correct dirty value, and the safe history answer.

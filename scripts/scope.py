@@ -244,12 +244,24 @@ def _calls_third_parties(root: Path, files: list[str]) -> bool:
     return _any_matches(root, files, CALLS_OUT, CALLS_OUT_JS)
 
 
+def _linked(root: Path, path: Path) -> bool:
+    """Whether `path`, or a folder between `root` and it, is a symlink (or it is outside root)."""
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        return True
+    # Junctions too: Windows' directory links, which islink doesn't report.
+    return any(os.path.islink(p) or os.path.isjunction(p)
+               for p in (root.joinpath(*parts[:i]) for i in range(1, len(parts) + 1)))
+
+
 def _any_matches(root: Path, files: list[str], markers: re.Pattern,
                  js_markers: re.Pattern) -> bool:
     for name in files:
         path = root / name
         try:
-            if path.is_symlink() or path.stat().st_size > INTEGRATIONS["max_bytes"]:
+            # Never through a link, the file's or a folder's: it could point out of the repo.
+            if _linked(root, path) or path.stat().st_size > INTEGRATIONS["max_bytes"]:
                 continue
             # A marker search, not a parse: a stray Latin-1 byte mustn't hide a client call.
             text = path.read_text(encoding="utf-8", errors="replace")
