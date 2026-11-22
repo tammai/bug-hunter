@@ -136,6 +136,46 @@ def test_forwards_only_to_the_target(make_repo, tmp_path):
         ("/api/items", "page=2&q=a%20b"), ("/api/go", "")]
 
 
+def test_a_path_that_climbs_after_repeated_decoding_is_refused(make_repo, tmp_path):
+    # A target or front end that decodes twice reads `%252e%252e` as `..`.
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    stub, stub_base, stub_log = start_stub(tmp_path, [
+        {"path": "/api/items/100%25", "responses": [{"body": {"ok": 1}}]}])
+    write_targets(targets, {"uat": {"url": stub_base + "/api"}})
+    proxy, base = start_proxy(repo, "uat", env, tmp_path / "proxy.jsonl")
+    climbs = ["/%252e%252e/x", "/%25252e%25252e/x", "/%252E%252E/x", "/..%252fx",
+              "/%255c..%255cx", "/a/%2525252e%2525252e/x"]
+    try:
+        answers = {path: raw(base, f"GET {path} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+                   for path in climbs}
+        status, _, body = call(base + "/items/100%25")
+    finally:
+        stop(proxy, stub)
+    for path, answer in answers.items():
+        assert b" 400 " in answer, (path, answer)
+    assert status == 200 and json.loads(body) == {"ok": 1}
+    assert len(entries(stub_log)) == 1
+
+
+def test_every_spelling_of_a_dot_segment_leaves_the_base():
+    # Servers end a segment's name at `;`, `?` or `#`, and some trim trailing dots and spaces.
+    from live_proxy import _leaves_base
+
+    for path in ("/..;/x", "/..;a=b/x", "/%2e%2e%3b/x", "/..%3fx", "/..%23x",
+                 "/%252e%252e%253fx", "/.../x", "/.. /x", "/..%20/x", "/.%20/x", "/..\t/x",
+                 "/%u002e%u002e/x", "/%U002E%U002E/x", "/a/%252e%252e%252e/x",
+                 "/%c0%ae%c0%ae/x", "/%C0%AE./x", "/..%00/x", "/%00", "/%ef%bc%8e%ef%bc%8e/x",
+                 "/%25ef%25bc%258e%25ef%25bc%258e/x", "/%e0%80%ae%e0%80%ae/x", "/..%e0%80%afx",
+                 "/%f0%80%80%ae%f0%80%80%ae/x", "/%e0%2580%25ae%e0%2580%25ae/x", "/a%f5b",
+                 "/a%ffb"):
+        assert _leaves_base(path), path
+    for path in ("/items/100%25", "/items/a;b", "/v1.2/x", "/file.tar.gz", "/.well-known/x",
+                 "/a/b?q=..", "/", "/a..b/c", "/..a/x", "/caf%C3%A9", "/%E6%97%A5%E6%9C%AC",
+                 "/%F0%9F%98%80", "/caf%e9", "/%e0%a0%80", "/%f0%90%80%80"):
+        assert not _leaves_base(path), path
+
+
 def call_no_redirect(url):
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):

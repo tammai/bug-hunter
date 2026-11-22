@@ -8,11 +8,13 @@ from conftest import run_script
 
 PAIR = Path(__file__).resolve().parent / "fixtures" / "reference-pair"
 KEY_FAIL = {"result": "fail", "step": 1,
-            "message": 'step 1 /key: "TSK-0003" does not satisfy rule regex:^TSK-[1-9][0-9]*$'}
+            "message": 'step 1 /key: "TSK-0003" does not satisfy rule regex:^TSK-[1-9][0-9]*$',
+            "check": {"pointer": "/key", "value": "TSK-0003"}}
 PASS = {"result": "pass"}
 STEPS = [{"request": {"method": "POST", "path": "/api/tasks", "json": {"title": "C"}},
           "expect": {"status": 201,
                      "json": [{"pointer": "/key", "rule": "regex:^TSK-[1-9][0-9]*$"}]}}]
+HTTP = {"runner": "http", "steps": STEPS}
 D1 = {"id": "D-001", "kind": "simplification", "summary": "padded keys", "decided_by": "Tam",
       "match": [{"runner": "http", "pointer": "/key", "rule": "regex:^TSK-\\d{4}$"}]}
 
@@ -27,38 +29,63 @@ def spec_with(tmp_path, registry: str | None) -> Path:
     return spec
 
 
-def classify_departure_draft(tmp_path, spec):
+def results_for(tmp_path, rebuild=KEY_FAIL):
+    r1, r2 = tmp_path / "r1.json", tmp_path / "r2.json"
+    r1.write_text(json.dumps(rebuild), encoding="utf-8")
+    r2.write_text(json.dumps(PASS), encoding="utf-8")
+    return r1, r2
+
+
+def classify_departure_draft(tmp_path, spec, rebuild=KEY_FAIL):
     draft = tmp_path / "departure.md"
     shutil.copy(PAIR / "drafts" / "departure.md", draft)
-    r1, r2 = tmp_path / "r1.json", tmp_path / "r2.json"
-    r1.write_text(json.dumps(KEY_FAIL), encoding="utf-8")
-    r2.write_text(json.dumps(PASS), encoding="utf-8")
+    r1, r2 = results_for(tmp_path, rebuild)
     return run_script("finding_v1", "classify", "--draft", draft, "--oracle", spec,
                       "--rebuild", r1, "--reference", r2)
 
 
+def write_departure_draft(make_repo, tmp_path, spec):
+    repo = make_repo({"a.py": ""})
+    draft = tmp_path / "departure.md"
+    shutil.copy(PAIR / "drafts" / "departure.md", draft)
+    r1, r2 = results_for(tmp_path)
+    out = tmp_path / "out"
+    return out, run_script("finding_v1", "write", "--repo", repo, "--out", out, "--draft", draft,
+                           "--oracle", spec, "--rebuild", r1, "--reference", r2)
+
+
 ENTRY = ('- id: D-001\n  kind: simplification\n  summary: padded keys\n'
          '  match:\n    - {runner: http, pointer: /key, rule: "regex:^TSK-\\\\d{4}$"}\n')
+DECIDED = ENTRY + '  decided_by: "Tam"\n'
 
 
-def test_registry_is_read_and_checked(tmp_path):
-    accepted = classify_departure_draft(tmp_path, spec_with(tmp_path / "a", ENTRY
-                                                            + '  decided_by: "Tam"\n'))
-    assert accepted.returncode == 0, accepted.stderr
-    assert json.loads(accepted.stdout) == {"class": "accepted-departure", "route": "drop",
-                                           "departure": "D-001"}
-    for registry in (None, ENTRY + "  status: proposed\n"):
-        got = classify_departure_draft(tmp_path, spec_with(tmp_path / str(len(str(registry))),
-                                                           registry))
-        assert got.returncode == 0, got.stderr
-        assert json.loads(got.stdout)["class"] == "build-defect", registry
-    for n, registry in enumerate((ENTRY, ENTRY.replace("D-001", "D-1") + "  decided_by: T\n",
-                                  "- id: [unclosed\n")):
-        bad = classify_departure_draft(tmp_path, spec_with(tmp_path / f"bad{n}", registry))
-        assert bad.returncode == 1 and bad.stderr.startswith("error:"), registry
-        assert "departures.yaml" in bad.stderr and bad.stderr.count("\n") == 1, bad.stderr
+def test_an_accepted_entry_is_matched(tmp_path):
+    got = classify_departure_draft(tmp_path, spec_with(tmp_path, DECIDED))
+    assert got.returncode == 0, got.stderr
+    assert json.loads(got.stdout) == {"class": "accepted-departure", "route": "drop",
+                                      "departure": "D-001"}
+
+
+def test_no_registry_matches_nothing(tmp_path):
+    got = classify_departure_draft(tmp_path, spec_with(tmp_path, None))
+    assert got.returncode == 0, got.stderr
+    assert json.loads(got.stdout)["class"] == "build-defect"
+
+
+@pytest.mark.parametrize("registry", [
+    ENTRY,  # no decided_by
+    ENTRY.replace("D-001", "D-1") + "  decided_by: T\n",
+    "- id: [unclosed\n",
+])
+def test_an_invalid_registry_is_refused(tmp_path, registry):
+    bad = classify_departure_draft(tmp_path, spec_with(tmp_path, registry))
+    assert bad.returncode == 1 and bad.stderr.startswith("error:"), registry
+    assert "departures.yaml" in bad.stderr and bad.stderr.count("\n") == 1, bad.stderr
+
+
+def test_a_linked_registry_is_refused(tmp_path):
     # Never through a link: a spec inside the hunted repo could point one outside it.
-    linked = spec_with(tmp_path / "link", None)
+    linked = spec_with(tmp_path, None)
     try:
         os.symlink(PAIR / "spec" / "departures.yaml", linked / "departures.yaml")
     except OSError:
@@ -67,39 +94,222 @@ def test_registry_is_read_and_checked(tmp_path):
     assert got.returncode == 1 and "departures.yaml" in got.stderr, got.stderr
 
 
+def test_a_proposed_entry_is_warned_about(make_repo, tmp_path):
+    spec = spec_with(tmp_path / "s", ENTRY + "  status: proposed\n")
+    got = classify_departure_draft(tmp_path, spec)
+    assert got.returncode == 0, got.stderr
+    assert json.loads(got.stdout)["class"] == "build-defect"
+    out, wrote = write_departure_draft(make_repo, tmp_path, spec)
+    assert wrote.returncode == 0, wrote.stderr
+    assert json.loads(Path(wrote.stdout.strip()).read_text(encoding="utf-8"))["class"] \
+        == "build-defect"
+    for stderr in (got.stderr, wrote.stderr):
+        lines = stderr.splitlines()
+        assert len(lines) == 1 and lines[0].startswith("warning: departures.yaml: D-001 is "
+                                                       "proposed"), stderr
+
+
+def test_a_departure_id_over_nine_digits_is_refused(make_repo, tmp_path):
+    long_id = "D-0000000001"
+    spec = spec_with(tmp_path / "s", DECIDED.replace("D-001", long_id))
+    got = classify_departure_draft(tmp_path, spec)
+    out, wrote = write_departure_draft(make_repo, tmp_path, spec)
+    for result in (got, wrote):
+        assert result.returncode == 1 and result.stderr.startswith("error:"), result.stderr
+        assert result.stderr.count("\n") == 1 and "departures.yaml" in result.stderr
+        assert long_id not in result.stderr
+    assert not out.exists()
+    nine = classify_departure_draft(tmp_path, spec_with(tmp_path / "n",
+                                                        DECIDED.replace("D-001", "D-000000001")))
+    assert nine.returncode == 0 and json.loads(nine.stdout)["departure"] == "D-000000001"
+
+
+@pytest.mark.parametrize("registry", [
+    ENTRY.replace("D-001", "D-0000000001"),  # no decided_by: contracts would name the ID
+    DECIDED.replace("D-001", "D-0000000001") + DECIDED.replace("D-001", "D-0000000001"),
+    DECIDED.replace("D-001", '"D-001\\n"'),
+    DECIDED.replace("D-001", '"D-0٠1"'),
+])
+def test_a_bad_departure_id_is_refused_without_echoing_it(tmp_path, registry):
+    got = classify_departure_draft(tmp_path, spec_with(tmp_path, registry))
+    assert got.returncode == 1 and got.stderr.startswith("error:"), got.stderr
+    assert got.stderr.count("\n") == 1 and "departures.yaml" in got.stderr, got.stderr
+    assert "0000000001" not in got.stderr and "٠" not in got.stderr, got.stderr
+
+
+def test_departures_command_checks_the_registry_before_the_run(tmp_path):
+    def check(registry):
+        return run_script("finding_v1", "departures", "--oracle",
+                          spec_with(tmp_path / str(abs(hash(str(registry)))), registry))
+    for registry in (None, DECIDED):
+        got = check(registry)
+        assert got.returncode == 0 and got.stderr == "", (registry, got.stderr)
+    proposed = check(ENTRY + "  status: proposed\n")
+    assert proposed.returncode == 0, proposed.stderr
+    assert proposed.stderr.startswith("warning: departures.yaml: D-001 is proposed")
+    assert proposed.stderr.count("\n") == 1, proposed.stderr
+    for registry in (DECIDED.replace("D-001", "D-0000000001"), ENTRY, "- id: [unclosed\n"):
+        bad = check(registry)
+        assert bad.returncode == 1 and bad.stderr.startswith("error:"), registry
+        assert bad.stderr.count("\n") == 1 and "departures.yaml" in bad.stderr, bad.stderr
+
+
+def test_a_check_matches_only_a_value_that_fails_the_last_check():
+    from finding_v1 import matching_departure
+
+    loose = {**D1, "match": [{"runner": "http", "pointer": "/key", "rule": "regex:^TSK-"}]}
+    passing = {**KEY_FAIL, "check": {"pointer": "/key", "value": "TSK-3"}}
+    assert matching_departure([loose], HTTP, passing) is None
+    assert matching_departure([loose], HTTP, KEY_FAIL) == "D-001"
+    equals = {"runner": "http", "steps": [{**STEPS[0], "expect": {
+        "status": 201, "json": [{"pointer": "/key", "equals": "TSK-0003"}]}}]}
+    assert matching_departure([D1], equals, KEY_FAIL) is None
+    capture_only = {"runner": "http", "steps": [{**STEPS[0], "expect": {
+        "status": 201, "json": [{"pointer": "/key", "capture": "k"}]}}]}
+    same_as = {"runner": "http", "steps": [{**STEPS[0], "expect": {
+        "status": 201, "json": [{"pointer": "/key", "rule": "same-as:k"}]}}]}
+    for repro in (capture_only, same_as):
+        assert matching_departure([D1], repro, KEY_FAIL) is None, repro
+
+
+def test_deeply_nested_json_is_one_error_line(tmp_path):
+    spec = spec_with(tmp_path / "s", DECIDED)
+    nested = "[" * 100000 + "]" * 100000
+    draft = tmp_path / "departure.md"
+    shutil.copy(PAIR / "drafts" / "departure.md", draft)
+    r1, r2 = results_for(tmp_path)
+    r1.write_text(nested, encoding="utf-8")
+    got = run_script("finding_v1", "classify", "--draft", draft, "--oracle", spec,
+                     "--rebuild", r1, "--reference", r2)
+    deep = tmp_path / "deep.md"
+    head, rest = draft.read_text(encoding="utf-8").split("## Observed (finding-v1)\n", 1)
+    deep.write_text(f"{head}## Observed (finding-v1)\n```json\n{nested}\n```\n\n"
+                    + rest.split("```\n", 1)[1], encoding="utf-8")
+    rendered = run_script("finding_v1", "render", "--draft", deep)
+    for result in (got, rendered):
+        assert result.returncode == 1 and result.stderr.startswith("error:"), result.stderr
+        assert result.stderr.count("\n") == 1 and "Traceback" not in result.stderr
+
+
+def test_a_deeply_nested_registry_is_one_error_line(make_repo, tmp_path):
+    spec = spec_with(tmp_path / "s", "- match: " + "[" * 600 + "]" * 600 + "\n")
+    checked = run_script("finding_v1", "departures", "--oracle", spec)
+    got = classify_departure_draft(tmp_path, spec)
+    out, wrote = write_departure_draft(make_repo, tmp_path, spec)
+    for result in (checked, got, wrote):
+        assert result.returncode == 1 and result.stderr.startswith("error:"), result.stderr
+        assert result.stderr.count("\n") == 1 and "Traceback" not in result.stderr
+        assert "departures.yaml" in result.stderr
+
+
+@pytest.mark.parametrize("rule", ["x\\nerror: forged", "x\\e[31mred", "x\\u202eevil",
+                                  "x" * 2000])
+def test_registry_text_in_an_error_is_escaped_and_bounded(tmp_path, rule):
+    registry = DECIDED.replace("regex:^TSK-\\\\d{4}$", rule)
+    got = run_script("finding_v1", "departures", "--oracle",
+                     spec_with(tmp_path, registry))
+    assert got.returncode == 1 and got.stderr.startswith("error:"), got.stderr
+    assert got.stderr.count("\n") == 1, got.stderr
+    assert "\x1b" not in got.stderr and "‮" not in got.stderr, got.stderr
+    assert len(got.stderr) <= 600, len(got.stderr)
+
+
+@pytest.mark.parametrize("registry", [
+    # check_id echoes a criteria item; the schema's `$` lets a trailing newline through.
+    DECIDED + '  criteria: ["F-TSK-01.AC1\\n\\u001b[31merror: forged"]\n',
+    DECIDED + '  criteria: ["F-TSK-01.AC' + "1" * 3000 + 'x"]\n',
+    # YamlError names the character after an unknown escape.
+    DECIDED.replace("padded keys", '"padded \\\x1b[31m keys"'),
+    DECIDED.replace("padded keys", '"padded \\x1b[31m\\u202e keys"') + "  criteria: [x]\n",
+])
+def test_every_registry_source_in_an_error_is_escaped(tmp_path, registry):
+    got = run_script("finding_v1", "departures", "--oracle", spec_with(tmp_path, registry))
+    assert got.returncode == 1 and got.stderr.startswith("error:"), got.stderr
+    assert got.stderr.count("\n") == 1, got.stderr
+    assert "\x1b" not in got.stderr and "‮" not in got.stderr, got.stderr
+    assert len(got.stderr) <= 600, len(got.stderr)
+
+
+def test_an_oracle_that_is_not_a_folder_is_one_error_line(make_repo, tmp_path):
+    spec = tmp_path / "spec.txt"
+    spec.write_text("not a folder", encoding="utf-8")
+    checked = run_script("finding_v1", "departures", "--oracle", spec)
+    got = classify_departure_draft(tmp_path, spec)
+    out, wrote = write_departure_draft(make_repo, tmp_path, spec)
+    for result in (checked, got, wrote):
+        assert result.returncode == 1 and result.stderr.startswith("error:"), result.stderr
+        assert result.stderr.count("\n") == 1 and "--oracle" in result.stderr, result.stderr
+    assert not out.exists()
+
+
+def test_a_draft_repro_error_is_escaped(tmp_path):
+    draft = tmp_path / "departure.md"
+    text = (PAIR / "drafts" / "departure.md").read_text(encoding="utf-8")
+    draft.write_text(text.replace('"method": "POST"', '"method": "PO\\u001b[31mST\\nerror: x"'),
+                     encoding="utf-8")
+    got = run_script("finding_v1", "render", "--draft", draft)
+    assert got.returncode == 1 and got.stderr.startswith("error:"), got.stderr
+    assert got.stderr.count("\n") == 1 and "\x1b" not in got.stderr, got.stderr
+
+
+def test_a_check_matches_when_either_equals_or_rule_fails():
+    from finding_v1 import matching_departure
+
+    both = {"runner": "http", "steps": [{**STEPS[0], "expect": {"status": 201, "json": [
+        {"pointer": "/key", "equals": "TSK-0003", "rule": "regex:^TSK-[1-9][0-9]*$"}]}}]}
+    assert matching_departure([D1], both, KEY_FAIL) == "D-001"
+
+
+def test_a_deeply_nested_repro_is_written_whole_or_not_at_all(make_repo, tmp_path):
+    repo = make_repo({"a.py": ""})
+    deep = "[" * 990 + "1" + "]" * 990
+    text = (PAIR / "drafts" / "departure.md").read_text(encoding="utf-8")
+    draft = tmp_path / "deep.md"
+    draft.write_text(text.replace('"rule": "regex:^TSK-[1-9][0-9]*$"', f'"equals": {deep}', 1),
+                     encoding="utf-8")
+    fail = {"result": "fail", "step": 1, "message": "step 1: status 500, expected 201"}
+    r1, r2 = results_for(tmp_path, fail)
+    out = tmp_path / "out"
+    got = run_script("finding_v1", "write", "--repo", repo, "--out", out, "--draft", draft,
+                     "--rebuild", r1, "--reference", r2)
+    assert "Traceback" not in got.stderr, got.stderr
+    written = list(out.iterdir()) if out.exists() else []
+    if got.returncode == 0:
+        assert len(written) == 1, written
+        steps = json.loads(written[0].read_text(encoding="utf-8"))["repro"]["steps"]
+        assert json.dumps(steps[0]["expect"]["json"][0]["equals"]) == deep
+    else:
+        assert got.stderr.startswith("error:") and got.stderr.count("\n") == 1, got.stderr
+        assert written == [], written
+
+
 def test_registry_with_an_equivalence_trace_is_read_and_never_matches(tmp_path):
     # product-rebuild's equiv.py writes this entry when a person accepts a red equivalence trace.
     trace = ('- id: D-002\n  kind: deliberate-change\n  summary: accepted trace\n'
              '  match:\n    - {runner: http, rule: "equiv-trace:invoices-total"}\n'
              '  decided_by: "Tam"\n')
-    got = classify_departure_draft(tmp_path, spec_with(tmp_path / "s", trace + ENTRY
-                                                       + '  decided_by: "Tam"\n'))
+    got = classify_departure_draft(tmp_path, spec_with(tmp_path / "s", trace + DECIDED))
     assert got.returncode == 0, got.stderr
     assert json.loads(got.stdout)["departure"] == "D-001"
 
 
-def test_departure_matches_by_pointer_and_rule():
+def test_departure_matches_on_the_structured_check():
     from finding_v1 import matching_departure
 
     other = {**D1, "id": "D-002"}
-    assert matching_departure([D1, other], STEPS, KEY_FAIL) == "D-001"
-    got_form = {"result": "fail", "step": 1,
-                "message": 'step 1 /key: got "TSK-0003", expected "TSK-3"'}
-    equals = [{**STEPS[0], "expect": {"status": 201,
-                                      "json": [{"pointer": "/key", "equals": "TSK-3"}]}}]
-    assert matching_departure([D1], equals, got_form) == "D-001"
-    unpadded = {**KEY_FAIL, "message": KEY_FAIL["message"].replace("TSK-0003", "TSK-03")}
-    cut = {**KEY_FAIL, "message": 'step 1 /key: "TSK-0003... (sha256 0123456789abcdef)'}
-    for result in (unpadded, cut):
-        assert matching_departure([D1], STEPS, result) is None, result
-    assert matching_departure([{**D1, "status": "proposed", "decided_by": None}], STEPS,
+    assert matching_departure([D1, other], HTTP, KEY_FAIL) == "D-001"
+    # Decided from `check` alone: the message's wording is never read.
+    reworded = {**KEY_FAIL, "message": "the key came back padded"}
+    assert matching_departure([D1], HTTP, reworded) == "D-001"
+    no_check = {k: v for k, v in KEY_FAIL.items() if k != "check"}
+    assert matching_departure([D1], HTTP, no_check) is None
+    equals = {"runner": "http", "steps": [{**STEPS[0], "expect": {
+        "status": 201, "json": [{"pointer": "/key", "equals": "TSK-3"}]}}]}
+    assert matching_departure([D1], equals, KEY_FAIL) == "D-001"
+    unpadded = {**KEY_FAIL, "check": {"pointer": "/key", "value": "TSK-03"}}
+    assert matching_departure([D1], HTTP, unpadded) is None
+    assert matching_departure([{**D1, "status": "proposed", "decided_by": None}], HTTP,
                               KEY_FAIL) is None
-    # A check the failure stopped before never ran: it may hide a real defect.
-    title = {"pointer": "/title", "equals": "C"}
-    later_check = [{**STEPS[0], "expect": {**STEPS[0]["expect"],
-                                           "json": [*STEPS[0]["expect"]["json"], title]}}]
-    later_step = [*STEPS, {"request": {"method": "GET", "path": "/api/tasks"},
-                           "expect": {"status": 200}}]
     # Scoped: criteria first, else features; an entry with neither is unscoped.
     by_criterion = {**D1, "criteria": ["F-TSK-01.AC1"]}
     by_feature = {**D1, "features": ["F-TSK-01"]}
@@ -109,34 +319,45 @@ def test_departure_matches_by_pointer_and_rule():
                                    (by_feature, "F-TSK-01.AC2", "D-001"),
                                    (by_feature, "F-TSK-02.AC1", None),
                                    (D1, "F-TSK-02.AC1", "D-001")):
-        assert matching_departure([entry], STEPS, KEY_FAIL, criterion) == want, (entry, criterion)
-    # An earlier check on the same pointer could have written the same message.
-    earlier_null = {"result": "fail", "step": 1,
-                    "message": 'step 1 /key: got "TSK-0003", expected null'}
+        assert matching_departure([entry], HTTP, KEY_FAIL, criterion) == want, (entry, criterion)
+
+
+def test_a_check_is_bound_to_the_last_check_and_checked(tmp_path):
+    from finding_v1 import matching_departure
+
+    # A check the failure stopped before never ran: it may hide a real defect.
+    title = {"pointer": "/title", "equals": "C"}
+    later_check = [{**STEPS[0], "expect": {**STEPS[0]["expect"],
+                                           "json": [*STEPS[0]["expect"]["json"], title]}}]
+    later_step = [*STEPS, {"request": {"method": "GET", "path": "/api/tasks"},
+                           "expect": {"status": 200}}]
+    # An earlier check on the same pointer could have failed instead.
     same_pointer = [{**STEPS[0], "expect": {**STEPS[0]["expect"], "json": [
         {"pointer": "/key", "equals": None}, *STEPS[0]["expect"]["json"]]}}]
+    other_pointer = {**KEY_FAIL, "check": {"pointer": "/title", "value": "TSK-0003"}}
     for steps, result in ((later_check, KEY_FAIL), (later_step, KEY_FAIL),
-                          (STEPS, earlier_null), (same_pointer, KEY_FAIL)):
-        assert matching_departure([D1], steps, result) is None, steps
+                          (same_pointer, KEY_FAIL), (STEPS, other_pointer)):
+        assert matching_departure([D1], {"runner": "http", "steps": steps}, result) is None, \
+            (steps, result)
+    spec = spec_with(tmp_path / "s", DECIDED)
+    got = classify_departure_draft(tmp_path, spec)
+    assert got.returncode == 0 and json.loads(got.stdout)["departure"] == "D-001", got.stderr
+    old = {k: v for k, v in KEY_FAIL.items() if k != "check"}
+    got = classify_departure_draft(tmp_path, spec, old)
+    assert got.returncode == 0 and json.loads(got.stdout)["class"] == "build-defect", got.stderr
+    for check in ("x", None, {"pointer": 1, "value": 2}, {"pointer": "/key"},
+                  {"pointer": "/key", "value": 1, "extra": 1}):
+        bad = classify_departure_draft(tmp_path, spec, {**KEY_FAIL, "check": check})
+        assert bad.returncode == 1 and bad.stderr.startswith("error:"), check
+        assert bad.stderr.count("\n") == 1, bad.stderr
 
 
-NOT_RUN = {"result": "not run: the proxy refused step 1: request budget used up"}
+def test_departure_needs_an_http_runner():
+    from finding_v1 import matching_departure
 
-
-@pytest.mark.parametrize("reference, covered, defect, want", [
-    (NOT_RUN, True, False, ("accepted-departure", "drop", None)),
-    # A verified bug-bar defect is never dropped by a departure.
-    (PASS, True, True, ("build-defect", "sdlc", None)),
-    (KEY_FAIL, True, False, ("spec-gap", "rspec", None)),
-])
-def test_departure_applies_unless_the_reference_is_the_same_wrong(reference, covered, defect,
-                                                                    want):
-    from finding_v1 import classify
-
-    got = classify(KEY_FAIL, reference, covered=covered, defect=defect, departure="D-001",
-                   alone="build-defect")
-    assert (got["class"], got["route"], got.get("propose_departure")) == want
-    assert got.get("departure") == ("D-001" if want[0] == "accepted-departure" else None)
+    assert matching_departure([D1], HTTP, KEY_FAIL) == "D-001"
+    for runner in ("cli", "playwright", None):
+        assert matching_departure([D1], {"runner": runner, "steps": STEPS}, KEY_FAIL) is None
 
 
 def test_departure_flag_is_gone(make_repo, tmp_path):
@@ -144,9 +365,7 @@ def test_departure_flag_is_gone(make_repo, tmp_path):
     out = tmp_path / "out"
     draft = tmp_path / "departure.md"
     shutil.copy(PAIR / "drafts" / "departure.md", draft)
-    r1, r2 = tmp_path / "r1.json", tmp_path / "r2.json"
-    r1.write_text(json.dumps(KEY_FAIL), encoding="utf-8")
-    r2.write_text(json.dumps(PASS), encoding="utf-8")
+    r1, r2 = results_for(tmp_path)
     for command in (("write", "--repo", repo, "--out", out), ("classify",)):
         got = run_script("finding_v1", *command, "--draft", draft, "--rebuild", r1,
                          "--reference", r2, "--departure", "D-001")

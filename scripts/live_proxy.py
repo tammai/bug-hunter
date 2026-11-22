@@ -16,9 +16,10 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qsl, quote, quote_plus, unquote, urlsplit
+from urllib.parse import parse_qsl, quote, quote_plus, unquote_to_bytes, urlsplit
 
 from drafts import _host, _host_patterns, _link_pattern, drafts_dir
 from stub_server import _redact_body, _redact_query
@@ -33,9 +34,21 @@ REFUSALS = "/.bug-hunter/refusals"  # the proxy's own path: how many requests it
 NOT_FORWARDED = {"connection", "keep-alive", "proxy-connection", "proxy-authorization", "te",
                  "trailer", "transfer-encoding", "upgrade", "host", "content-length",
                  ACCOUNT_HEADER, REFUSED_HEADER.lower()}
-ROUTING_HEADERS = {"x-original-url", "x-rewrite-url", "x-forwarded-host", "x-forwarded-prefix",
-                   "x-forwarded-path", "x-forwarded-server", "x-forwarded-uri", "forwarded",
-                   "x-host", "x-original-host", "x-http-host-override"}
+# Beside another target, only these cross (and the browser's own `Sec-` families below): a
+# front end may route by any other header, and no list of routing headers is ever complete.
+BESIDE_ANOTHER = {"accept", "accept-encoding", "accept-language", "authorization",
+                  "cache-control", "content-type", "cookie", "dnt", "if-match",
+                  "if-modified-since", "if-none-match", "if-range", "if-unmodified-since",
+                  "origin", "pragma", "priority", "range", "referer", "upgrade-insecure-requests",
+                  "sec-gpc", "user-agent", "x-csrf-token", "x-requested-with", "x-xsrf-token"}
+BROWSER_FAMILIES = ("sec-fetch-", "sec-ch-", "sec-websocket-")
+MAX_DECODES = 10
+# A segment whose name, up to `;`, `?` or `#`, is only dots and whitespace.
+DOT_SEGMENT = re.compile(r"(?:^|[/\\])\.[.\s]*(?:[;?#/\\]|$)")
+# IIS-style `%u002e`; NUL; and bytes that start only overlong or out-of-range UTF-8 (C0, C1,
+# F5-FF, E0 80-9F, F0 80-8F), which a lenient decoder reads as `.` or `/` (`%c0%ae`).
+UNSAFE_BYTES = re.compile(
+    rb"%u[0-9a-f]{4}|\x00|[\xc0\xc1\xf5-\xff]|\xe0[\x80-\x9f]|\xf0[\x80-\x8f]", re.I)
 MAX_BODY = 50 * 1024 * 1024
 HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 # Drafts write an account as "$<NAME>_AUTH", so its name must be a shell variable name.
@@ -255,11 +268,25 @@ def _place(target: dict) -> tuple:
 
 
 def _leaves_base(path: str) -> bool:
-    """Whether a request path could climb out of the target's base path once decoded."""
-    decoded = unquote(path.split("?", 1)[0])
-    return not path.startswith("/") or any(
-        segment in (".", "..") for segment in decoded.replace("\\", "/").split("/")
-    )
+    """Whether a request path could climb out of the target's base path, however decoded."""
+    # A target or front end may decode more than once (`%252e%252e` is `..`), end a segment's
+    # name at `;`, `?` or `#` (`..;/`), or trim trailing dots and spaces (`.../`, `.. /`).
+    if not path.startswith("/"):
+        return True
+    # Bytes, not text: decoded to text, an overlong `%e0%80%ae` would become U+FFFD and pass.
+    current = path.split("?", 1)[0].encode("utf-8", "surrogateescape")
+    for _ in range(MAX_DECODES):
+        if UNSAFE_BYTES.search(current):
+            return True
+        # NFKC: a fullwidth `．` is a dot to a server that normalizes.
+        text = unicodedata.normalize("NFKC", current.decode("utf-8", "replace"))
+        if DOT_SEGMENT.search(text):
+            return True
+        decoded = unquote_to_bytes(current)
+        if decoded == current:
+            return False
+        current = decoded
+    return True  # still changing: encoded deeper than any real path
 
 
 def _forms(value: str) -> set[str]:
@@ -394,8 +421,11 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
     state.setdefault("logins", 0)  # bumped on every refresh, so each masker is rebuilt
     lock = state["lock"]
     refreshing = threading.Lock()
-    # Beside another target, headers a front end may route by could reach the other one.
-    dropped = NOT_FORWARDED | (ROUTING_HEADERS if others else set())
+    def crosses(name: str) -> bool:
+        name = name.lower()
+        return name not in NOT_FORWARDED and (
+            not others or name in BESIDE_ANOTHER or name.startswith(BROWSER_FAMILIES))
+
     masker: list = [None, -1]  # built on first use, once the proxies' own URLs are known
 
     def accounts() -> dict:
@@ -481,6 +511,11 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
                 "body": _redact_body(body, self.headers.get("Content-Type", ""), complete=True),
                 "body_bytes": len(body),
             }
+            held = sorted({k.lower() for k in self.headers if not crosses(k)} - NOT_FORWARDED)
+            if forwarded and held:
+                # Names only, for the run's Report: a header the app needed never arrived.
+                note = "; ".join(filter(None, (note, "headers not forwarded beside the "
+                                                     f"reference: {', '.join(held)}")))
             if note:
                 entry["note"] = note
             if forwarded:
@@ -615,7 +650,7 @@ def _handler(target: dict, log: Path, budget: int, rate: float, seen: list, prox
                 self.wfile.write(data)
 
         def _send(self, body: bytes, chosen: dict) -> tuple:
-            headers = {k: v for k, v in self.headers.items() if k.lower() not in dropped}
+            headers = {k: v for k, v in self.headers.items() if crosses(k)}
             if chosen:
                 headers = {k: v for k, v in headers.items()
                            if k.lower() not in {name.lower() for name in chosen}}

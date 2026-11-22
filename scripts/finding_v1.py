@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -31,6 +32,7 @@ PLAYWRIGHT_FILE = "bh-repro.spec.ts"
 PLAYWRIGHT_END = "BH_TEST_END"
 DEFECT = re.compile(r"^Defect:[ \t]*yes[ \t]*$", re.M | re.I)
 REGISTRY = "departures.yaml"
+DEPARTURE_ID = re.compile(rf"D-[0-9]{{3,{len(str(MAX_NUMBER))}}}", re.ASCII)
 LABEL = "repro"
 MAX_MESSAGE = 500
 SIDES = ("rebuild", "reference")
@@ -58,7 +60,7 @@ def _fenced_json(sections: dict[str, str], where: str):
              if in_fence]
     try:
         return json.loads("\n".join(inner[1:-1])) if len(inner) >= 2 else None
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
 
 
@@ -108,15 +110,35 @@ def result_problem(result) -> str | None:
     kind = result.get("result") if isinstance(result, dict) else None
     if kind == "fail":
         step = result.get("step")
-        if (set(result) == {"result", "step", "message"} and isinstance(step, int)
+        if (set(result) - {"check"} == {"result", "step", "message"} and isinstance(step, int)
                 and not isinstance(step, bool) and step >= 1
-                and isinstance(result["message"], str)):
+                and isinstance(result["message"], str)
+                and ("check" not in result or _check_ok(result["check"]))):
             return None
     elif isinstance(kind, str) and (kind == "pass" or kind.startswith("not run: ")):
         if set(result) == {"result"}:
             return None
-    return ('not {"result": "pass"}, {"result": "fail", "step": n, "message": …} or '
-            '{"result": "not run: …"}')
+    return ('not {"result": "pass"}, {"result": "fail", "step": n, "message": …, '
+            'optionally "check": {"pointer": …, "value": …}} or {"result": "not run: …"}')
+
+
+def _printable(text: str) -> str:
+    """Text safe as one terminal line: control and format characters escaped, length bounded."""
+    # Registry, draft and target text reach error lines; a newline would forge another line,
+    # an escape sequence or bidi override would rewrite what the reader sees.
+    out = "".join(c if c.isprintable() and unicodedata.category(c) != "Cf"
+                  else c.encode("unicode_escape").decode("ascii") for c in text)
+    return out if len(out) <= MAX_MESSAGE else out[:MAX_MESSAGE - 3] + "..."
+
+
+def _check_ok(check) -> bool:
+    if not (isinstance(check, dict) and set(check) == {"pointer", "value"}
+            and isinstance(check["pointer"], str)):
+        return False
+    try:
+        return len(json.dumps(check["value"])) <= MAX_MESSAGE
+    except RecursionError:
+        return False  # too deep to be a value a departure could name
 
 
 def observed(sections: dict[str, str], reference_optional: bool = False) -> dict:
@@ -182,14 +204,19 @@ def _fenced_block(body: list[str]) -> list[str]:
     return [STEPS_HEADING, fence, *body, fence, ""]
 
 
+def _headings(lines: list[str]) -> dict[int, str]:
+    """Each `## ` heading outside a fence: its line number and folded name."""
+    return {i: line[3:].strip().rstrip(":").casefold()
+            for i, (line, in_fence) in enumerate(fenced(lines))
+            if line.startswith("## ") and not in_fence}
+
+
 def _replace_section(text: str, heading: str, body: list[str]) -> str:
     """The text with one section's body replaced; the section must exist."""
     lines = text.split("\n")
-    headings = [i for i, (line, in_fence) in enumerate(fenced(lines))
-                if line.startswith("## ") and not in_fence]
-    start = next(i for i in headings
-                 if lines[i][3:].strip().rstrip(":").casefold() == heading[3:].casefold())
-    end = next((i for i in headings if i > start), len(lines))
+    names = _headings(lines)
+    start = next(i for i, name in names.items() if name == heading[3:].casefold())
+    end = next((i for i in names if i > start), len(lines))
     return "\n".join(lines[:start + 1] + body + lines[end:])
 
 
@@ -207,9 +234,8 @@ def render(text: str, results: dict | None = None) -> str:
     else:
         block = _steps_block(steps)
     lines = text.split("\n")
-    headings = [i for i, (line, in_fence) in enumerate(fenced(lines))
-                if line.startswith("## ") and not in_fence]
-    names = {i: lines[i][3:].strip().rstrip(":").casefold() for i in headings}
+    names = _headings(lines)
+    headings = list(names)
     steps_at = [i for i in headings if names[i] == STEPS_HEADING[3:].casefold()]
     if len(steps_at) > 1:
         raise BadDraft(f"more than one {STEPS_HEADING}; the Repro section is the only repro")
@@ -325,12 +351,16 @@ def replay(steps: list[dict], base: str, env: dict) -> dict:
     """Run C4 HTTP replay steps against one base, with contracts' own runner."""
     # contracts.py run-http itself can't serve: it wants a criterion ID, which reference
     # defects and spec gaps lack. No proxy from the environment: loopback stays on this machine.
+    # `_run_steps` opens through urllib's global opener, so the caller's is put back after.
+    previous = urllib.request._opener
     urllib.request.install_opener(urllib.request.build_opener(
         urllib.request.ProxyHandler({}), _SameBase(base), _RefusalCheck()))
     try:
         contracts._run_steps(steps, LABEL, base, env)
     except _Refused as exc:
         return {"result": f"not run: the proxy refused a request: {exc}"}
+    except RecursionError:
+        return {"result": "not run: a response is nested too deeply to read"}
     except contracts._Fail as exc:
         message = str(exc)
         # Anchored: the rest of the message holds values the target sent.
@@ -339,8 +369,34 @@ def replay(steps: list[dict], base: str, env: dict) -> dict:
             return {"result": _bounded(message)}
         if not step or step[3]:
             return {"result": _bounded(f"not run: {message}")}
-        return {"result": "fail", "step": int(step[2]), "message": _bounded(step[1])}
+        n = int(step[2])
+        result = {"result": "fail", "step": n, "message": _bounded(step[1])}
+        check = _failed_check(step[1], n, steps[n - 1])
+        if check is not None:
+            result["check"] = check
+        return result
+    finally:
+        urllib.request.install_opener(previous)
     return {"result": "pass"}
+
+
+def _failed_check(message: str, step: int, request: dict) -> dict | None:
+    """The value check contracts' message reports, with the target's value, or None."""
+    # The one place contracts' wording is read; everything after works from this value.
+    checks = request["expect"].get("json") or []
+    pointers = [c["pointer"] for c in checks]
+    found = []
+    for check in checks:
+        if pointers.count(check["pointer"]) != 1:
+            continue  # two checks on one pointer: either could have written the message
+        try:
+            found.append({"pointer": check["pointer"],
+                          "value": _failed_value(message, step, check)})
+        except KeyError:
+            continue
+    if len(found) != 1 or not _check_ok(found[0]):
+        return None
+    return found[0]
 
 
 def _bounded(message: str) -> str:
@@ -418,16 +474,30 @@ def load_departures(spec: Path) -> list[dict]:
         data = contracts.parse_yaml(text)
     except ValueError as exc:  # YamlError
         raise BadDraft(f"{REGISTRY}: {exc}") from None
-    errors = [m for s, m in contracts.check_departures(data) if s == "error"]
+    except RecursionError:
+        raise BadDraft(f"{REGISTRY} is nested too deeply to read") from None
+    # Before contracts' checks, whose messages quote the ID: a bad one is never echoed.
+    if isinstance(data, list) and any(
+            isinstance(entry, dict) and isinstance(entry.get("id"), str)
+            and not DEPARTURE_ID.fullmatch(entry["id"]) for entry in data):
+        raise BadDraft(f"{REGISTRY}: a departure ID is not D- and 3 to "
+                       f"{len(str(MAX_NUMBER))} digits")
+    try:
+        issues = contracts.check_departures(data)
+    except RecursionError:
+        raise BadDraft(f"{REGISTRY} is nested too deeply to read") from None
+    errors = [m for s, m in issues if s == "error"]
     if errors:
         raise BadDraft(f"{REGISTRY}: {errors[0]}")
+    for message in (m for s, m in issues if s == "blocked"):
+        print(f"warning: {REGISTRY}: {_printable(message)}", file=sys.stderr)
     return data
 
 
 def _failed_value(message: str, step: int, check: dict):
     """The rebuild's value at the check's pointer, if contracts' message is that check's failure."""
     # contracts writes `step N <ptr>: got <json>, expected <json>` or
-    # `step N <ptr>: <json> does not satisfy rule <rule>`. A message cut by _bounded doesn't parse.
+    # `step N <ptr>: <json> does not satisfy rule <rule>`.
     rest = message.removeprefix(f"step {step} {check.get('pointer')}: ")
     if rest == message:
         raise KeyError(message)
@@ -437,7 +507,7 @@ def _failed_value(message: str, step: int, check: dict):
     rest = rest.removeprefix("got ")
     try:
         value, end = json.JSONDecoder().raw_decode(rest)
-    except ValueError:
+    except (ValueError, RecursionError):
         raise KeyError(message) from None
     tail = (f", expected {json.dumps(check.get('equals'))}" if got
             else f" does not satisfy rule {check.get('rule')}")
@@ -456,31 +526,42 @@ def _in_scope(entry: dict, criterion: str | None) -> bool:
     return True
 
 
-def matching_departure(departures: list[dict], steps, rebuild: dict,
+def _fails(check: dict, value) -> bool:
+    """Whether `value` fails this check; a `same-as:` rule needs captures, so never proven."""
+    if "equals" in check and not contracts._same(value, check["equals"]):
+        return True
+    rule = str(check.get("rule", ""))
+    return bool(rule) and not rule.startswith("same-as:") \
+        and not contracts._rule_ok(rule, value, {})
+
+
+def matching_departure(departures: list[dict], repro: dict, rebuild: dict,
                        criterion: str | None = None) -> str | None:
-    """The first accepted, in-scope departure whose HTTP match holds for the failing check."""
-    if not isinstance(steps, list) or not is_http(steps) or rebuild.get("result") != "fail":
+    """The first accepted, in-scope departure whose HTTP match holds for the failed check."""
+    check = rebuild.get("check")
+    if repro.get("runner") != "http" or rebuild.get("result") != "fail" \
+            or not _check_ok(check):
         return None
-    n = rebuild["step"]
+    steps, n = repro["steps"], rebuild["step"]
     # The failing check must be the repro's last: a check or step after it never ran, and
     # dropping the finding would hide whatever it would have shown.
     if n != len(steps):
         return None
     checks = steps[n - 1]["expect"].get("json") or []
-    # An earlier check on the same pointer could have written the same message.
-    if not checks or any(c.get("pointer") == checks[-1]["pointer"] for c in checks[:-1]):
+    pointer = check["pointer"]
+    # An earlier check on the same pointer could have been the one that failed.
+    if not checks or checks[-1]["pointer"] != pointer \
+            or any(c.get("pointer") == pointer for c in checks[:-1]):
         return None
-    try:
-        value = _failed_value(rebuild["message"], n, checks[-1])
-    except KeyError:
-        return None
+    if not _fails(checks[-1], check["value"]):
+        return None  # the result file claims a failure the value doesn't show
     for entry in departures:
         # C5: a proposed entry blocks its gate until a person decides it; it never matches.
         if entry.get("status") == "proposed" or not _in_scope(entry, criterion):
             continue
         for item in entry.get("match") or []:
-            if (item.get("runner") == "http" and item.get("pointer") == checks[-1]["pointer"]
-                    and contracts._rule_ok(str(item["rule"]), value, {})):
+            if (item.get("runner") == "http" and item.get("pointer") == pointer
+                    and contracts._rule_ok(str(item["rule"]), check["value"], {})):
                 return entry["id"]
     return None
 
@@ -493,8 +574,8 @@ def with_reference(record: dict, text: str, oracle: Path | None,
                        "a playwright one")
     departure = None
     if oracle is not None:
-        departure = matching_departure(load_departures(oracle), record["repro"].get("steps"),
-                                       results[0], record["criterion"])
+        departure = matching_departure(load_departures(oracle), record["repro"], results[0],
+                                       record["criterion"])
     header = text.split("\n## ", 1)[0]
     verdict = classify(*results, covered=oracle is not None and record["class"] != "spec-gap",
                        defect=bool(DEFECT.search(header)), departure=departure,
@@ -508,7 +589,7 @@ def with_reference(record: dict, text: str, oracle: Path | None,
 def load_result(path: Path, flag: str) -> dict:
     try:
         result = json.loads(path.read_text(encoding="utf-8"))
-    except ValueError:
+    except (ValueError, RecursionError):
         raise BadDraft(f"{flag} is not JSON") from None
     except (OSError, UnicodeDecodeError) as exc:
         raise BadDraft(f"{flag} can't be read ({type(exc).__name__})") from None
@@ -567,10 +648,14 @@ def write(repo: str, out: Path, draft: Path, oracle: Path | None = None,
     out.mkdir(parents=True, exist_ok=True)
     record["id"] = f"BH-{_next_number(out):04d}"
     path = out / f"{record['id']}.json"
+    # Serialized first: a failure mid-dump would leave an empty BH-NNNN.json behind.
+    try:
+        data = json.dumps(record, ensure_ascii=False, indent=2) + "\n"
+    except RecursionError:
+        raise BadDraft("the draft's repro is nested too deeply to write") from None
     try:
         with path.open("x", encoding="utf-8") as f:
-            json.dump(record, f, ensure_ascii=False, indent=2)
-            f.write("\n")
+            f.write(data)
     except FileExistsError:
         raise BadDraft(f"{path.name} already exists in --out; nothing was overwritten") from None
     return path
@@ -601,9 +686,14 @@ def _main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("replay", help="run a draft's HTTP repro against one base")
     p.add_argument("--draft", required=True, type=Path)
     p.add_argument("--base", required=True, help="a proxy listener: $BASE or $REF_BASE")
+    d = sub.add_parser("departures", help="check the spec's departures.yaml as write reads it")
+    d.add_argument("--oracle", required=True, type=Path, help="the spec folder")
     args = parser.parse_args(argv)
     try:
         results = None
+        oracle = getattr(args, "oracle", None)
+        if oracle is not None and not oracle.is_dir():
+            raise BadDraft("--oracle is not a folder; give the spec folder")
         if args.command in ("write", "classify"):
             if args.command == "classify" and not (args.rebuild and args.reference):
                 raise BadDraft("classify needs --rebuild and --reference")
@@ -616,7 +706,15 @@ def _main(argv: list[str] | None = None) -> int:
             # The same checks as write, so a draft write would refuse never reaches a verifier.
             text = finding(args.draft.read_text(encoding="utf-8"))["draft"]
             args.draft.write_text(text, encoding="utf-8", newline="")
+        elif args.command == "departures":
+            load_departures(args.oracle)
         elif args.command == "replay":
+            try:
+                port = urlsplit(args.base).port
+            except ValueError:
+                port = -1
+            if port == -1:
+                raise BadDraft("--base can't be parsed as a URL: its host or port is malformed")
             steps = repro_steps(_sections(args.draft.read_text(encoding="utf-8")))
             if not is_http(steps):
                 raise BadDraft("replay runs an HTTP repro (a list of C4 steps); "
@@ -637,10 +735,16 @@ def _main(argv: list[str] | None = None) -> int:
                 raise BadDraft(str(exc)) from None
             print(write(args.repo, args.out, args.draft, args.oracle, results, targets))
     except BadDraft as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {_printable(str(exc))}", file=sys.stderr)
         return 1
     except (OSError, UnicodeDecodeError) as exc:
-        print(f"error: cannot {args.command} the draft: {type(exc).__name__}: {exc}",
+        what = "check the registry" if args.command == "departures" \
+            else f"{args.command} the draft"
+        print(f"error: cannot {what}: {_printable(f'{type(exc).__name__}: {exc}')}",
+              file=sys.stderr)
+        return 1
+    except RecursionError:
+        print(f"error: cannot {args.command}: the input is nested too deeply to read",
               file=sys.stderr)
         return 1
     return 0

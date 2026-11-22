@@ -15,6 +15,7 @@ from test_live_proxy import (
     entries,
     home_env,
     raw,
+    start_proxy,
     start_stub,
     stop,
     write_targets,
@@ -96,6 +97,55 @@ def test_each_listener_reaches_only_its_own_target(make_repo, tmp_path):
     assert not sent & {"x-original-url", "x-rewrite-url", "x-forwarded-prefix", "forwarded",
                        "x-host", "x-original-host", "x-http-host-override", "x-forwarded-uri"}
     assert {e.get("target") for e in entries(log)} == {"rebuild", "reference"}
+
+
+def test_beside_a_second_target_only_allowed_headers_cross(make_repo, tmp_path):
+    routing = ("X-Original-URL", "X-Rewrite-URL", "X-Forwarded-Host", "X-Forwarded-Prefix",
+               "X-Forwarded-Path", "X-Forwarded-Server", "X-Forwarded-Uri", "Forwarded",
+               "X-Host", "X-Original-Host", "X-HTTP-Host-Override")
+    repo = make_repo({"a.py": ""}, origin=ORIGIN)
+    env, targets = home_env(tmp_path)
+    for name in "abc":
+        (tmp_path / name).mkdir()
+    who = [{"path": "/who", "responses": [{"body": {"ok": 1}}]}]
+    stub_a, a_base, a_log = start_stub(tmp_path / "a", who)
+    stub_b, b_base, b_log = start_stub(tmp_path / "b", who)
+    stub_c, c_base, c_log = start_stub(tmp_path / "c", who)
+    write_targets(targets, {
+        "uat": {"url": a_base, "accounts": {"alice": {"X-Api-Key": "Kq7Wm2Zp9Lx4"}}},
+        "ref": {"url": b_base, "accounts": {"alice": {"X-Api-Key": "Jr5Tn8Vb3Hc6"}}},
+        "solo": {"url": c_base}})
+    unlisted = {"X-Real-IP": "10.0.0.1", "X-Forwarded-For": "10.0.0.1",
+                "X-Envoy-Original-Path": "/other", "X-Custom-Route": "b",
+                "Sec-Route-Target": "b",
+                **{name: "/who" for name in routing}}
+    listed = {"Accept": "application/json", "Content-Type": "application/json",
+              "Cookie": "s=1", "Origin": "http://127.0.0.1", "Referer": "http://127.0.0.1/",
+              "User-Agent": "test", "X-CSRF-Token": "t", "Sec-Fetch-Mode": "cors",
+              "Sec-CH-UA": "x", "Sec-GPC": "1", "Sec-WebSocket-Protocol": "chat"}
+    log = tmp_path / "p.jsonl"
+    proxy, base, ref_base = start_pair(repo, "uat", "ref", env, log)
+    try:
+        for listener in (base, ref_base):
+            assert call(listener + "/who", headers={
+                **unlisted, **listed, "X-Bug-Hunter-Account": "alice"})[0] == 200
+        # What urllib and browsers always send leaves no note: only what was held back does.
+        assert call(base + "/who", headers={**listed, "Accept-Encoding": "gzip"})[0] == 200
+    finally:
+        stop(proxy, stub_a, stub_b)
+    solo, solo_base = start_proxy(repo, "solo", env, tmp_path / "solo.jsonl")
+    try:
+        assert call(solo_base + "/who", headers={"X-Custom-Route": "b"})[0] == 200
+    finally:
+        stop(solo, stub_c)
+    for stub_log in (a_log, b_log):
+        sent = {k.lower() for k in entries(stub_log)[0]["headers"]}
+        assert not sent & {k.lower() for k in unlisted}, sent
+        assert {k.lower() for k in listed} | {"x-api-key"} <= sent, sent
+    notes = [e.get("note", "") for e in entries(log)]
+    assert len(notes) == 3 and notes[2] == "", notes
+    assert all("x-real-ip" in n and "x-custom-route" in n for n in notes[:2]), notes
+    assert "x-custom-route" in {k.lower() for k in entries(c_log)[0]["headers"]}
 
 
 def test_one_masker_covers_both_targets():
@@ -266,7 +316,8 @@ def test_replay_reports_pass_fail_and_not_run(make_repo, tmp_path):
     cut = [json.loads(r.stdout)["message"] for r in (long1, long2)]
     assert cut[0] != cut[1] and all(len(m) <= 500 for m in cut), cut
     assert json.loads(failed.stdout) == {
-        "result": "fail", "step": 2, "message": 'step 2 /name: got "x", expected "y"'}
+        "result": "fail", "step": 2, "message": 'step 2 /name: got "x", expected "y"',
+        "check": {"pointer": "/name", "value": "x"}}
     auth = {k.lower(): v for k, v in entries(stub_log)[0]["headers"].items()}
     assert "authorization" in auth
     assert json.loads(unset.stdout)["result"].startswith("not run: ACCEPT_ACCOUNT_BOB")
@@ -277,6 +328,109 @@ def test_replay_reports_pass_fail_and_not_run(make_repo, tmp_path):
                                         "expect": {"status": 200}}]), stub_base, env)
     assert bad.returncode == 1 and bad.stderr.startswith("error:")
     assert bad.stderr.count("\n") == 1 and "Traceback" not in bad.stderr
+
+
+def test_replay_reports_the_failed_check(tmp_path):
+    stub, base, _ = start_stub(tmp_path, [
+        {"path": "/k", "responses": [{"body": {"key": "TSK-0003", "n": 1}}]},
+        {"path": "/text", "responses": [{"body": "plain"}]},
+        {"path": "/big", "responses": [{"body": {"key": "x" * 600}}]},
+    ])
+
+    def step(path, checks, status=200):
+        return {"request": {"method": "GET", "path": path},
+                "expect": {"status": status, "json": checks}}
+    rule = {"pointer": "/key", "rule": "regex:^TSK-[1-9][0-9]*$"}
+    cases = {
+        "rule": [step("/k", [rule])],
+        "equals": [step("/k", [{"pointer": "/n", "equals": 2}])],
+        "status": [step("/k", [rule], 201)],
+        "missing": [step("/k", [{"pointer": "/nope", "equals": 1}])],
+        "text": [step("/text", [rule])],
+        "shared": [step("/k", [{"pointer": "/key", "rule": "regex:^TSK"},
+                               {"pointer": "/key", "equals": "TSK-3"}])],
+        "big": [step("/big", [{"pointer": "/key", "equals": "y"}])],
+    }
+    try:
+        got = {name: json.loads(replay(tmp_path, http_draft(steps), base).stdout)
+               for name, steps in cases.items()}
+    finally:
+        stop(stub)
+    assert got["rule"] == {
+        "result": "fail", "step": 1, "check": {"pointer": "/key", "value": "TSK-0003"},
+        "message": 'step 1 /key: "TSK-0003" does not satisfy rule regex:^TSK-[1-9][0-9]*$'}
+    assert got["equals"]["check"] == {"pointer": "/n", "value": 1}
+    for name in ("status", "missing", "text", "shared", "big"):
+        assert got[name]["result"] == "fail" and "check" not in got[name], (name, got[name])
+
+
+def test_replay_survives_a_nested_body_and_a_bad_base(tmp_path):
+    nested = "[" * 100000 + "]" * 100000
+    stub, base, _ = start_stub(tmp_path, [
+        {"path": "/deep", "responses": [{"headers": {"Content-Type": "application/json"},
+                                         "body": nested}]}])
+    draft = http_draft([{"request": {"method": "GET", "path": "/deep"},
+                         "expect": {"status": 200, "json": [{"pointer": "/0", "equals": 1}]}}])
+    try:
+        deep = replay(tmp_path, draft, base)
+    finally:
+        stop(stub)
+    # Whether the C decoder gives up at this depth depends on the Python version: either way
+    # replay prints one bounded result line.
+    assert deep.returncode == 0 and deep.stdout.count("\n") == 1, deep.stderr
+    result = json.loads(deep.stdout)
+    assert result["result"] == "not run: a response is nested too deeply to read" or (
+        result["result"] == "fail" and len(result["message"]) <= 500
+        and "check" not in result), result
+    for bad in ("http://[bad", "http://127.0.0.1:99999"):
+        got = replay(tmp_path, draft, bad)
+        assert got.returncode == 1 and got.stderr.startswith("error:"), (bad, got.stderr)
+        assert got.stderr.count("\n") == 1 and "Traceback" not in got.stderr, got.stderr
+
+
+def test_replay_reports_a_recursion_error_as_not_run(monkeypatch):
+    import finding_v1
+
+    steps = [{"request": {"method": "GET", "path": "/deep"},
+              "expect": {"status": 200, "json": [{"pointer": "/0", "equals": 1}]}}]
+
+    def too_deep(*_):
+        raise RecursionError
+    monkeypatch.setattr(finding_v1.contracts, "_run_steps", too_deep)
+    assert finding_v1.replay(steps, "http://127.0.0.1:1", {}) == {
+        "result": "not run: a response is nested too deeply to read"}
+
+    def deep_failure(*_):
+        raise finding_v1.contracts._Fail("repro step 1 /0: got [[1]], expected 1")
+    monkeypatch.setattr(finding_v1.contracts, "_run_steps", deep_failure)
+    monkeypatch.setattr(finding_v1.json.JSONDecoder, "raw_decode", too_deep)
+    assert finding_v1.replay(steps, "http://127.0.0.1:1", {}) == {
+        "result": "fail", "step": 1, "message": "step 1 /0: got [[1]], expected 1"}
+
+
+def test_replay_restores_the_global_opener(tmp_path):
+    import urllib.request
+
+    from finding_v1 import replay as run
+
+    stub, base, _ = start_stub(tmp_path, [
+        {"path": "/ok", "responses": [{"body": {"name": "x"}}]},
+        {"path": "/refused", "responses": [{"headers": {REFUSED: "1"}, "body": {"error": "no"}}]},
+    ])
+
+    def get(path, name="x"):
+        return [{"request": {"method": "GET", "path": path},
+                 "expect": {"status": 200, "json": [{"pointer": "/name", "equals": name}]}}]
+    mine = urllib.request.build_opener()
+    urllib.request.install_opener(mine)
+    try:
+        for steps, at in ((get("/ok"), base), (get("/ok", "y"), base),
+                          (get("/refused"), base), (get("/ok"), free_base())):
+            result = run(steps, at, {})
+            assert urllib.request._opener is mine, result
+    finally:
+        urllib.request.install_opener(None)
+        stop(stub)
 
 
 def test_http_repro_renders_both_results(tmp_path):
@@ -324,6 +478,12 @@ NOT_RUN = {"result": "not run: the proxy refused step 1: request budget used up"
     (FAIL, NOT_RUN, True, False, None, "build-defect", ("build-defect", "sdlc", None)),
     (FAIL, FAIL, True, True, "D-001", "build-defect",
      ("build-defect", "sdlc", "reference-defect-not-copied")),
+    # Row 4's reference column is "—": a reference that didn't run doesn't undo a match.
+    (FAIL, NOT_RUN, True, False, "D-001", "build-defect", ("accepted-departure", "drop", None)),
+    # A verified bug-bar defect is never dropped by a departure.
+    (FAIL, PASS, True, True, "D-001", "build-defect", ("build-defect", "sdlc", None)),
+    # The reference fails the same way: not a departure.
+    (FAIL, FAIL, True, False, "D-001", "build-defect", ("spec-gap", "rspec", None)),
     # A verified draft whose fresh replay passes: the runs disagree, never dropped.
     (PASS, PASS, True, False, None, "build-defect", ("flaky", "orchestrator", None)),
     (PASS, FAIL, True, True, None, "build-defect", ("flaky", "orchestrator", None)),
@@ -576,6 +736,8 @@ def test_fixture_pair_is_classified(make_repo, tmp_path):
                     path = tmp_path / f"{name}.{side}.json"
                     path.write_text(ran.stdout, encoding="utf-8")
                     results.append(path)
+                    if name == "departure" and side == "rebuild":
+                        departure_rebuild = json.loads(ran.stdout)
                 wrote = run_script("finding_v1", "write", "--repo", repo, "--out", out,
                                    "--draft", draft, "--oracle", spec,
                                    "--rebuild", results[0], "--reference", results[1])
@@ -592,5 +754,6 @@ def test_fixture_pair_is_classified(make_repo, tmp_path):
         "departure": ("accepted-departure", "D-001"),
         "build-defect": ("build-defect", None),
     }
+    assert departure_rebuild["check"] == {"pointer": "/key", "value": "TSK-0003"}
     # Proposed, never written: the registry is the owner's.
     assert (spec / "departures.yaml").read_bytes() == registry

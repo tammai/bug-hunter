@@ -11,15 +11,25 @@
 - **OWASP Top 10 (2025)** category on each finding, and a per-category coverage table.
 - **`secrets_scan.py --id-key`:** each secret gets an id keyed with a private random key, so it keeps its finding number when its line moves.
 - **`scope.py --focus security`** reports `no_checklist` per part (React detected from `package.json`) and a `coverage` block.
+- **`finding_v1.py departures --oracle <spec>`** ([change](docs/sdlc/changes/2026-11-22-m-replay-departure-tickets.md)). `/hunt` runs it before the cost question, so `departures.yaml` is checked exactly as `write` will read it.
 
 ### Changed
 
 - **Constitution 1.3.0:** Principle I allows unconfirmed suspicions outside the findings; the Audit Bar defines the verdict.
 - **`findings.py report`** takes `--scope` and `--recheck`. Its `--meta` holds `secrets_scanned`, `audited`, `audit_failures` and `check_failed`; `skipped_parts`, `not_audited` and `dropped` are gone.
 - **`findings.py next`** counts `audit/fixed/` too, so a number is never reused.
+- **`finding_v1.py replay`** adds `"check": {"pointer", "value"}` to a failed value check ([change](docs/sdlc/changes/2026-11-22-m-replay-departure-tickets.md)). Departure matching uses only that value and the finding's runner, never contracts' wording, and only when the value really fails the last check. `replay` restores urllib's global opener.
+- **`classify` and `write`** print a `warning:` for each `status: proposed` departure they skip. They refuse a departure ID that isn't `D-` plus 3 to 9 ASCII digits, without echoing it, and an `--oracle` that isn't a folder. Their error and warning lines escape control and format characters and stop at 500 characters.
+- **Beside a reference, the proxy forwards only standard request headers** (the list is in `agents/bug-hunter.md`) and the account's own. It drops any other, such as `X-Forwarded-*`. The log names what it dropped, and the Report lists it.
 
 ### Fixed
 
+- **The proxy refuses every spelling of a dot segment** ([change](docs/sdlc/changes/2026-11-22-m-replay-departure-tickets.md)). That covers:
+  - repeated percent-encoding (`%252e%252e`);
+  - `;`, `?` or `#` after the dots;
+  - trailing dots or whitespace;
+  - `%u` escapes, overlong UTF-8 (`%c0%ae`, `%e0%80%ae`), NUL and fullwidth dots.
+- **`finding_v1.py`** gives one error line, never a traceback, for deeply nested JSON or YAML. It writes a finding whole or not at all.
 - **`/audit` verdict follow-ups** ([change](docs/sdlc/changes/2026-11-22-m-audit-verdict-followups.md)):
   - The Accepted list shows each finding's current severity, and when a later run raised it.
   - A secret committed since its first sighting reads "(since committed)"; an advisory whose fix was released later stops saying "no fix known".
