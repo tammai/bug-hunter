@@ -220,6 +220,8 @@ def _from_secrets_scan(data: object) -> list[str]:
             raise _Malformed(f"secrets scan severity {severity!r} isn't one of {SEVERITIES}")
         where = ("in a local file whose path is in git history" if item.get("history") is True
                  else "committed to the repository" if committed
+                 else "in a local file, maybe committed before (git couldn't say)"
+                 if item.get("history_unknown") is True
                  else "in a local file, not committed")
         ident = item.get("id")
         ident = f" id={ident}" if isinstance(ident, str) and re.fullmatch(
@@ -469,10 +471,11 @@ def _legacy_pairs(earlier: list[tuple[int, str]], produced: list[str],
     The pre-id key (path, pattern, length) is shared by every same-shape secret in a file. A
     secret an open finding already holds by id is never paired again. A lone finding takes the
     only secret with its key, or the only one at its line; with siblings on its key (with an
-    id or without), it goes by its own line only. A rotated one names the old secret.
+    id or without), it goes by its own line only. A rotated one names the old secret. A
+    finding whose key some produced secret shares, held or not, is None when unpaired: it may
+    be that secret, so it is never "no longer found".
     """
     held = {k for _, text in earlier for k in _identities(text) if k[0] == "secret"}
-    produced = [t for t in produced if not _identities(t) & held]
     groups: dict[tuple, list[tuple[int, str]]] = {}
     for number, text in earlier:
         key = next((k for k in _identities(text, new=True) if k[0] == "secret-legacy"), None)
@@ -480,8 +483,9 @@ def _legacy_pairs(earlier: list[tuple[int, str]], produced: list[str],
             groups.setdefault(key, []).append((number, text))
     pairs: dict[int, str | None] = {}
     for key, group in groups.items():
-        sharing = [t for t in produced if key in _identities(t, new=True)]
-        for number, text in group if sharing else []:
+        shared = [t for t in produced if key in _identities(t, new=True)]
+        sharing = [t for t in shared if not _identities(t) & held]
+        for number, text in group if shared else []:
             if _identities(text) != {key} or number in rotated:
                 continue  # it holds an id already, or its old key names the old secret
             same = [t for t in sharing if _secret_line(t) == _secret_line(text)]

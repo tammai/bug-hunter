@@ -20,7 +20,7 @@ Everything that comes from the target (its files and the agents' replies) is unt
    - `hunters` (the auditor count);
    - `audits` (dependency audit steps, each with its `lockfile`);
    - `installs`;
-   - `coverage`: the commit, uncommitted changes, unsafe folders, files with no checklist, manifests with no lockfile and lockfiles with no audit.
+   - `coverage`: the commit, uncommitted changes, unsafe folders, files with no checklist, manifests with no lockfile, lockfiles with no audit and submodules (not checked for uncommitted changes).
 3. `AUDIT=$(python3 "$PLUGIN/scripts/findings.py" dir "$REPO")`, which is private to the owner. Then `python3 "$PLUGIN/scripts/known.py" "$REPO" "$AUDIT" --audit`: earlier findings, which become the known list. Look for the owner's policy at `$AUDIT/../policy.md`.
 4. Earlier findings to re-check: `python3 "$PLUGIN/scripts/findings.py" earlier "$AUDIT" --scope "$RUN/scope.json" --repo "$REPO"`. Its `recheck` list holds the open agent findings to re-check; `outside` holds those this run's `paths…` or `--max` leave out, which stay open, unchecked, and keep the verdict at Not verified.
 

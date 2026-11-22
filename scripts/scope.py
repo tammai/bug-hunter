@@ -343,9 +343,10 @@ def _coverage(repo: str, files: list[str], paths: list[str], parts: list[dict],
         repo, "status", "--porcelain=v1", "-z", "--untracked-files=normal",
         "--ignore-submodules=all", config=blank)
     stage = _git_out(repo, "ls-files", "-z", "--stage")
-    submodules = [] if stage is None else [
+    # A conflicted submodule has one index entry per stage: listed once.
+    submodules = [] if stage is None else list(dict.fromkeys(
         entry.split(b"\t", 1)[1].decode("utf-8", "replace")
-        for entry in stage.split(b"\0") if entry.startswith(b"160000 ") and b"\t" in entry]
+        for entry in stage.split(b"\0") if entry.startswith(b"160000 ") and b"\t" in entry))
     if stage is None:
         status = None
     return {

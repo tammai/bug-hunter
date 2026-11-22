@@ -1680,3 +1680,50 @@ def test_dedupe_and_report_refuse_a_changed_acceptance(tmp_path):
         assert not (audit / "REPORT.md").exists()
         (audit.parent / name).unlink() if name == "policy.md" else (
             audit.parent / name).write_text("- 01 until 2999-12-31: x\n", encoding="utf-8")
+
+
+# --- Review round 3 of 2026-11-22-m-audit-verdict-followups ---
+
+
+def test_a_pre_id_secret_whose_key_is_still_produced_is_never_fixed(tmp_path):
+    from conftest import git
+    legacy = {k: v for k, v in SECRET_SCAN[0].items() if k != "id"} | {"committed": False}
+
+    def run(base, audit, scope, produced):
+        found = base / "found"
+        data = base / "s.json"
+        data.write_text(json.dumps(produced), encoding="utf-8")
+        assert run_script("findings", "from-secrets-scan", data, found).returncode == 0
+        result = recheck(base, audit, scope, "--found", found, "--secrets-scanned",
+                         "--repo", repo)
+        assert result["fixed"] == [], result
+        assert run_script("findings", "dedupe", found, audit).returncode == 0
+        return sorted(found.glob("*.md"))
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    local = {**SECRET_SCAN[0], "committed": False}
+
+    # A at line 3 holds the secret from run 1; B at line 7 stays open, untouched, run after run.
+    base = tmp_path / "siblings"
+    base.mkdir()
+    scope, _, _ = clean_facts(base)
+    a = scripted(base, "from-secrets-scan", [legacy], "a")
+    b = scripted(base, "from-secrets-scan", [{**legacy, "line": 7}], "b")
+    audit = audit_with(base, a, b)
+    for _ in range(2):
+        assert run(base, audit, scope, [{**local, "id": "aaaa0000aaaa0000"}]) == []
+        assert (audit / "02.md").read_text(encoding="utf-8") == b
+
+    # A fits neither secret at its key, so they got their own numbers: A is still open.
+    base = tmp_path / "ambiguous"
+    base.mkdir()
+    scope, _, _ = clean_facts(base)
+    audit = audit_with(base, scripted(base, "from-secrets-scan", [legacy], "a"))
+    produced = [{**local, "line": 7, "id": "bbbb0000bbbb0000"},
+                {**local, "line": 9, "id": "cccc0000cccc0000"}]
+    for n, path in enumerate(run(base, audit, scope, produced), 2):
+        path.rename(audit / f"{n:02d}.md")
+    assert run(base, audit, scope, produced) == []
+    assert (audit / "01.md").exists() and not (audit / "fixed" / "01.md").exists()

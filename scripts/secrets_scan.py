@@ -144,7 +144,9 @@ def known_secret_in(text: str, prints: dict) -> bool:
                if _single_case(w))
 
 
+# No transport has this name, so a GIT_ALLOW_PROTOCOL list of it allows none.
 NO_PROTOCOL = "none-allowed"
+GIT_TIMEOUT = 300
 
 
 def run_git(repo: str, *args: str, config: dict[str, str] | None = None
@@ -162,9 +164,14 @@ def run_git(repo: str, *args: str, config: dict[str, str] | None = None
         env["GIT_CONFIG_COUNT"] = str(len(config))
         for n, (key, value) in enumerate(config.items()):
             env[f"GIT_CONFIG_KEY_{n}"], env[f"GIT_CONFIG_VALUE_{n}"] = key, value
-    return subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false",
-                           "-c", "protocol.allow=never", "-C", repo, *args],
-                          capture_output=True, env=env)
+    command = ["git", "--no-optional-locks", "-c", "core.fsmonitor=false",
+               "-c", "protocol.allow=never", "-C", repo, *args]
+    try:
+        return subprocess.run(command, capture_output=True, env=env, stdin=subprocess.DEVNULL,
+                              timeout=GIT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # A failed call: every caller reads that as "can't say", a gap, never as clean.
+        return subprocess.CompletedProcess(command, 124, b"", b"timed out")
 
 
 @functools.cache
@@ -194,6 +201,11 @@ def in_history(repo: str, name: str) -> bool | None:
         if promisor.returncode != 1:
             return None  # a partial clone (or an unreadable config) would fetch to answer
     try:
+        # A shallow clone lacks the history before its cut, so "not found" proves nothing.
+        # The shallow file is what older git, without --is-shallow-repository, goes by too.
+        shallow = run_git(repo, "rev-parse", "--git-path", "shallow")
+        if shallow.returncode != 0 or (Path(repo) / os.fsdecode(shallow.stdout.strip())).exists():
+            return None
         # Literal: a target-named file like `:x` mustn't read as pathspec magic. rev-list
         # shows no signatures, so the target's config can't make it run gpg.program.
         result = run_git(repo, "--literal-pathspecs", "rev-list", "--all", "-1", "--", name)

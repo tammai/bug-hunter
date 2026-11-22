@@ -431,3 +431,39 @@ def test_an_unknown_history_for_a_local_secret_is_a_gap(tmp_path, monkeypatch, c
     assert run_script("findings", "report", audit, "--meta", meta).returncode == 0
     report = (audit / "REPORT.md").read_text(encoding="utf-8")
     assert "couldn't tell whether git history holds .env" in report
+
+
+def test_a_shallow_clone_cant_say_a_path_was_never_committed(tmp_path, capsys):
+    import subprocess
+
+    import secrets_scan
+
+    def git(repo, *args):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    stripe = "sk_" + "live_" + "a1" * 12
+    src = tmp_path / "src"
+    src.mkdir()
+    git(src, "init", "-q")
+    (src / ".env").write_text(f"STRIPE={stripe}\n", encoding="utf-8")
+    (src / "app.js").write_text("x\n", encoding="utf-8")
+    git(src, "add", "-A")
+    git(src, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i")
+    git(src, "rm", "-q", "--cached", ".env")
+    (src / ".gitignore").write_text(".env\n", encoding="utf-8")
+    git(src, "add", ".gitignore")
+    git(src, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "untrack")
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", "--depth", "1", src.as_uri(), str(clone)],
+                   check=True, capture_output=True)
+    (clone / ".env").write_text(f"STRIPE={stripe}\n", encoding="utf-8")
+    assert secrets_scan.in_history(str(clone), ".env") is None
+    assert secrets_scan._main([str(clone)]) == 0
+    [item] = [f for f in json.loads(capsys.readouterr().out) if f["path"] == ".env"]
+    assert item["committed"] is False and item["history_unknown"] is True
+    data = tmp_path / "s.json"
+    data.write_text(json.dumps([item]), encoding="utf-8")
+    out = tmp_path / "out"
+    assert run_script("findings", "from-secrets-scan", data, out).returncode == 0
+    [text] = [p.read_text(encoding="utf-8") for p in out.glob("*.md")]
+    assert "not committed" not in text.splitlines()[0]
