@@ -127,6 +127,8 @@ def test_beside_a_second_target_only_allowed_headers_cross(make_repo, tmp_path):
         for listener in (base, ref_base):
             assert call(listener + "/who", headers={
                 **unlisted, **listed, "X-Bug-Hunter-Account": "alice"})[0] == 200
+        # What urllib and browsers always send leaves no note: only what was held back does.
+        assert call(base + "/who", headers={**listed, "Accept-Encoding": "gzip"})[0] == 200
     finally:
         stop(proxy, stub_a, stub_b)
     solo, solo_base = start_proxy(repo, "solo", env, tmp_path / "solo.jsonl")
@@ -139,7 +141,8 @@ def test_beside_a_second_target_only_allowed_headers_cross(make_repo, tmp_path):
         assert not sent & {k.lower() for k in unlisted}, sent
         assert {k.lower() for k in listed} | {"x-api-key"} <= sent, sent
     notes = [e.get("note", "") for e in entries(log)]
-    assert len(notes) == 2 and all("x-real-ip" in n and "x-custom-route" in n for n in notes)
+    assert len(notes) == 3 and notes[2] == "", notes
+    assert all("x-real-ip" in n and "x-custom-route" in n for n in notes[:2]), notes
     assert "x-custom-route" in {k.lower() for k in entries(c_log)[0]["headers"]}
 
 

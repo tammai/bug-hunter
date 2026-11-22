@@ -55,6 +55,7 @@ inline in this session
 - 2026-11-22 tests/fixtures/reference-pair/drafts/departure.md What: unchanged Why: an Observed block without check stays valid; AC-010 asserts the check on the real replay output instead Effect: none
 - 2026-11-22 scripts/live_proxy.py What: ROUTING_HEADERS removed, replaced by BESIDE_ANOTHER and a crosses() filter Why: the allow-list replaces the deny-list Effect: nothing else imported it
 - 2026-11-22 matching_departure What: its second parameter is now the finding's repro (runner and steps) instead of the steps list, and it reads the result's check instead of parsing the message Why: R2-10 (runner from the record, not the steps' shape) and CR-4 Effect: its one caller, with_reference, passes record['repro']; tests updated
+- 2026-11-22 test-change tests/test_reference.py What: AC-002's test also sends a request with only allow-listed headers plus Accept-Encoding and asserts its log entry has no note Why: accept-encoding (sent by urllib and every browser, and replaced by the proxy with identity) was logged as not forwarded on every request; it joins the allow-list (advisor check after the first commit)
 
 ## Open questions
 -

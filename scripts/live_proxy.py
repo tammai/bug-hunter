@@ -35,11 +35,11 @@ NOT_FORWARDED = {"connection", "keep-alive", "proxy-connection", "proxy-authoriz
                  ACCOUNT_HEADER, REFUSED_HEADER.lower()}
 # Beside another target, only these cross (and every `sec-` name a browser adds): a front end
 # may route by any other header, and no list of routing headers is ever complete.
-BESIDE_ANOTHER = {"accept", "accept-language", "authorization", "cache-control", "content-type",
-                  "cookie", "dnt", "if-match", "if-modified-since", "if-none-match", "if-range",
-                  "if-unmodified-since", "origin", "pragma", "priority", "range", "referer",
-                  "upgrade-insecure-requests", "user-agent", "x-csrf-token", "x-requested-with",
-                  "x-xsrf-token"}
+BESIDE_ANOTHER = {"accept", "accept-encoding", "accept-language", "authorization",
+                  "cache-control", "content-type", "cookie", "dnt", "if-match",
+                  "if-modified-since", "if-none-match", "if-range", "if-unmodified-since",
+                  "origin", "pragma", "priority", "range", "referer", "upgrade-insecure-requests",
+                  "user-agent", "x-csrf-token", "x-requested-with", "x-xsrf-token"}
 MAX_DECODES = 10
 MAX_BODY = 50 * 1024 * 1024
 HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
