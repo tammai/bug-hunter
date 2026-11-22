@@ -2,13 +2,9 @@
 
 ## Open
 
-- [x] `scratch.py clean` on Windows can't remove a read-only folder: `tests/test_scratch.py::test_clean_reports_size_and_removes_read_only_trees` fails with "Access is denied" on `hunter-1/home/go/pkg/mod/example.com@v1` (Go makes its module cache read-only), on `main` (v0.5.0) too, so a hunt's run folder on Windows is left partly behind. Its own S fix; baselined in 2026-11-09-m-scratch-tickets (2026-11-11). Done in 2026-11-12-m-windows-seal-and-clean; passes on Windows (2026-11-12)
-
 - [ ] Leak check for word-like logins, review tickets left after round 2 of 2026-11-09-s-login-word (2026-11-09)
   - A word after a second word between field and value is missed: `<input name="password" value="member">`, `{"name":"token","value":"member"}`, `the password is member` (round 2, M-2).
   - A lowercase-only random token of 6–15 letters (`qwxzkvbnmt`) is treated as a word and counts only in credential context (round 2, L-2).
-  - Rare prose still refused, the safe side: `Auth: member`, `a bearer member` for a Bearer account.
-  - ~~`tests/test_departures.py:103` breaks E501 (105 > 100) at c2c5fc0, so `uv run ruff check .` fails; not in `.sdlc/baseline.md`.~~ Gone by v0.6.0: `uv run ruff check .` passes (2026-11-22).
 
 - [ ] `oracle.py` (part 2) review tickets, unverified, from a code review of 8dcab0e that was meant for part 3; triaged as tickets by the orchestrator (msg_34addfc88592). The `--live` and symlink findings were fixed in 2026-11-08-m-review-followups. 2026-11-08-m-review-followups (2026-11-08)
   - **Citations:**
@@ -36,19 +32,14 @@
     - the max, budget and live cuts are duplicated from `scope.py`;
     - `cited_rules` is a one-line wrapper;
     - `_repo_path` duplicates `scope._relative`.
-  - **Tests:** `tests/test_oracle.py` has hostile-input matrices beyond the minimal-testing rule.
 - [ ] Leak scan (`drafts.leaks`) known limits and tickets, from the follow-up reviews: 2026-11-08-m-review-followups (2026-11-08)
-  - a protocol-relative `//plainname` with no scheme is not counted (orchestrator: known limit, README);
-  - a loopback alias on the target's port (`127.0.0.1:3999` for `localhost:3999`) refuses a finding the masker would pass (C4-1, kept by decision);
   - `localhost:80` for a portless loopback target (C4-7);
   - a host or login cut by the 500-character message cap leaves a prefix (C4-8, S-7);
-  - substring matching over-refuses longer names (`xref.example.test`, `110.0.0.1`), the safe side;
-  - rare spellings: expanded IPv6, punycode, a trailing-dot host;
+  - a trailing-dot host;
   - `_host_patterns` and `live_proxy._masker` are two sources of truth for an address (C4-6); the masker still uses word boundaries, so the scan catches more than it masks;
   - a spec folder reached by an 8.3 short path skips the link guard; the folder links that `scope._any_matches` doesn't check (S-5);
   - escapes upper-cased after escaping (`\X2F`, `\U002F`) aren't decoded, so a plain-name host can hide behind them (R6-1);
   - other spellings of one address: expanded or zero-padded IPv6, `10.0.0.01`, `127.1`, `0.0.0.0` (R6-2);
-  - a 1 MB draft mixing every encoding costs about 3 s and 97 MB to scan; bounded (R6-3).
 - [ ] Part 3 review tickets, in docs/sdlc/changes/2026-11-08-m-reference-classify.md's Review: 2026-11-08-m-reference-classify (2026-11-08)
   - an allow-list of forwarded headers, and `%252e` double decoding (S2-5);
   - the hunter writes its draft through a quoted heredoc (S2-6);
@@ -62,7 +53,7 @@
   - `matching_departure` infers the runner from the steps' shape (R2-10);
   - classify's departure rows sit in two test tables, and the registry test covers several cases (R2-11, R2-12).
 
-- [ ] Make the test suite pass on Windows: the 16 Windows-only failures in `.sdlc/baseline.md` (fake `gh` that Windows can run without passing titles through `cmd.exe`, `USERPROFILE` in the drafts and findings fixtures, POSIX-mode asserts, read-only git objects, CRLF and forbidden names in fixtures, symlink privilege), then add a `windows-latest` CI runner — left out of the Windows isolation change on purpose; 2026-11-06-m-windows-isolation (2026-11-06)
+- [ ] Make the test suite pass on Windows: the 19 Windows-only failures in `.sdlc/baseline.md` (fake `gh` that Windows can run without passing titles through `cmd.exe`, `USERPROFILE` in the drafts and findings fixtures, POSIX-mode asserts, read-only git objects, CRLF and forbidden names in fixtures, symlink privilege), then add a `windows-latest` CI runner — left out of the Windows isolation change on purpose; 2026-11-06-m-windows-isolation (2026-11-06)
 - [ ] Small `isolate.py` follow-ups from the Windows isolation review:
   - match 8.3 short names (needs `GetLongPathNameW`);
   - match a quoted value with a space inside the quotes;
@@ -71,6 +62,26 @@
   - narrow the test guard's PATH filter so it stops hiding Homebrew's other tools on macOS.
 
   Review tickets (CR5, CR10, R3-1, R3-2, S4). Not bugs on the command path; 2026-11-06-m-windows-isolation (2026-11-06)
-- [x] Decide whether `isolate.py` should also unset inherited `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` and `GIT_CONFIG_KEY_*`/`GIT_CONFIG_VALUE_*`, which can inject git config (a credential helper) without any file — found in the Windows isolation change, not asked for there (2026-11-06). Done in 2026-11-22-s-git-config-env (2026-11-22)
 - [ ] `isolate.py` passes every other inherited `GIT_*` override through: `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_PROXY_COMMAND`, `GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`, `GIT_EXTERNAL_DIFF`, `GIT_PAGER`/`GIT_EDITOR`, `GIT_CONFIG`/`GIT_CONFIG_SYSTEM`, and `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` (caught only when they point into the home; a `GIT_DIR` at the target would let a hunter edit it). Structural fix: unset every inherited `GIT_*` except an allowlist (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM`, `GIT_TERMINAL_PROMPT`, `GIT_SSL_CAINFO`). Security review S1 of 2026-11-22-s-git-config-env (2026-11-22)
+- [ ] Improve how well `/hunt` finds bugs, in this order (planned to start the week of 2026-11-23); from the 19 B0 runs in `knowledge/runs/`, which measured only that kept drafts reproduce, not missed bugs or maintainer acceptance (2026-11-20)
+  1. **Scoring benchmark:** 2–3 pinned repos per stack, about 10 planted bugs each with no hints in comments; score how many it finds, how many kept drafts are wrong, how often the verifier passes a bad draft, and cost per real bug. Run before and after each change.
+  2. **Stricter verifier:** a checklist (every claim shown in its output, every cited line holds the quoted code), a script that checks line contents rather than just that the line exists, and bad drafts planted in the benchmark (defects 5, 8 and 10).
+  3. **More bugs per run:** two hunters with different focus per part (input edge cases vs state and error paths), checking whether recent fixes and closed issues are complete, and `--since <ref>` to hunt only changed files.
+  4. **Don't lose proven bugs:** in live mode, keep an offline-only proof as an offline draft (runs 12, 14 and 17); the browser prompt names only the accounts a test uses (Part 4 run).
+  5. **Honest cost preview:** base it on the recorded runs (370k–1.8M processed tokens per hunter, not 100k) and show a range.
+  6. **Outside check:** file 5–10 existing drafts upstream (godotenv exit code, json-server `_dependent` delete) and record whether each is accepted, fixed or closed as intended.
+- [ ] Make `/audit` say whether code is safe to deploy, in three projects in this order (planned for the week of 2026-11-23). From the 2026-11-20 brainstorm; CI is skipped for now (2026-11-20)
+  1. **Verdict and report:** build 2026-11-20-m-audit-verdict. Define is done and its design is approved; it stopped before Build. Resume with `/sdlc:start`, check the 12 ACs in `docs/sdlc/changes/2026-11-20-m-audit-verdict.md`, then build.
+  2. **Stack coverage:** brainstorm it, then build it. It covers checklists for React, TypeScript, Go, Rust, Python and PHP; OSV-Scanner for every lockfile; and Semgrep hits as leads the auditors must confirm, asking the owner to install a missing tool when it's needed. It also adds checklist items for OWASP 2025 A04 and A06–A10.
+  3. **Live `/audit --target`:** brainstorm it, then build it. It proves code findings and probes headers, CORS, rate limits and logout on dev or UAT through `live_proxy.py`, with two or more test users of different roles and writes allowed. Never production.
+
+## Done
+
+- [x] Won't fix, known limits or kept by decision (closed in the plan for the week of 2026-11-23, with the owner's OK) (2026-11-20)
+  - Leak scan: a protocol-relative `//plainname` with no scheme isn't counted (known limit, README); a loopback alias on the target's port refuses a finding the masker would pass (C4-1, kept by decision); substring matching over-refuses longer names (the safe side); expanded IPv6 and punycode spellings; a 1 MB draft costs about 3 s and 97 MB to scan (bounded, R6-3).
+  - Login word: rare prose still refused (`Auth: member`, `a bearer member`), the safe side.
+  - oracle.py: `tests/test_oracle.py` hostile-input matrices beyond the minimal-testing rule.
+- [x] `tests/test_departures.py:103` E501: already fixed, `uv run ruff check .` passes on `main` (2026-11-20)
+- [x] `scratch.py clean` on Windows can't remove a read-only folder: `tests/test_scratch.py::test_clean_reports_size_and_removes_read_only_trees` fails with "Access is denied" on `hunter-1/home/go/pkg/mod/example.com@v1` (Go makes its module cache read-only), on `main` (v0.5.0) too, so a hunt's run folder on Windows is left partly behind. Its own S fix; baselined in 2026-11-09-m-scratch-tickets (2026-11-11). Done in 2026-11-12-m-windows-seal-and-clean; passes on Windows (2026-11-12)
+- [x] Decide whether `isolate.py` should also unset inherited `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` and `GIT_CONFIG_KEY_*`/`GIT_CONFIG_VALUE_*`, which can inject git config (a credential helper) without any file — found in the Windows isolation change, not asked for there (2026-11-06). Done in 2026-11-22-s-git-config-env (2026-11-22)
 - [x] Live-target tokens in `targets.json` expire mid-workflow: the CRM rebuild's bearer tokens last ~15 minutes, so someone ran a scratch script before every `/hunt` to mint fresh ones. Options: a token-refresh hook (a command `targets.json` names, run before the hunt and on a 401), or account credentials in `targets.json` so the hunter signs in itself (weigh against the secrets rules in `.claude/rules/sdlc-sensitive.md`). Raised by product-rebuild, CRM S1–S4 issue list item 5e (crm-workbench `plan/drafts/product-rebuild-issues-S1-S4.md`, commit 1f60997); evidence from crm-rebuild-sdlc-23 (2026-11-17). Done in 2026-11-17-m-token-refresh with the refresh command (2026-11-17)
