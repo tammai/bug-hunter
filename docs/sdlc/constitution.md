@@ -1,5 +1,16 @@
 <!--
 Sync report
+- Version: 1.2.0 → 1.3.0 (MINOR: guidance materially expanded; nothing removed)
+- Principles changed: I. Proof Before Report (an agent finding the verifier didn't confirm may be
+  kept as an unconfirmed suspicion: outside the findings, labelled, never numbered, never counted
+  toward the verdict)
+- Sections changed: Audit Bar (/audit ends with a script-computed verdict; "Safe to deploy" needs
+  the whole repo in scope, no coverage gap and no open, unaccepted critical or high finding)
+- Approved by the owner in docs/sdlc/changes/2026-11-20-m-audit-verdict.md
+- Follow-ups: none. .claude/rules/plugin-prompts.md speaks of audit findings only, which still
+  hold to the same bar.
+
+Previous sync report
 - Version: 1.1.0 → 1.2.0 (MINOR: guidance materially expanded; nothing removed)
 - Principles changed: III. Hands Off the Target (live hunts may send requests to an owner-allowed
   dev server or UAT through the proxy; never production)
@@ -22,7 +33,7 @@ Previous sync report
 ### I. Proof Before Report (NON-NEGOTIABLE)
 A finding MUST NOT become a bug draft unless its exact command was run and its actual wrong output is captured in the draft. A separate verifier MUST re-run every repro from the draft alone before it is kept. A finding that doesn't reproduce MUST be dropped or labelled "couldn't reproduce", never guessed.
 
-An audit finding (`/audit`) MUST carry evidence at one of three proof levels: **proven** (a repro run in a throwaway copy, or a script's output, captured in the finding), **traced** (a source-to-sink path, every hop cited as `path:line` with the code quoted), or **advisory** (a dependency advisory record). An agent's audit finding MUST be kept only if a separate verifier, given the finding alone, tried to disprove it, searching the whole repo for a control that covers it, and could not. Anything else MUST be dropped and listed as not confirmed, never reported as a finding.
+An audit finding (`/audit`) MUST carry evidence at one of three proof levels: **proven** (a repro run in a throwaway copy, or a script's output, captured in the finding), **traced** (a source-to-sink path, every hop cited as `path:line` with the code quoted), or **advisory** (a dependency advisory record). An agent's audit finding MUST be kept only if a separate verifier, given the finding alone, tried to disprove it, searching the whole repo for a control that covers it, and could not. Anything else MUST NOT be reported as a finding. It MAY be kept as an unconfirmed suspicion ("Worth a look"): outside the findings, labelled unconfirmed, never numbered, never counted toward the deploy verdict, and only when it passes the same format and secret checks as a finding.
 Rationale: the plugin's whole value is that everything it reports is real; a security finding that can't be run is still held to evidence a second reader checked.
 
 ### II. The Owner Posts
@@ -56,7 +67,9 @@ A draft MUST describe a real defect (wrong output, crash, data loss, wrong state
 
 ## Audit Bar
 
-An audit finding MUST describe a security or personal-data problem with an impact: who can do what to whom, or what data goes where it shouldn't. Pattern matches without an impact are out. Findings MUST use the fixed format: title, Severity, Category, CWE, Proof, then Where (`path:line`) · Evidence · Impact · Fix. No output of the plugin MAY contain a secret's value or a person's data; values are written `<redacted>`.
+An audit finding MUST describe a security or personal-data problem with an impact: who can do what to whom, or what data goes where it shouldn't. Pattern matches without an impact are out. Findings MUST use the fixed format: title, Severity, Category, CWE, Proof, then Where (`path:line`) · Evidence · Impact · Fix.
+
+`/audit` MUST end with a deploy verdict computed by a script, never by an agent: **Blocked** when any open, unaccepted critical or high finding exists; else **Not verified** when any coverage gap exists (part of the repo out of scope, a stack with no checklist, a dependency not audited, uncommitted changes, an earlier finding not re-checked, or a fact the run didn't report); else **Safe to deploy**. "Safe to deploy" MUST NOT be written while any gap or any such finding exists, and it names the commit and date it covers. No output of the plugin MAY contain a secret's value or a person's data; values are written `<redacted>`.
 
 ## Development Workflow
 
@@ -66,4 +79,4 @@ Changes go through sdlc (define → build → review → ship). CI runs `uv run 
 
 This constitution overrides other practice in this repo. Amendments go through `sdlc:project-constitution` with a version bump and a sync report. Reviews check changes against the MUSTs above.
 
-**Version**: 1.2.0 | **Ratified**: 2026-11-05 | **Last Amended**: 2026-11-06
+**Version**: 1.3.0 | **Ratified**: 2026-11-05 | **Last Amended**: 2026-11-22

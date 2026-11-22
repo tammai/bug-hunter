@@ -1,0 +1,16 @@
+---
+type: gotcha
+title: An audit that keeps findings across runs freezes their facts at first sight
+description: Why findings.py appends status lines, re-checks with the producer that made a finding, and escapes every name; the traps three review rounds found in the deploy verdict.
+---
+
+# Audit facts frozen at first sight
+
+`/audit` keeps numbered findings across runs and never rewrites their evidence, so that `accepted.md` lines and the owner's notes keep pointing at the same thing. Every fact a later run learns about a finding has to be added, not edited in. Each trap below was a review finding in [2026-11-20-m-audit-verdict](../../docs/sdlc/changes/2026-11-20-m-audit-verdict.md):
+
+- **Dedupe drops the newer, truer copy.** A secret first seen in an uncommitted `.env` is rated low. Once it's committed, the scan rates it critical, and dedupe drops that copy as "already reported". The verdict could then read Safe while the key sits in git history. The same happens to an advisory the registry rates up. `dedupe` appends `**Status (date):** severity now X` to the earlier finding, and the report ranks on the most severe. `recheck` appends `seen committed`. Severity only ever goes up; a lower one is ignored, because that is the safe direction.
+- **"Not produced again" means fixed only if the producer ran.** That needs a secrets scan that succeeded, or an audit of that lockfile that succeeded. A lockfile is gone only from a clean tree, since a delete not yet committed still ships. A secret is fixed only if git history never held its path; `_in_history` uses literal pathspecs, `rev-list` and no inherited `GIT_DIR`. A re-check with no readable verdict is CANNOT CHECK, never FIXED.
+- **Identity can't depend on a finding's age or on how it was spelled.** Lockfile paths are normalised, so `./package-lock.json` and `package-lock.json` are one file. Secrets get a keyed id (an HMAC with the owner's private `secret-id.key`): a plain hash of a short secret is guessable, and path plus pattern plus length can't tell a rotated key from a new one. A finding written before ids existed is matched by path, pattern and length until a status line records its id.
+- **Names from the target reach structured text.** A file or folder name can hold a newline. That lets it add a second `## Verdict:` heading to the report, or a second `pattern=… committed=false` evidence line that the identity regex reads first. Escape control characters in every name, both when a converter writes a finding and when the report quotes a value (`_printable`, `_piece`). Withhold a secret piece on its own, so the rest of the line, such as a blocking finding's number, still shows.
+- **Agent text can pose as a script's output.** Identity, re-check status and verifier lines are all read from text. `check --agent` and `suspects` refuse the marks only scripts write. They split lines the way `_parse` does (`splitlines`, so a form feed counts), and refuse the scan marker anywhere in the text.
+- **Fail closed on every input the report reads.** A missing `--scope`, `--meta` or `--recheck`, a missing coverage fact, or a numbered finding that fails the format check is a named gap, never "clean". A fact of the wrong type is an `error:` line. `dirty: 1` isn't a bool, so it's an error, not "dirty".

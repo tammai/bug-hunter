@@ -19,6 +19,7 @@ Background: [BRIEF.md](../BRIEF.md) — where the recipe comes from; [PRD](../do
 ## Gotchas
 - [gotchas/copying-a-target-repo.md](gotchas/copying-a-target-repo.md) — why agents copy targets only with throwaway.py
 - [gotchas/isolating-agents-without-a-sandbox.md](gotchas/isolating-agents-without-a-sandbox.md) — why isolate.py drops, keeps and refuses what it does
+- [gotchas/audit-facts-frozen-at-first-sight.md](gotchas/audit-facts-frozen-at-first-sight.md) — keeping audit findings across runs: status lines, producers, identity, escaping
 - [gotchas/detecting-secrets-in-free-text.md](gotchas/detecting-secrets-in-free-text.md) — why findings are checked against found secrets, not shapes
 - [gotchas/redacting-logged-requests.md](gotchas/redacting-logged-requests.md) — why the stub parses, decodes and withholds before logging
 - [gotchas/stopping-agent-processes-on-windows.md](gotchas/stopping-agent-processes-on-windows.md) — why agents' servers are listed by the prefix and stopped with reap.py

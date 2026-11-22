@@ -169,3 +169,63 @@ This change is the base all three projects report through, so it comes first.
 - **A verdict for production environments:** never probed.
 - **OWASP checklist content (A04, A06–A10 items):** project 2. This change only tags findings and shows which categories were checked.
 - **Asking the owner to install OSV-Scanner or Semgrep:** project 2, when those tools are first used.
+
+## Review
+
+- **Recommended and chosen:** security (`Risk: high`) and code (L, with new public surface), run without asking on the trigger list (L). Each round was a fresh `sdlc:code-reviewer` on opus.
+- **Verdicts:** in `.sdlc/.work/findings/2026-11-20-m-audit-verdict/`.
+  - Round 1: security FAIL (S1–S5), code FAIL (H1–H3, M1–M5, L1–L2).
+  - Round 2: security FAIL (SR2-0) and code FAIL (N1). Both found the same high. The round cap was 2, and the owner chose one more fix round.
+  - Round 3: security PASS and code PASS. Their medium and low bugs were fixed test first and closed by `verify.py`.
+- **Fixed (highs, each with the test that proves it in `tests/test_findings.py`):**
+  - **S1, S3:** names from the target could inject a second `## Verdict` heading or terminal escapes into `REPORT.md`, and a secret in a reason hid the blocking number. `_piece` now escapes control characters and withholds only the secret piece (`test_untrusted_names_cant_forge_the_verdict_or_reach_the_terminal`, `test_a_secret_in_an_expired_reason_never_hides_the_blocking_number`). SR3-0 is the same class in the converters: `_printable` escapes every name a converter writes (`test_scan_names_cant_forge_evidence_lines`).
+  - **S2, H2, N1, SR2-0:** facts were frozen at a finding's first sighting.
+    - A secret seen uncommitted, then committed, then deleted was marked fixed. Recheck now appends `seen committed`, and `_in_history` asks git before fixing (`test_a_secret_ever_committed_is_never_fixed_by_deleting_it`).
+    - Its severity stayed low. `dedupe` now appends `severity now X` and the report ranks on the most severe (`test_a_finding_found_again_at_a_higher_severity_blocks_at_it`).
+  - **S4, H3:** a malformed `--scope` gave a traceback or read as clean; it now gets a strict schema check (`test_a_malformed_scope_is_one_error_line`). The id key could recurse forever or be left short; it is now refused unless private, and written whole via temp file and link (`test_the_id_key_is_refused_unless_private_and_never_left_short`).
+  - **H1:** findings from before the upgrade got new numbers. Identities are now normalised, with a legacy-key bridge recorded by a status line (`test_findings_from_before_the_upgrade_keep_their_number`).
+  - **Medium and low bugs, each with a test:**
+    - **S5, SR2-1:** agent findings posing as script output (`check --agent`, `SCAN_MARK`).
+    - **M1:** what counts as outside a run's scope.
+    - **M2, N6, N7, R3-4, SR2-7:** re-check locations.
+    - **M3:** refused suspects and missing verdicts.
+    - **M4, N5, R3-1, R3-2, SR3-1:** advisories whose lockfile wasn't audited or is gone.
+    - **M5:** the id key's crash window.
+    - **L1:** BOM and other list markers in `accepted.md`.
+    - **L2–L6:** small report fixes.
+    - **N3:** `dirty: 1`.
+    - **SR2-2, SR2-3, SR3-2:** `_in_history` uses literal pathspecs, `rev-list`, and no inherited `GIT_DIR`.
+    - **SR3-5:** escaped reasons.
+- **Tickets** (in `docs/sdlc/todo.md`):
+  - R3-3/SR3-3, an acceptance that outlives a severity raise;
+  - R3-5/SR3-8, the stale "not committed" title;
+  - R3-6 and SR3-4, other facts frozen at first sight;
+  - N4, N8 and SR2-9, legacy-key edge cases on the upgrade run;
+  - M6, npm `via` order;
+  - N9, `--repo` optional;
+  - N11, filesystems without hard links;
+  - N12, SR2-5 and SR3-2, the pre-existing git calls and inventory cells;
+  - S6 and SR3-6, a hostile target's git config;
+  - S8, agents editing `accepted.md` during a run;
+  - F3, a test to split.
+- **Drift and manual checks:**
+  - Deviations, all recorded in the state file:
+    - Base moved to f72be3d (accepted by the owner at the trust-anchor check).
+    - `secrets_scan.py --id-key`, a keyed fingerprint for the approved "path plus fingerprint" identity.
+    - `report` reads `--scope` and `--recheck` directly and fails closed.
+    - The existing tests moved onto the new shapes.
+    - Expired acceptances are listed as "acceptance expired".
+    - `commands/audit.md` runs `scope.py` once and sweeps before making the run folder.
+    - The extra public surface.
+    - Each round's test changes, each re-shown red at the base.
+    - An advisory whose lockfile is gone from a clean tree is fixed.
+    - The shared `_REPO_VARS`.
+  - No AC is `manual`.
+  - Superseded by later Decisions: the change file's "Out of scope" doesn't forbid any of these, and this section records where the build departs from Define.
+- **Security:**
+  - No critical or high finding is open, and the diff holds no secrets.
+  - No dependency audit ran: the project has no runtime dependencies (`pyproject.toml` `dependencies = []`), the change adds none, and `pip-audit` isn't installed.
+  - The OWASP 2025 CWE lists in `scripts/owasp.json` were read from OWASP's own category pages, not written from memory.
+- **Lessons filed:**
+  - [knowledge/gotchas/audit-facts-frozen-at-first-sight.md](../../../knowledge/gotchas/audit-facts-frozen-at-first-sight.md);
+  - three lines in [recurring-defects.md](../recurring-defects.md).

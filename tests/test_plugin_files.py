@@ -174,7 +174,7 @@ def test_audit_command_asks_first_and_never_posts():
 
 def test_constitution_prd_and_readme_cover_audit():
     constitution = (ROOT / "docs/sdlc/constitution.md").read_text(encoding="utf-8")
-    assert "**Version**: 1.2.0" in constitution
+    assert "**Version**: 1.3.0" in constitution
     assert "traced" in constitution and "audit finding" in constitution.lower()
     prd = (ROOT / "docs/sdlc/prd.md").read_text(encoding="utf-8")
     goals, non_goals = prd.split("**Non-goals**")
@@ -182,6 +182,30 @@ def test_constitution_prd_and_readme_cover_audit():
     assert "audit findings" in non_goals.split("## Core")[0]
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "/audit" in readme and "policy.md" in readme
+
+
+def test_audit_verdict_flow_in_prompts_and_docs():
+    _, body = read("commands/audit.md")
+    order = ["findings.py\" earlier", "owner's yes", "bug-hunter:finding-verifier",
+             "findings.py\" recheck", "findings.py\" suspects", "findings.py\" dedupe",
+             "findings.py\" report"]
+    positions = [body.index(marker) for marker in order]
+    assert positions == sorted(positions)
+    for words in ("re-check", "30k", "--scope", "--recheck", "--secrets-scanned",
+                  "--audited", "Blocked", "Not verified", "Safe to deploy", "accepted.md",
+                  "Worth a look"):
+        assert words in body, words
+    _, verifier = read("agents/finding-verifier.md")
+    for words in ("re-check mode", "VERDICT: STILL OPEN at", "VERDICT: FIXED —",
+                  "the quoted code", "moved"):
+        assert words in verifier, words
+    constitution = (ROOT / "docs/sdlc/constitution.md").read_text(encoding="utf-8")
+    assert "**Version**: 1.3.0" in constitution
+    assert "unconfirmed" in constitution and "Safe to deploy" in constitution
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for words in ("Safe to deploy", "Not verified", "Blocked", "accepted.md", "Worth a look",
+                  "rotated"):
+        assert words in readme, words
 
 
 STUB_FETCH = ("curl -fsSLo stub_server.py "

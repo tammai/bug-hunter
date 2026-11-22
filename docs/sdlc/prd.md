@@ -19,7 +19,7 @@ Developers and maintainers who own a repo and want its edge-case bugs found and 
 - No duplicates of open issues or earlier findings.
 - The expected cost is shown before a run, with a cap on the number of hunters.
 - `/hunt --target` hunts a running local dev server or UAT the owner allowed, through a proxy that holds the test logins and a request budget; never production.
-- Before deploy, a security and PII audit (`/audit`) reports authorization, injection, secrets, session and personal-data problems, each with evidence a second agent failed to disprove, plus a PII inventory, in a private report.
+- Before deploy, a security and PII audit (`/audit`) reports authorization, injection, secrets, session and personal-data problems, each with evidence a second agent failed to disprove, plus a PII inventory, in a private report that opens with a deploy verdict: Blocked, Not verified or Safe to deploy.
 
 **Non-goals**
 - Posting or filing anything the owner didn't pick, and posting audit findings at all.
@@ -34,7 +34,7 @@ Developers and maintainers who own a repo and want its edge-case bugs found and 
 3. `repro-verifier` agent: re-runs one repro and says whether it reproduces.
 4. Skip what's known: hunters are given open issues and earlier findings.
 5. `/hunt-post <numbers>`: files the chosen drafts with the owner's own `gh` login and a label they choose.
-6. `/audit [paths] [--max N]`: secrets scan, npm/composer dependency audit, one `security-auditor` per part and one `finding-verifier` per finding; numbered findings and `REPORT.md` with a PII inventory in `~/.bug-hunter/<host>/<owner>/<repo>/audit/`. Optional owner `policy.md` says who may see what.
+6. `/audit [paths] [--max N]`: secrets scan, npm/composer dependency audit, one `security-auditor` per part and one `finding-verifier` per finding; numbered findings and `REPORT.md` with the verdict, a PII inventory and "Worth a look" in `~/.bug-hunter/<host>/<owner>/<repo>/audit/`; earlier findings are re-checked each run, fixed ones move to `audit/fixed/`, and the owner's `accepted.md` accepts a finding until a date. Optional owner `policy.md` says who may see what.
 
 ## Constraints
 
