@@ -4,8 +4,11 @@ import shutil
 from pathlib import Path
 
 import pytest
-from conftest import lock_dir, run_script, unlock_dir
+from conftest import MKSTEMP_SPINS_ON_A_LOCKED_DIR, lock_dir, run_script, unlock_dir
 from test_drafts import GOOD
+
+SPINS = ("this Python's tempfile retries a refused mkstemp 2**31 times on Windows, so post.py "
+         "spins on a locked folder instead of refusing it (fixed in Python 3.13)")
 
 
 def make_drafts(tmp_path, count=3):
@@ -107,6 +110,8 @@ def test_refuses_odd_numbers_duplicates_and_unusable_record(tmp_path, fake_gh):
     assert "Traceback" not in as_dir.stderr
     (drafts / "posted.json").rmdir()
 
+    if MKSTEMP_SPINS_ON_A_LOCKED_DIR:
+        pytest.skip(SPINS)
     lock_dir(drafts)
     try:
         locked = run_script("post", drafts, "1", "--label", "bug", env=env)
@@ -117,6 +122,8 @@ def test_refuses_odd_numbers_duplicates_and_unusable_record(tmp_path, fake_gh):
 
 
 def test_shows_url_when_recording_fails_after_filing(tmp_path, fake_gh):
+    if MKSTEMP_SPINS_ON_A_LOCKED_DIR:
+        pytest.skip(SPINS)
     env, calls = fake_gh
     drafts = make_drafts(tmp_path)
     env["FAKE_GH_CHMOD_DIR"] = str(drafts)

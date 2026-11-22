@@ -46,6 +46,9 @@ inline
 ## Deviations
 - 2026-11-22 test-change tests/test_portable_fixtures.py What: the lock test's finally called a misspelled name (unconftest.lock_dir) and now calls conftest.unlock_dir. Why: a typo from rewriting the imports into attribute access; the test was red for the missing helper either way, not weakened.
 - 2026-11-22 Task 2 What: also changed mode asserts at test_findings.py:775/834/901 and the CRLF accepted-list fixture at test_findings.py:705, which no baseline row names. Why: same Windows failure class in tests added after the baseline was recorded; left alone they turn the new runner red. Effect: none on macOS/Linux.
+- 2026-11-22 test-change tests/test_portable_fixtures.py What: AC-001 runs the fake by its resolved path; AC-005 checks the lock with open(x) instead of mkstemp; AC-006 asserts the core.symlinks case only where links can be created, after the no-rights case. Why: on Windows a child's env doesn't steer CreateProcess's lookup of gh; 3.12's mkstemp spins on a denied folder; an account without link rights hits the other reason first. Not weakened: the same behaviours are asserted.
+- 2026-11-22 Task 3 What: .sdlc/config.json gets ci.os = [ubuntu-latest, windows-latest]. Why: the scaffold builds sdlc-verify.yml's matrix from it, so /sdlc:upgrade would otherwise drop the runner. Effect: none locally.
+- 2026-11-22 Task 2 What: the two post.py lock tests skip on a Python whose tempfile.TMP_MAX > 100 on Windows (3.12). Why: tempfile retries a refused mkstemp 2**31 times there, so post.py would hang the job. Effect: none on macOS/Linux or on Windows with 3.13+; the post.py bug is a ticket.
 
 ## Open questions
 -

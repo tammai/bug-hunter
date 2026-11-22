@@ -21,7 +21,8 @@ Every baseline row is a fixture problem, not a product one. While they stay red 
 | `test_stacks`: on Windows, leave out `b"q/` (Windows forbids `"`) and `d\e/` (Windows reads `\` as a folder separator), expecting 4 unsafe names instead of 6 | Staging those names in the index only | `scope.py`'s install detection isn't known not to look at the files on disk; the four other unsafe names still test quoting on Windows. |
 | `test_skips_names_that_are_not_utf8`: write the index entry through `git update-index --index-info` on stdin | Skipping on Windows | The failure is in the fixture: Windows can't put non-UTF-8 bytes on a command line, but stdin carries bytes. `scope.py` only reads `git ls-files -z`, so no checkout is needed. |
 | Symlink tests call `skip_unless_git_keeps_symlinks(tmp_path)`: it skips when `os.symlink` fails (Developer Mode or admin needed), and when a committed link, cloned with `git clone --no-local`, comes back as a plain file (`core.symlinks=false`), each with its reason | Skipping only when `os.symlink` fails | An elevated CI runner can create links while Git for Windows still checks them out as files, which is the second half of the throwaway rows. |
-| CI: add `"windows-latest"` to `sdlc-verify.yml`'s matrix; nothing else | Pinning `core.autocrlf` | The scripts handle Git for Windows' system config on purpose; changing it in CI would hide that. |
+| On a Python whose `tempfile` retries a refused `mkstemp` up to `os.TMP_MAX` (3.12 on Windows: 2**31 tries, since `os.access` can't see the deny ACL), the two `post.py` lock tests skip with that reason (`MKSTEMP_SPINS_ON_A_LOCKED_DIR`). The lock helper's own test uses `open(…, "x")`, which fails at once. | Letting them run (the job hangs to its 30-minute timeout); fixing `post.py` here | 3.13 and 3.14 cap the retries at 20 (`Lib/tempfile.py`). The hang is a real `post.py` bug on Windows with 3.12, so it is a ticket, not a test change. |
+| CI: `ci.os` in `.sdlc/config.json` lists `ubuntu-latest` and `windows-latest`, and `sdlc-verify.yml`'s matrix matches it, as the generator writes it; nothing else changes. The owner's request is the go-ahead `sdlc-ci.md` asks for. | Editing only the workflow, which `/sdlc:upgrade` would regenerate without the runner; pinning `core.autocrlf` | The scaffold builds the matrix from `ci.os`. The scripts handle Git for Windows' system config on purpose, so changing it in CI would hide that. |
 
 ## Acceptance criteria
 
@@ -58,7 +59,11 @@ Every baseline row is a fixture problem, not a product one. While they stay red 
 - A Windows half that reasoning got wrong (the copied `python.exe`, `icacls` rights, git's symlink checkout): the first CI run shows it; its baseline row stays until then.
 - Rows recorded on 2026-11-06 name only the first failure each test hit, and tests added since were never run on Windows. The first Windows run may show failures not in the baseline; each is a fixture fix of the same kind, or a new baseline row with the owner's OK.
 
+- `make_repo` now writes LF on Windows for every test that builds a repo, not only the CRLF row; Linux already ran them that way.
+
 ## Out of scope
+
+- `post.py` spinning on a locked drafts folder on Windows with Python 3.12 (`tempfile` retries `mkstemp` 2**31 times): a product ticket.
 
 - Removing the baseline rows (after the first green Windows run) and editing `docs/sdlc/todo.md`.
 - Product code under `scripts/`.

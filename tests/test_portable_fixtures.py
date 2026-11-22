@@ -2,7 +2,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 import conftest
@@ -16,7 +15,8 @@ def test_fake_gh_is_an_interpreter_and_keeps_arguments_exact(fake_gh, tmp_path):
     gh = shutil.which("gh", path=env["PATH"])
     assert gh and not Path(gh).read_bytes().startswith(b"#!")
     args = ["issue", "create", "--title", TRICKY, "--body-file", str(tmp_path / "a b ü.md")]
-    result = subprocess.run(["gh", *args], env=env, cwd=tmp_path, capture_output=True, text=True)
+    # By path: on Windows a child's env doesn't change where CreateProcess looks for "gh".
+    result = subprocess.run([gh, *args], env=env, cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "https://github.com/o/r/issues/1"
     assert calls() == [args]
@@ -56,24 +56,16 @@ def test_lock_dir_refuses_new_files_until_unlocked(tmp_path):
     folder.mkdir()
     conftest.lock_dir(folder)
     try:
-        with pytest.raises(OSError):
-            tempfile.mkstemp(dir=folder)
+        with pytest.raises(PermissionError):
+            (folder / "new").open("x").close()
         assert [p.name for p in folder.iterdir()] == []
     finally:
         conftest.unlock_dir(folder)
-    fd, name = tempfile.mkstemp(dir=folder)
-    os.close(fd)
-    assert Path(name).exists()
+    (folder / "new").open("x").close()
+    assert (folder / "new").exists()
 
 
 def test_symlink_probe_skips_with_its_reason(tmp_path, monkeypatch):
-    with monkeypatch.context() as mp:
-        for key, value in {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.symlinks",
-                           "GIT_CONFIG_VALUE_0": "false"}.items():
-            mp.setenv(key, value)
-        with pytest.raises(pytest.skip.Exception, match="plain file"):
-            conftest.skip_unless_git_keeps_symlinks(tmp_path / "as files")
-
     def refuse(*args, **kwargs):
         raise OSError(1314, "A required privilege is not held by the client")
 
@@ -81,6 +73,17 @@ def test_symlink_probe_skips_with_its_reason(tmp_path, monkeypatch):
         mp.setattr(os, "symlink", refuse)
         with pytest.raises(pytest.skip.Exception, match="Developer Mode"):
             conftest.skip_unless_git_keeps_symlinks(tmp_path / "no rights")
+
+    try:
+        os.symlink("x", tmp_path / "can link")
+    except OSError:
+        return  # An account without link rights takes the branch above for real.
+    with monkeypatch.context() as mp:
+        for key, value in {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.symlinks",
+                           "GIT_CONFIG_VALUE_0": "false"}.items():
+            mp.setenv(key, value)
+        with pytest.raises(pytest.skip.Exception, match="plain file"):
+            conftest.skip_unless_git_keeps_symlinks(tmp_path / "as files")
 
     if os.name != "nt":
         conftest.skip_unless_git_keeps_symlinks(tmp_path / "plain")

@@ -5,6 +5,7 @@ import stat
 import subprocess
 import sys
 import sysconfig
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,9 @@ WINDOWS = os.name == "nt"
 # Add file and add subfolder only: denying all of (W) also denies SYNCHRONIZE, which breaks
 # listing the folder.
 EVERYONE_NO_NEW_ENTRIES = "*S-1-1-0:(WD,AD)"
+# Python 3.12's tempfile on Windows retries a refused mkstemp up to os.TMP_MAX (2**31) times
+# while os.access, blind to ACLs, calls the folder writable; 3.13 caps it at TMP_MAX = 20.
+MKSTEMP_SPINS_ON_A_LOCKED_DIR = WINDOWS and tempfile.TMP_MAX > 100
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -212,6 +216,7 @@ def skip_unless_git_keeps_symlinks(probe: Path) -> None:
     repo = probe / "repo"
     repo.mkdir(parents=True)
     git(repo, "init", "-q")
+    (repo / "target").write_bytes(b"")
     try:
         os.symlink("target", repo / "link")
     except OSError:
