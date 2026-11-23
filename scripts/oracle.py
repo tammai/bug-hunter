@@ -96,7 +96,8 @@ def load_lock(spec: Path) -> list[dict]:
                  "level": c["level"] if isinstance(c["level"], int) else 0,
                  "text_sha256": c.get("text_sha256"),
                  "priority": c.get("priority")} for c in criteria]
-    except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
+    except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError,
+            RecursionError) as exc:
         raise BadOracle(f"criteria.lock.json can't be read ({type(exc).__name__})") from None
 
 
@@ -171,7 +172,7 @@ def _inside(spec: Path, rel: str) -> Path | None:
 def _operations(spec: Path) -> dict[str, list[str]]:
     try:
         paths = json.loads(_read(spec / "openapi.json", spec) or "{}").get("paths", {})
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, RecursionError):
         return {}
     found: dict[str, list[str]] = {}
     for item in paths.values() if isinstance(paths, dict) else []:
@@ -185,7 +186,7 @@ def _operations(spec: Path) -> dict[str, list[str]]:
 def _docs_dir(repo: Path) -> str:
     try:
         docs = json.loads(_read(repo / ".sdlc" / "config.json", repo) or "{}").get("docs_dir")
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, RecursionError):
         docs = None
     docs = _repo_path(docs).strip("/") if isinstance(docs, str) else ""
     return PurePosixPath(docs).as_posix() if docs else "docs/sdlc"

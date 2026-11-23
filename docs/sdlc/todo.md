@@ -35,7 +35,7 @@
   - render runs twice in reference mode (part 3 R2-13);
   - contracts' departure ID pattern (`^D-[0-9]{3,}$`) has no upper bound and allows a trailing newline (upstream);
   - `_leaves_base`: a `%` produced by NFKC, division and fraction slashes, and other non-standard decoder spellings (L3-1, S2-4); rare legitimate paths now refused (`/a/.../b`, `/x/.;v=1`, `%25u` data), with no reason in the refusal (L3-2, S2-5, L1);
-  - `oracle.py`'s `json.loads` can raise `RecursionError` (R2-6); `drafts.py` puts an origin URL in an error (L3-3);
+  - `drafts.py` puts an origin URL in an error (L3-3); (`oracle.py`'s `RecursionError`, R2-6, done in 2026-11-23-s-oracle-deep-json);
   - test gaps: a malformed `check` in an Observed block, the 10-round decode cap, the 500/501 value bound (L-4).
 
 - [x] Make the test suite pass on Windows: the 19 Windows-only failures in `.sdlc/baseline.md` (fake `gh` that Windows can run without passing titles through `cmd.exe`, `USERPROFILE` in the drafts and findings fixtures, POSIX-mode asserts, read-only git objects, CRLF and forbidden names in fixtures, symlink privilege), then add a `windows-latest` CI runner — left out of the Windows isolation change on purpose; 2026-11-06-m-windows-isolation (2026-11-06). Done in 2026-11-22-m-windows-suite (2026-11-22); two 3.12-only skips remain
