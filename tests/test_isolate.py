@@ -1257,3 +1257,26 @@ def test_short_password_names_count_as_secrets(name):
                                   "PASSENGER_ENV", "PWDEBUG", "ENCOMPASS_HOME", "SURPASS"])
 def test_ordinary_names_are_not_secrets(name):
     assert not isolate._secret_name(name), name
+
+
+@pytest.mark.parametrize("name", ["OP_SESSION_my_team", "STRIPE_KEY", "OPENAI_KEY", "Sentry_Key",
+                                  "CARD_PIN", "SIM_PIN2", "PASSKEY", "DB_PSWD", "PSWD",
+                                  "STRIPE_KEY_1", "CARD_PIN_2", "STRIPE_KEY_LIVE", "SSH_KEY_B64",
+                                  "APP_KEYS", "CARD_PIN_CODE", "SIM_PINCODE", "BW_SESSION",
+                                  "AOC_SESSION", "AZURE_DEVOPS_EXT_PAT", "GITLAB_PAT", "DB_PSW",
+                                  "DB_PASSW", "SIM_PUK", "AUTH0_COOKIE"])
+def test_key_pin_and_session_names_count_as_secrets(name):
+    assert isolate._secret_name(name), name
+
+
+@pytest.mark.parametrize("name", ["XDG_SESSION_TYPE", "XDG_SESSION_ID", "DBUS_SESSION_BUS_ADDRESS",
+                                  "KEYMAP", "XKB_KEYMAP", "KEY_FILE_DIR", "PINENTRY_USER_DATA",
+                                  "SPINNER", "MONKEY_HOME", "TURNKEY", "GPG_KEY_ID",
+                                  "SSH_KEY_PATH", "DESKTOP_SESSION", "WT_SESSION",
+                                  "TERM_SESSION_ID", "ITERM_SESSION_ID", "SESSION_MANAGER",
+                                  "GDMSESSION", "XDG_SESSION_CLASS", "XDG_SESSION_DESKTOP",
+                                  "PATH", "PATTERN", "PATCH_LEVEL", "COOKIE_DOMAIN",
+                                  "COREPACK_ENABLE_AUTO_PIN", "KDE_FULL_SESSION", "XRDP_SESSION",
+                                  "X2GO_SESSION"])
+def test_ordinary_key_and_session_names_are_kept(name):
+    assert not isolate._secret_name(name), name

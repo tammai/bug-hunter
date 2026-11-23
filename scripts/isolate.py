@@ -17,24 +17,53 @@ SECRET_NAME = re.compile(
     r"(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL|AUTH)", re.I
 )
 # Short password spellings count only as a whole word of the name (split on `_` and camelCase,
-# trailing digits dropped): a word that is or ends in PASS or PWD, so the shell's PWD and
-# OLDPWD, COMPASS_DIR, BYPASS_LIST and SSH_ASKPASS stay.
-PASSWORD_WORD = re.compile(r"\w*PASS|\w*PWD|PASSPHRASE|PASSCODE|PASSCOMMAND|PASSCMD")
+# trailing digits dropped): a word that is or ends in PASS or PWD, or another short password
+# spelling, so the shell's PWD and OLDPWD, COMPASS_DIR, BYPASS_LIST and SSH_ASKPASS stay.
+PASSWORD_WORD = re.compile(r"\w*PASS|\w*PWD|PASSPHRASE|PASSCODE|PASSCOMMAND|PASSCMD|PASSKEY"
+                           r"|PSWD|PSW|PASSW|PASSWRD|PUK")
 NOT_PASSWORD = {"BYPASS", "COMPASS", "ENCOMPASS", "SURPASS", "TRESPASS", "OVERPASS",
                 "UNDERPASS", "ASKPASS", "OLDPWD"}
 # Not as a name's first word: PWD is the shell's working folder, PW_ is Playwright's prefix.
 LATER_WORD = {"PW", "PWD"}
+# After the first word, unless a word naming where or which it is follows (STRIPE_KEY,
+# STRIPE_KEY_LIVE, SSH_KEY_B64, APP_KEYS, CARD_PIN_CODE, GITLAB_PAT; not GPG_KEY_ID,
+# SSH_KEY_PATH, and not KEY_FILE_DIR, whose KEY comes first).
+HELD_WORD = {"KEY", "KEYS", "PIN", "PINCODE", "PAT", "COOKIE"}
+QUALIFIER = {"ID", "IDS", "FILE", "FILES", "PATH", "DIR", "NAME", "ALIAS", "ARN", "FP",
+             "FINGERPRINT", "TYPE", "SIZE", "LEN", "LENGTH", "URL", "URI", "DOMAIN", "HOST",
+             "MANAGER", "BUS", "STORE", "SERVER", "ALGORITHM", "ALG", "FORMAT"}
+# SESSION only as the last word (BW_SESSION, AOC_SESSION); XDG_SESSION_TYPE, TERM_SESSION_ID
+# and these whole names hold no secret.
+SESSION_NAMES = {"DESKTOP_SESSION", "WT_SESSION", "KDE_FULL_SESSION", "XRDP_SESSION",
+                 "X2GO_SESSION"}
+# Switches whose last word reads like a secret's: corepack's "don't pin packageManager" flag.
+NOT_SECRET_NAMES = {"COREPACK_ENABLE_AUTO_PIN"}
+# 1Password CLI sessions.
+SESSION_PREFIXES = ("OP_SESSION_",)
 
 
 def _secret_name(name: str) -> bool:
     """Whether a variable's name says it holds a secret."""
-    if SECRET_NAME.search(name):
+    upper = name.upper()
+    if upper in NOT_SECRET_NAMES:
+        return False
+    if SECRET_NAME.search(name) or upper.startswith(SESSION_PREFIXES):
         return True
+    # A number is its own word and drops to "", so `last` is the last word with letters.
     words = [re.sub(r"\d+$", "", w.upper())
              for w in re.findall(r"[A-Z]?[a-z]+\d*|[A-Z]+\d*(?![a-z])|\d+", name)]
+    real = [n for n, w in enumerate(words) if w]
+    last = real[-1] if real else -1
+
+    def after(n: int) -> str:
+        return next((w for w in words[n + 1:] if w), "")
+
     return any(n > 0 if w in LATER_WORD else
+               n > 0 and after(n) not in QUALIFIER if w in HELD_WORD else
+               0 < n == last and upper not in SESSION_NAMES if w == "SESSION" else
                bool(PASSWORD_WORD.fullmatch(w)) and w not in NOT_PASSWORD
                for n, w in enumerate(words))
+
 
 # An active virtualenv or conda env would make Poetry install into the owner's environment;
 # JVM and Node option variables can override user.home, the Maven or Gradle home, or preload a
