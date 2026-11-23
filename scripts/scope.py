@@ -419,6 +419,10 @@ def _coverage(repo: str, files: list[str], paths: list[str], parts: list[dict],
         for entry in stage.split(b"\0") if entry.startswith(b"160000 ") and b"\t" in entry))
     if stage is None:
         status = None
+    if paths:
+        # Only one this run covers: under a path, or holding one.
+        submodules = [s for s in submodules
+                      if _under(s, paths) or any(_under(p, [s]) for p in paths)]
     return {
         "submodules": submodules,
         "paths": paths,
