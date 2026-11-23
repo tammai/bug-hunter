@@ -267,3 +267,17 @@ def test_a_spec_gap_draft_that_cites_a_criterion_is_a_build_defect(make_repo, tm
         finding = json.loads(Path(result.stdout.strip()).read_text(encoding="utf-8"))
         assert (finding["class"], finding["criterion"], finding["rule"], finding["route"]) == \
             ("build-defect", criterion, rule, "sdlc"), expected
+
+
+def test_an_observed_check_must_be_a_pointer_and_a_bounded_value():
+    import finding_v1
+
+    fail = {"result": "fail", "step": 1, "message": "status 200, wanted 403"}
+    assert finding_v1.result_problem({**fail, "check": {"pointer": "/a", "value": 1}}) is None
+    for bad in ({"pointer": "/a"}, {"pointer": 1, "value": 1},
+                {"pointer": "/a", "value": 1, "extra": 2}, "not a dict"):
+        assert finding_v1.result_problem({**fail, "check": bad}), bad
+    # The value's JSON is capped at 500 characters: 498 letters plus the quotes fit, 499 don't.
+    fits = {"pointer": "/a", "value": "x" * 498}
+    assert finding_v1.result_problem({**fail, "check": fits}) is None
+    assert finding_v1.result_problem({**fail, "check": {**fits, "value": "x" * 499}})

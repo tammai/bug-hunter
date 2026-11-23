@@ -812,3 +812,16 @@ def test_account_left_out_of_a_later_mint_keeps_its_token(make_repo, tmp_path):
     finally:
         stop(proxy, stub)
     assert sent_seats(stub_log) == ["bob-Kq91Zx", "bob-Kq92Zx", "alice-Kq91Zx"]
+
+
+def test_a_path_still_decoding_after_the_round_cap_leaves_the_base():
+    import live_proxy
+
+    def encoded(times):
+        path = "%41"
+        for _ in range(times):
+            path = path.replace("%", "%25")
+        return "/a" + path
+
+    assert not live_proxy._leaves_base(encoded(3))  # settles to /aA
+    assert live_proxy._leaves_base(encoded(live_proxy.MAX_DECODES + 1))
