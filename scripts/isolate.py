@@ -16,6 +16,26 @@ from pathlib import Path
 SECRET_NAME = re.compile(
     r"(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL|AUTH)", re.I
 )
+# Short password spellings count only as a whole word of the name (split on `_` and camelCase,
+# trailing digits dropped): a word that is or ends in PASS or PWD, so the shell's PWD and
+# OLDPWD, COMPASS_DIR, BYPASS_LIST and SSH_ASKPASS stay.
+PASSWORD_WORD = re.compile(r"\w*PASS|\w*PWD|PASSPHRASE|PASSCODE|PASSCOMMAND|PASSCMD")
+NOT_PASSWORD = {"BYPASS", "COMPASS", "ENCOMPASS", "SURPASS", "TRESPASS", "OVERPASS",
+                "UNDERPASS", "ASKPASS", "OLDPWD"}
+# Not as a name's first word: PWD is the shell's working folder, PW_ is Playwright's prefix.
+LATER_WORD = {"PW", "PWD"}
+
+
+def _secret_name(name: str) -> bool:
+    """Whether a variable's name says it holds a secret."""
+    if SECRET_NAME.search(name):
+        return True
+    words = [re.sub(r"\d+$", "", w.upper())
+             for w in re.findall(r"[A-Z]?[a-z]+\d*|[A-Z]+\d*(?![a-z])|\d+", name)]
+    return any(n > 0 if w in LATER_WORD else
+               bool(PASSWORD_WORD.fullmatch(w)) and w not in NOT_PASSWORD
+               for n, w in enumerate(words))
+
 # An active virtualenv or conda env would make Poetry install into the owner's environment;
 # JVM and Node option variables can override user.home, the Maven or Gradle home, or preload a
 # script; custom mise config files would bring back their [env] secrets.
@@ -257,7 +277,7 @@ def _plan(scratch: Path, env: dict[str, str],
         if fold(k) not in exported and fold(k) != "PATH" and str(real).strip("/")
         and any(_points_into(v, root) for root in roots)
     }
-    secrets = {k for k in env if SECRET_NAME.search(k)}
+    secrets = {k for k in env if _secret_name(k)}
     respelled = {k for k in env if fold(k) in exported and k not in exports}
     named = {k for k in env if fold(k) in always or fold(k).startswith(GIT_PREFIX)}
     unset = {
