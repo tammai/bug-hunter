@@ -517,3 +517,17 @@ def test_integrations_are_read_only_for_kept_parts(make_repo, monkeypatch, capsy
     assert oracle._main(["scope", str(repo), "--oracle", str(repo / "spec"), "--max", "1"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert seen == [out["parts"][0]["files"]]
+
+
+def test_deeply_nested_spec_json_is_one_error_line_or_ignored(make_repo):
+    deep = "[" * 100000 + "]" * 100000
+    repo = hunted_repo(make_repo)
+    (repo / "spec" / "openapi.json").write_text(deep, encoding="utf-8")
+    (repo / ".sdlc").mkdir(exist_ok=True)
+    (repo / ".sdlc" / "config.json").write_text(deep, encoding="utf-8")
+    result, parts = scope(repo)
+    assert result.returncode == 0 and "Traceback" not in result.stderr, result.stderr
+    (repo / "spec" / "criteria.lock.json").write_text(deep, encoding="utf-8")
+    result, _ = scope(repo)
+    assert result.returncode == 1 and result.stderr.startswith("error:"), result.stderr
+    assert result.stderr.count("\n") == 1 and "Traceback" not in result.stderr
