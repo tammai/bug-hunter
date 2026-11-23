@@ -550,3 +550,18 @@ def test_git_reads_the_same_history_whatever_the_owners_git_setup(make_repo, tmp
     monkeypatch.setenv("GIT_CONFIG_KEY_1", "diff.algorithm")
     monkeypatch.setenv("GIT_CONFIG_VALUE_1", "patience")
     assert oracle._git(str(repo), *args) == clean
+
+
+def test_a_named_merge_and_its_named_branch_commits_count_once(make_repo):
+    repo = hunted_repo(make_repo)
+    merged = "docs/sdlc/changes/2026-01-06-m-merged.md"
+    commit(repo, {merged: "# merged\n\n## Acceptance criteria\n- **AC-001** → F-TSK-04.AC1\n"},
+           "Record")
+    git(repo, "checkout", "-q", "-b", "side")
+    commit(repo, {"src/merged.py": "a = 1\nb = 2\nc = 3\n"}, f"Build ({merged})")
+    git(repo, "checkout", "-q", "-")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "merge", "-q", "--no-ff", "side",
+        "-m", f"Merge side ({merged})")
+    _, out = scope(repo)
+    part = next(p for p in out["parts"] if p["feature"] == "F-TSK-04")
+    assert part["files"] == ["src/merged.py"] and part["changed_lines"] == 3, part
