@@ -84,6 +84,9 @@ SCRIPT_ONLY = [
 ]
 UNCONFIRMED = re.compile(r"VERDICT: (?:NOT CONFIRMED|CANNOT CHECK)\b.*")
 NO_FIX = ("no fix released yet", "see the advisory")
+# Where a version label ranks against its release (4); an unknown label counts as a pre-release.
+PRE_RELEASE = {"dev": 0, "a": 1, "alpha": 1, "b": 2, "beta": 2, "c": 3, "rc": 3, "pre": 3,
+               "preview": 3, "post": 5, "p": 5, "pl": 5, "patch": 5}
 
 
 class _Malformed(Exception):
@@ -384,16 +387,16 @@ def _osv_fix(vulns: list[dict], package: str, installed: str) -> str:
 
 
 def _version_key(version: str) -> tuple:
-    """Release numbers, then a pre-release (rc1, -beta.2) below the release it leads to."""
+    """Release numbers, then dev < alpha < beta < rc < the release < a post or patch release."""
     found = re.match(r"v?(\d+(?:\.\d+)*)[.\-_]?(.*)", version)
     if not found:
         return ((), 0, [(1, version)])
     release = tuple(int(n) for n in found[1].split("."))
-    rest = found[2].split("+", 1)[0]
-    final = 0 if rest and not rest.startswith("post") else 1
-    return (release, final, [(0, int(part)) if part.isdigit() else (1, part)
-                             for part in re.split(r"[.\-_]|(?<=\d)(?=\D)|(?<=\D)(?=\d)",
-                                                  rest) if part])
+    parts = [p for p in re.split(r"[.\-_]|(?<=\d)(?=\D)|(?<=\D)(?=\d)",
+                                 found[2].split("+", 1)[0].lower()) if p]
+    label = next((p for p in parts if not p.isdigit()), None)
+    stage = (PRE_RELEASE.get(label, 3) if label else 4) if parts else 4
+    return (release, stage, [(0, int(p)) if p.isdigit() else (1, p) for p in parts])
 
 
 def _from_osv_scanner(data: object, lockfile: str) -> list[str]:
@@ -424,7 +427,8 @@ def _from_osv_scanner(data: object, lockfile: str) -> list[str]:
                 {"ids": [v.get("id"), *(v.get("aliases") or [])]} for v in vulns]
             for group in groups:
                 ids = [str(i) for i in group["ids"] if isinstance(i, str)]
-                members = [v for v in vulns if v.get("id") in ids]
+                members = [v for v in vulns if v.get("id") in ids
+                           or set(v.get("aliases") or []) & set(ids)]
                 for v in members:
                     ids += [str(a) for a in v.get("aliases") or [] if isinstance(a, str)]
                 ids = list(dict.fromkeys(ids))
@@ -442,7 +446,8 @@ def _from_osv_scanner(data: object, lockfile: str) -> list[str]:
                     package["name"], _osv_severity(members, group, ids),
                     str(primary.get("summary") or primary.get("id") or ids[0]), cwe,
                     advisory, str(package.get("version", "?")),
-                    _osv_fix(members, package["name"], str(package.get("version", ""))),
+                    _osv_fix(members, package["name"], str(package.get("version", "")))
+                    if members else NO_FIX[1],
                     lockfile, OSV_SOURCE))
     return found
 

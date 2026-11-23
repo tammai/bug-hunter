@@ -1,5 +1,5 @@
 # 2026-11-23-l-audit-stack-coverage
-Status: active
+Status: done
 Process: 3
 Change: docs/sdlc/changes/2026-11-23-l-audit-stack-coverage.md   (this feature's record for people)
 Track: L   (sized up because: three distinct parts (checklists, OSV-Scanner, Semgrep leads); design settled in brainstorm; footprint: 14 files)
@@ -10,13 +10,13 @@ Started: 2026-11-23
 Base: 1c57684
 Owner: tam.mai@bigin.vn
 Tool: claude-code
-Verified: 2d58fa6 tree 793d6ff7d63d03d4f4bb55d2a49b5de637a11a6e
-Current: Stage 3 – Review
+Verified: 727f32a tree ebc293ccbb818e9e855830c018a5e4fba4d6217c
+Current: Stage 4 – Ship
 
 ## Stages
 - [x] 1 Define   — the change file, the plan sections below
 - [x] 2 Build
-- [ ] 3 Review   — the change file's ## Review
+- [x] 3 Review   — the change file's ## Review
 - [ ] 4 Ship     — PR: (Learn: knowledge, recurring-defects.md)
 
 ## How the build runs
@@ -45,6 +45,7 @@ inline, three parts in order (B1, B2, B3), a verify and a commit after each; rev
 ## Gate log
 - 2026-11-23 Stage 1: pass — design approved by the owner (L, high risk); dev-only deps excluded where marked
 - 2026-11-23 Stage 2: pass
+- 2026-11-23 Stage 3: pass
 
 ## Deviations
 - 2026-11-23 test-change tests/test_audit_stack_coverage.py What: imports sorted (ruff I001). Why: lint. Effect: no assertion changed.

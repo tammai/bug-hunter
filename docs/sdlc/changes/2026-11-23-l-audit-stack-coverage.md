@@ -116,3 +116,25 @@ The owner runs `/audit` by hand before deploying and wants a verdict they can sh
 - govulncheck reachability; pip-audit and cargo-audit (OSV covers their lockfiles).
 - `bun.lockb` (binary; OSV can't read it): stays a gap.
 - Live `/audit --target` (project 3); CI.
+
+## Review
+
+- **Recommended and chosen:** security and code, because risk is high (untrusted target data reaching a shell, paths and the verdict) and the change adds public commands (`findings.py from-osv-scanner`, `from-semgrep`); chosen by the trigger list (L runs both without asking). Round 3 by the owner's `Review cap` answer ("One more round").
+- **Verdicts:**
+  - Round 1: `.sdlc/.work/findings/2026-11-23-l-audit-stack-coverage/security-r1.md` → FAIL — SEC-01, SEC-02, SEC-03, SEC-04; `code-reviewer-r1.md` → FAIL — H1, H2, H3, H4, M1, M2.
+  - Round 2: `security-r2.md` → PASS; `code-reviewer-r2.md` → FAIL — M1-r2, M2-r2.
+  - Round 3 (closing): `code-reviewer-r3.md` → PASS.
+- **Fixed:**
+  - **SEC-01 / H1** (lead check keyed on the word "semgrep"): `check --agent` and `suspects` take `--leads`; a finding naming a lead's whole rule id, "semgrep" after NFKC folding without format characters, or a lead's `path:line` needs Proof traced/proven and two `_spots`. Tests: `test_a_lead_named_by_rule_id_or_disguised_word_needs_a_trace`, `test_a_finding_at_a_lead_spot_needs_a_second_spot`.
+  - **SEC-02 / H2** (target file names on the Semgrep shell line; offline flag composed from prose): `scope.py` emits the `semgrep` step (scans `.` in the copy) and each OSV audit's `step_offline`. Test: `test_scope_emits_the_semgrep_and_offline_steps`, `test_audit_command_runs_only_scripted_steps`.
+  - **SEC-03 / M8** (unrated advisories didn't block): worst rating wins, `MAL-` critical, unrated high. Test: `test_malicious_and_unrated_advisories_block`.
+  - **SEC-04 / M3** (id-less findings moved to fixed): kept open while their package is reported; "superseded" only for npm's `see npm audit` entries. Tests: `test_an_id_less_finding_stays_open_while_osv_reports_its_package`, `test_a_fixed_advisory_moves_to_fixed_while_its_package_has_another`.
+  - **SEC-05 / M5** (target `osv-scanner.toml` hides advisories, probed: all 9 hidden): `--config scripts/osv-scanner-empty.toml` on every run.
+  - **SEC-06 / M4** (failed OSV run reads clean, probed: exit 127 with `{"results": []}`): `from-osv-scanner --exit` required, only 0 or 1 accepted. Test: `test_osv_conversion_refuses_a_failed_run`.
+  - **M6** (offline database unreachable under isolation): `step_offline` sets `OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY` to the owner's cache folder, read before isolation.
+  - **M7** (OSV rejects `go.sum`, probed): scanned through the sibling `go.mod`, `go.sum` stays the audited lockfile.
+  - **H3**: `NoDefaultCurrentDirectoryInExePath` before `shutil.which`. **H4 / SEC-08**: every `error:` line escaped and capped (`_error_text`). **M1 / SEC-09**: case-sensitive, per-database advisory id formats. **M2 / M2-r2 / L1-r3 / L4-r2**: fix version is the lowest above the installed one; GIT ranges skipped; pre-release labels ranked (dev < alpha < beta < rc < release < post/patch); `v` prefixes. **SEC-07**: only all-dev packages dropped. **M1-r2**: ids kept in their own case. **M4-r2 / L2-r3 / L3-r3**: groups match records by id or alias; a group with no record is high with "see the advisory". **L4**: missing `leads_run` reads as not run. **L6**: checklist facts in rust.md, go.md, python.md, php.md.
+- **Tickets:** None as follow-up work. Accepted as is: L2 (transitive npm findings flap when runs alternate between OSV and the npm fallback; both readings are recorded honestly), L5 (`host:8080` counts as a spot without `--repo`; `/audit` always passes `--repo`), SEC-R2-02 (a paraphrased lead with a spot one line off still passes `check`; the verifier still screens every agent finding), L3-r2 (a lead line cut at 500 characters can lose its spot), L1-r2/L4-r3 (the planted-tool test only bites on Windows; it runs there in CI).
+- **Drift and manual checks:** every Deviations line in `.sdlc/state/2026-11-23-l-audit-stack-coverage.md` (test-order lint, scope-test PATH pinning, node.md items, one-pass build, writer subagent, README, the locked-test `--exit`/go.mod change with a fresh red at `1c57684`, Semgrep scanning `.`, the design points not built, the empty OSV config file, the review-fix test file). Manual: OSV-Scanner behaviour probed on synthetic lockfiles (exit codes 0/1/127, `dependency_groups` for dev/devOptional, `go.mod` vs `go.sum`, config override). Not exercised: a real offline run with a downloaded database.
+- **Security:** M1-r3 / SEC-R2-01 (Go call analysis sending the module list while "offline"): `osv-scanner scan source --help` shows call analysis is opt-in (`--call-analysis=go` enables it), so the offline step doesn't run it; `--no-resolve` added to the database download command. No dependency audit applies (stdlib only).
+- **Lessons filed:** five lines in `docs/sdlc/recurring-defects.md` (scanner exit code, target-owned scanner config, one-word output guards, unrated severity, unmatched keys moved to fixed).

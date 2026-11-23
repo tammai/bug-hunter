@@ -4,6 +4,7 @@
 
 ### Added
 
+- **`/audit` stack coverage** ([change](docs/sdlc/changes/2026-11-23-l-audit-stack-coverage.md)). Checklists for React, TypeScript, Go, Rust, Python and PHP, and OWASP 2025 A04 and A06–A10 sections in `generic.md`. OSV-Scanner audits every lockfile it reads (dev-only packages left out, online or offline by the owner's choice, an empty config so the target's own `osv-scanner.toml` can't hide advisories); without it, npm and composer audit as before. Semgrep hits become per-part leads (`findings.py from-semgrep`) that an auditor must confirm with its own trace; `check --agent --leads` refuses a finding that rests on a lead without one. `findings.py from-osv-scanner --exit` refuses a failed run. An unrated advisory is high and a malicious-package (`MAL-`) advisory critical.
 - **`/audit` ends with a deploy verdict** ([change](docs/sdlc/changes/2026-11-20-m-audit-verdict.md)). `REPORT.md` opens with **Blocked**, **Not verified** or **Safe to deploy**, computed by `findings.py report` from the findings, `scope.py`'s coverage facts, the run's facts and the re-check. Every coverage gap is named. Safe names the commit and date it covers.
 - **Earlier findings are re-checked each run.** `findings.py earlier` lists them, a `finding-verifier` in re-check mode checks each, and `findings.py recheck` moves fixed ones to `audit/fixed/`. Committed secrets stay open until rotated.
 - **`accepted.md`** beside `policy.md`: `- NN until YYYY-MM-DD: <reason>`, or `- NN rotated: <note>` for a secret.

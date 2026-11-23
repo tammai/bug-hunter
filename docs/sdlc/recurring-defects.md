@@ -62,3 +62,8 @@ One line per defect: what it looks like, then the severity.
 - "git found nothing in history" read as "never committed" when git couldn't see all history (a shallow, partial or grafted clone, replace refs, a timeout); answer "can't say" and make it a gap: high
 - A value cleaner that splits a list on separators before stripping credentials, so a password containing the separator (or digits that read as a port) leaves a fragment: high
 - An exemption chosen from a variable's name alone, without checking what its value is (`BASH_FUNC_` with a non-function value): high
+- An external scanner's JSON read without its exit code: a failed run (no offline database, a file it can't parse) still prints an empty result that reads as clean; accept only the exit codes that mean it scanned: high
+- A scanner run on the target repo that also reads the repo's own config (`osv-scanner.toml` ignore entries and the like), so the target can hide its own findings; pass an empty config the plugin owns: high
+- A guard on agent output keyed on one word the agent can leave out or disguise (a tool's name, while its rule ids, look-alike letters or zero-width characters pass); key it on the run's own data (ids, `path:line`) over NFKC-folded text: high
+- An unrated or unknown-severity advisory defaulting to a severity that doesn't block (medium), so a malicious or unrated package reads Safe to deploy; unrated is high, `MAL-` is critical, take the worst rating: high
+- A stored finding moved to fixed because its key (an advisory id the matcher doesn't recognise) can't be matched to this run's output; with no usable key, keep it open while its package is still reported: high

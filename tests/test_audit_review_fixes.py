@@ -120,7 +120,10 @@ def test_fix_version_is_above_the_installed_one(tmp_path):
     assert "upgrade pkg to 4.1.8" in text and "3.2.20" not in text and "abc123" not in text
     for installed, fixed, expected in (("4.1.5-rc.1", "4.1.5", "4.1.5"),
                                        ("2.0.0rc1", "2.0.0", "2.0.0"),
-                                       ("v1.2.3", "v1.2.4", "v1.2.4")):
+                                       ("v1.2.3", "v1.2.4", "v1.2.4"),
+                                       ("1.0.0-beta3", "1.0.0-RC1", "1.0.0-RC1"),
+                                       ("2.0.dev1", "2.0a1", "2.0a1"),
+                                       ("1.0.0", "1.0.0-p1", "1.0.0-p1")):
         ranges = [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": fixed}]}]
         name = installed.replace(".", "_")
         result, files = osv_findings(tmp_path, osv_one(version=installed, ranges=ranges), name)
@@ -188,7 +191,8 @@ def test_scope_ignores_a_tool_planted_in_the_repo(make_repo, tmp_path):
     planted.chmod(0o755)
     keep = dict.fromkeys(str(Path(p).parent) for p in (sys.executable, shutil.which("git")))
     env = dict(os.environ, PATH=os.pathsep.join(keep))
-    env.pop("NoDefaultCurrentDirectoryInExePath", None)
+    for name in [k for k in env if k.upper() == "NODEFAULTCURRENTDIRECTORYINEXEPATH"]:
+        del env[name]
     result = run_script("scope", repo, "--focus", "security", cwd=repo, env=env)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["tools"]["osv-scanner"]["found"] is False
@@ -239,3 +243,13 @@ def test_odd_osv_shapes(tmp_path):
     texts = [f.read_text(encoding="utf-8") for f in files]
     lone = next(t for t in texts if "GHSA-zzzz-yyyy-xxxx" in t)
     assert "**Severity:** high" in lone and "GHSA-aaaa-bbbb-cccc" not in lone
+
+
+def test_a_group_naming_an_alias_keeps_its_record(tmp_path):
+    data = osv_one(severity="CRITICAL", ids=("GHSA-aaaa-bbbb-cccc", "CVE-2024-12345"))
+    data["results"][0]["packages"][0]["groups"] = [{"ids": ["CVE-2024-12345"]}]
+    assert severity_of(tmp_path, data, "alias") == "critical"
+    orphan = osv_one(severity="LOW")
+    orphan["results"][0]["packages"][0]["groups"] = [{"ids": ["GHSA-zzzz-yyyy-xxxx"]}]
+    _, files = osv_findings(tmp_path, orphan, "unknownfix")
+    assert "see the advisory" in files[0].read_text(encoding="utf-8")
