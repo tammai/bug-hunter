@@ -295,8 +295,8 @@ def _make(repo: Path, dest: Path, base: Path | None = None) -> str | None:
         return f"git clone failed: {clone.stderr.decode(errors='replace').strip()}"
     # Without this, a repro's `git push` would write into the real repo.
     if _git("-C", str(dest), "remote", "remove", "origin").returncode != 0:
-        _rmtree(dest)
-        return "couldn't remove the copy's origin remote, which points at the real repo"
+        return _discard(dest, "couldn't remove the copy's origin remote, which points at the "
+                              "real repo")
 
     # Pinned options, since the owner's diff config (noprefix, color, external tools) would
     # otherwise give a patch that git apply can't read.
@@ -305,31 +305,36 @@ def _make(repo: Path, dest: Path, base: Path | None = None) -> str | None:
         "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
     )
     if diff.returncode != 0:
-        _rmtree(dest)
-        return "couldn't read the repo's uncommitted changes"
+        return _discard(dest, "couldn't read the repo's uncommitted changes")
     if diff.stdout:
         applied = _git("-C", str(dest), "apply", "--whitespace=nowarn", input=diff.stdout)
         if applied.returncode != 0:
-            _rmtree(dest)
-            return "couldn't apply the repo's uncommitted changes to the copy"
+            return _discard(dest, "couldn't apply the repo's uncommitted changes to the "
+                                  "copy")
 
     if why := _refuse_escaping_links(dest):
         return why
     (dest / ".git" / MARKER).write_text(str(repo), encoding="utf-8")
     sealed = _seal(dest)
     if sealed is None:
-        _rmtree(dest)
-        return "couldn't read the copy's .git and status to seal it"
+        return _discard(dest, "couldn't read the copy's .git and status to seal it")
     (dest / ".git" / SEAL).write_text(sealed, encoding="utf-8")
     return None
 
 
+def _discard(dest: Path, why: str) -> str:
+    """Remove a refused copy; when that fails too, the reason still reaches the owner."""
+    try:
+        _rmtree(dest)
+    except OSError as exc:
+        return f"{why}; the partial copy at {dest} couldn't be removed: {exc}"
+    return why
+
+
 def _refuse_escaping_links(dest: Path) -> str | None:
     if links := _escaping_links(dest):
-        _rmtree(dest)
-        return "symlinks point outside the copy, so code run in it could change files there: " + (
-            ", ".join(links)
-        )
+        return _discard(dest, "symlinks point outside the copy, so code run in it could "
+                              "change files there: " + ", ".join(links))
     return None
 
 
@@ -406,11 +411,10 @@ def _copy_base(repo: Path, base: Path, dest: Path) -> str | None:
         _rmtree(dest, ignore_errors=True)
         shutil.copytree(base, dest, symlinks=True)
     if _git_links(dest) or _git_points_out(dest / ".git"):
-        _rmtree(dest)
-        return "the copy's .git changed while copying to reach outside the copy"
+        return _discard(dest, "the copy's .git changed while copying to reach outside the "
+                              "copy")
     if not _unchanged(base, sealed):
-        _rmtree(dest)
-        return changed
+        return _discard(dest, changed)
     return _refuse_escaping_links(dest)
 
 

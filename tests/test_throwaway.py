@@ -623,3 +623,23 @@ def test_a_file_that_was_untracked_in_the_base_at_birth_is_sealed_by_content(mak
     (base / "n.py").write_text("new = 2\n", encoding="utf-8")
     result, dest = copy_from(repo, base, tmp_path, "after")
     assert_refused(result, dest, "changed after it was made")
+
+
+def test_a_refusal_whose_cleanup_fails_says_both(make_repo, tmp_path, monkeypatch, capsys):
+    import throwaway
+
+    repo = make_repo({"a.py": ""})
+    commit(repo)
+    dest = tmp_path / "copy"
+
+    def locked(path, ignore_errors=False):
+        if not ignore_errors:
+            raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(throwaway, "_escaping_links", lambda d: ["escape -> /outside"])
+    monkeypatch.setattr(throwaway, "_rmtree", locked)
+    assert throwaway._main([str(repo), str(dest)]) == 1
+    err = capsys.readouterr().err
+    assert "symlinks point outside the copy" in err and "escape" in err
+    assert str(dest) in err and "Permission denied" in err
+    assert err.count("\n") == 1
