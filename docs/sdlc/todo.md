@@ -40,7 +40,6 @@
 
 - [x] Make the test suite pass on Windows: the 19 Windows-only failures in `.sdlc/baseline.md` (fake `gh` that Windows can run without passing titles through `cmd.exe`, `USERPROFILE` in the drafts and findings fixtures, POSIX-mode asserts, read-only git objects, CRLF and forbidden names in fixtures, symlink privilege), then add a `windows-latest` CI runner — left out of the Windows isolation change on purpose; 2026-11-06-m-windows-isolation (2026-11-06). Done in 2026-11-22-m-windows-suite (2026-11-22); two 3.12-only skips remain
 - [ ] `post.py` hangs instead of refusing a locked drafts folder on Windows with Python 3.12: `tempfile.mkstemp` retries a refused create up to `os.TMP_MAX` (2^31) times there, because `os.access` can't see a deny ACL (3.13+ stops after 20). The two `tests/test_post.py` lock tests skip on 3.12 and stay in `.sdlc/baseline.md` until this is fixed. Found by the first `windows-latest` run in 2026-11-22-m-windows-suite (2026-11-22)
-- [ ] `throwaway.py`: when cleaning up a refused copy fails, `_main` prints only "couldn't copy: <error>", so the refusal reason is lost and the partial copy left at dest isn't named. Catch the cleanup failure next to the refusal and say both. Review r1 L1 of 2026-11-22-m-windows-suite (2026-11-22)
 - [ ] `throwaway.py`'s `_clear_read_only` repeats `scratch.py`'s Windows read-only helper (`_clear_read_only` / `_remove_tree_windows`); share one. Review r2 L-a of 2026-11-22-m-windows-suite (2026-11-22)
 - [ ] The Windows half of `throwaway.py`'s `_rmtree` is tested mostly by monkeypatching `WINDOWS` on POSIX, and nothing tests a WinError 32 sharing violation (an antivirus scanner holding a fresh pack open). Add a Windows-run test, and a bounded retry if CI ever shows WinError 32. Review r2 L-b of 2026-11-22-m-windows-suite (2026-11-22)
 - [x] Small `isolate.py` follow-ups from the Windows isolation review:
@@ -88,6 +87,7 @@
 
 ## Done
 
+- [x] `throwaway.py`: when cleaning up a refused copy fails, `_main` prints only "couldn't copy: <error>", so the refusal reason is lost and the partial copy left at dest isn't named. Catch the cleanup failure next to the refusal and say both. Review r1 L1 of 2026-11-22-m-windows-suite (2026-11-22) Done in 2026-11-23-s-throwaway-cleanup-message (2026-11-23)
 - [x] `/audit` verdict follow-ups, from the reviews of 2026-11-20-m-audit-verdict (R3-3, R3-5, R3-6, SR3-4, N4, N8, SR2-9, M6, N9, N11, N12, SR2-5, SR3-2, S6, SR3-6, S8, F3) (2026-11-22). Done in 2026-11-22-m-audit-verdict-followups; its review tickets are the open item above (2026-11-22)
 
 - [x] Won't fix, known limits or kept by decision (closed in the plan for the week of 2026-11-23, with the owner's OK) (2026-11-20)
