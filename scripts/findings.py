@@ -1041,7 +1041,7 @@ def _suspects(folder: Path, rejected: list[dict]) -> list[str]:
 
 
 def _report(folder: Path, meta: dict | None, scope: dict | None = None,
-            recheck: dict | None = None) -> str:
+            recheck: dict | None = None, sealed: bool = True) -> str:
     today = datetime.date.today()
     good, skipped, written = [], [], {}
     for number, path in _open(folder):
@@ -1091,6 +1091,14 @@ def _report(folder: Path, meta: dict | None, scope: dict | None = None,
     if gaps:
         out += ["Coverage gaps (each keeps this from reading Safe to deploy):",
                 *[f"- {g}" for g in gaps], ""]
+    # Without the seal, an edit made during the run (an acceptance, the policy, a finding)
+    # isn't ruled out; the verdict's facts are the same, so a note rather than a gap.
+    if meta is not None and not sealed:
+        out += ["Note: this report ran without --seal, so an edit to accepted.md, policy.md or "
+                "a finding during the run isn't ruled out.", ""]
+    if recheck is not None and recheck.get("sealed") is False:
+        out += ["Note: the re-check ran without --seal, so an edit made before it moved "
+                "findings isn't ruled out.", ""]
     if meta is not None and meta.get("leads_run") is not True:
         out += ["Note: Semgrep leads not run (not installed or it failed); the auditors read "
                 "every part from its checklists alone. This doesn't change the verdict.", ""]
@@ -1562,6 +1570,7 @@ def _main(argv: list[str] | None = None) -> int:
                               Path(args.found) if args.found else None, verdicts,
                               args.secrets_scanned, args.audited,
                               Path(args.repo) if args.repo else None)
+            result["sealed"] = args.seal is not None
             _write_private(Path(args.out), json.dumps(result, indent=2) + "\n")
             for kind in ("fixed", "still_open", "cannot_check", "not_rechecked"):
                 print(f"{kind}: {len(result[kind])}")
@@ -1611,7 +1620,8 @@ def _main(argv: list[str] | None = None) -> int:
         scope = _check_scope(_load(args.scope)) if args.scope else None
         recheck = _check_recheck(_load(args.recheck)) if args.recheck else None
         _write_private(Path(args.dir) / "REPORT.md",
-                       _report(Path(args.dir), meta, scope, recheck))
+                       _report(Path(args.dir), meta, scope, recheck,
+                               sealed=args.seal is not None))
         return 0
     except _Malformed as exc:
         print(f"error: {_error_text(exc)}", file=sys.stderr)

@@ -76,7 +76,7 @@
   - the report should explain a pre-id finding kept open by a same-shape sibling, and tell the owner to close it with a `rotated` line once the key is rotated (L-A, L-1);
   - `history_unknown` reaches the report only because `/audit` copies it into `meta.json`; carry it by script (R3-L4, M-2);
   - this run's own files in `$RUN` (scope, converted findings, verdicts) aren't sealed (SEC-3);
-  - a `recheck`, `dedupe` or `report` run without `--seal` leaves no trace in the report (L4);
+  - a `dedupe` run without `--seal` leaves no trace in the report (L4; `recheck` and `report` done in 2026-11-23-s-report-unsealed-note);
   - single-branch clones (R3-L3's submodule half done in 2026-11-23-s-scope-submodules-in-paths);
   - `GIT_NO_LAZY_FETCH`'s floor is kept at 2.45.1 as a margin until 2.44.0 is confirmed (L-B);
   - test gaps: the filter and transport tests are skipped on Windows (L7); simplifications (L5); L-4, L-5, L-6 (`drafts.drafts_dir` reads the environment).
