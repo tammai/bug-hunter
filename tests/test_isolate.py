@@ -1228,3 +1228,32 @@ def test_proxy_credentials_are_dropped_and_routing_kept(tmp_path):
     for name, (_, expected) in wanted.items():
         assert folded[name.upper() if WINDOWS else name] == expected, name
     assert not [k for k, v in got.items() if "hunter2" in v or "ter2@" in v or "justme" in v]
+
+
+def test_password_variables_with_short_names_are_dropped(tmp_path):
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "home"),
+           "PROXY_PASS": "x", "PROXY_PWD": "x", "SSHPASS": "x", "MYSQL_PWD": "x",
+           "DB_PASS_FILE": "x", "COMPASS_DIR": "/opt/compass", "BYPASS_LIST": "a,b",
+           **({"SYSTEMROOT": os.environ["SYSTEMROOT"]} if os.name == "nt" else {})}
+    got = isolated_env(scratch, env)
+    for gone in ("PROXY_PASS", "PROXY_PWD", "SSHPASS", "MYSQL_PWD", "DB_PASS_FILE"):
+        assert gone not in got, gone
+    assert got["COMPASS_DIR"] == "/opt/compass" and got["BYPASS_LIST"] == "a,b"
+
+
+@pytest.mark.parametrize("name", ["PROXY_PASS", "PROXY_PWD", "SSHPASS", "MYSQL_PWD",
+                                  "DB_PASS_FILE", "GPG_PASSPHRASE", "DB_PASS2", "DBPASS",
+                                  "REDISPASS", "proxyPass", "DB_PW", "VPN_PASSCODE",
+                                  "MAIL_PASSCOMMAND", "pass", "VPNPASS", "SMBPASS", "DBPWD",
+                                  "ROOTPWD", "DB_PWD2", "SMTP_PW1"])
+def test_short_password_names_count_as_secrets(name):
+    assert isolate._secret_name(name), name
+
+
+@pytest.mark.parametrize("name", ["PWD", "OLDPWD", "COMPASS_DIR", "BYPASS_LIST", "PW_TEST_HTML",
+                                  "PLAYWRIGHT_BROWSERS_PATH", "SSH_ASKPASS", "PATH", "HOME",
+                                  "PASSENGER_ENV", "PWDEBUG", "ENCOMPASS_HOME", "SURPASS"])
+def test_ordinary_names_are_not_secrets(name):
+    assert not isolate._secret_name(name), name

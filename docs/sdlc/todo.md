@@ -59,7 +59,7 @@
 
   Done in 2026-11-22-m-isolate-followups (2026-11-22); `GIT_SSL_CAPATH` and `GIT_PROXY_SSL_CAINFO` stay declined. Its review tickets are the next item.
 - [ ] `isolate.py` review tickets from 2026-11-22-m-isolate-followups (2026-11-22):
-  - secrets in names `SECRET_NAME` misses: `PROXY_PASS`, `PROXY_PWD`, `SSHPASS`, `MYSQL_PWD` (S3, CR1-7);
+  - secret names still not dropped: session tokens such as `OP_SESSION_<id>`, bare `*_KEY` (`STRIPE_KEY`), `*_PIN`, `PASSKEY`, `PSWD` (R2-2 of 2026-11-23-s-isolate-secret-names; the short password names are done there);
   - odd names for key or cert files: the owner decides whether they stop isolation (R2-3);
   - an odd PROXY name holding a harmless `@` stops isolation; it fails closed (R3-4);
   - `BASH_FUNC_token+x%%` is refused rather than removed; the safe side;
