@@ -36,13 +36,17 @@ class BadOracle(ValueError):
 
 def _git(repo: str, *args: str, stdin: str | None = None) -> str:
     # Pinned so a user's config can't change what is parsed (quoting, renames, colour,
-    # signatures, rename following).
+    # signatures, rename following, the root commit's and merges' diffs, line counts); no
+    # GIT_* variable passes, since GIT_DIR and its kin would point git at another repo.
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
     try:
         result = subprocess.run(
             ["git", "-C", repo, "-c", "core.quotepath=off", "-c", "color.ui=never",
-             "-c", "log.showSignature=false", "-c", "log.follow=false", *args],
+             "-c", "log.showSignature=false", "-c", "log.follow=false",
+             "-c", "log.showRoot=true", "-c", "log.diffMerges=separate",
+             "-c", "diff.algorithm=myers", *args],
             input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace",
-            env={**os.environ, "LC_ALL": "C"},  # untranslated, so the unborn case is known
+            env={**env, "LC_ALL": "C"},  # untranslated, so the unborn case is known
         )
     except FileNotFoundError:
         raise

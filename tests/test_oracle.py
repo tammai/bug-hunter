@@ -531,3 +531,22 @@ def test_deeply_nested_spec_json_is_one_error_line_or_ignored(make_repo):
     result, _ = scope(repo)
     assert result.returncode == 1 and result.stderr.startswith("error:"), result.stderr
     assert result.stderr.count("\n") == 1 and "Traceback" not in result.stderr
+
+
+def test_git_reads_the_same_history_whatever_the_owners_git_setup(make_repo, tmp_path,
+                                                                  monkeypatch):
+    import oracle
+
+    repo = hunted_repo(make_repo)
+    args = ("log", "-z", "--numstat", "--no-renames", "--format=%x01%H")
+    clean = oracle._git(str(repo), *args)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    git(elsewhere, "init", "-q")
+    monkeypatch.setenv("GIT_DIR", str(elsewhere / ".git"))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "log.showRoot")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "false")
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "diff.algorithm")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_1", "patience")
+    assert oracle._git(str(repo), *args) == clean
