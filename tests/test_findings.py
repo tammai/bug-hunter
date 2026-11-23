@@ -1726,3 +1726,20 @@ def test_a_pre_id_secret_whose_key_is_still_produced_is_never_fixed(tmp_path):
         path.rename(audit / f"{n:02d}.md")
     assert run(base, audit, scope, produced) == []
     assert (audit / "01.md").exists() and not (audit / "fixed" / "01.md").exists()
+
+
+def test_a_report_or_recheck_run_without_the_seal_says_so(tmp_path):
+    scope, meta, check = clean_facts(tmp_path)
+    audit = audit_with(tmp_path)
+    report = report_for(tmp_path, audit, scope, meta, check)
+    assert "without --seal" in report and "report" in report
+    seal = run_script("findings", "seal", audit).stdout.strip()
+    report = report_for(tmp_path, audit, scope, meta, check, extra=("--seal", seal))
+    assert "without --seal" not in report
+
+    rechecked = recheck(tmp_path, audit, scope)
+    assert rechecked["sealed"] is False
+    report = report_for(tmp_path, audit, scope, meta, rechecked, extra=("--seal", seal))
+    assert "re-check ran without --seal" in report
+    rechecked = recheck(tmp_path, audit, scope, "--seal", seal)
+    assert rechecked["sealed"] is True
