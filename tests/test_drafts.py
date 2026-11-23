@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 from pathlib import Path
 
 from conftest import rmtree, run_script
@@ -346,3 +347,55 @@ def test_a_bad_origin_error_never_prints_the_url(make_repo):
     assert result.returncode == 1 and result.stderr.startswith("error:"), result.stderr
     assert "s3cret" not in result.stderr and "user" not in result.stderr
     assert "origin" in result.stderr
+
+
+def test_drafts_folder_of_good_origins_is_unchanged():
+    import drafts
+
+    assert drafts._origin_parts("https://host/a/b.git") == ["host", "a", "b"]
+    assert drafts._origin_parts("https://user:tok@host:8443/a/b") == ["host", "a", "b"]
+    assert drafts._origin_parts("git@host:a/b.git") == ["host", "a", "b"]
+    assert drafts._origin_parts("ssh://git@host:22/a/b") == ["host", "a", "b"]
+    assert drafts._origin_parts("git@host:team/c#.git") == ["host", "team", "c#"]
+    assert drafts._origin_parts("ssh://git@host/srv/a?b") == ["host", "srv", "a?b"]
+    assert drafts._origin_parts("https://org@dev.azure.com/org/proj/_git/repo") == [
+        "dev.azure.com", "org", "proj", "_git", "repo"]
+
+
+def test_no_credential_reaches_the_drafts_folder(make_repo, fake_gh):
+    env, _ = fake_gh
+    for origin in ("https://user:p@ss@github.com/acme/web.git",
+                   "https://github.com/acme/web.git?private_token=s3cret",
+                   "https://github.com/acme/web.git#s3cret"):
+        repo = make_repo({}, origin=origin)
+        result = run_script("findings", "dir", repo, env=env)
+        assert result.returncode == 0, result.stderr
+        assert "ss@" not in result.stdout and "s3cret" not in result.stdout, origin
+        assert result.stdout.strip().replace("\\", "/").endswith(
+            "github.com/acme/web/audit"), result.stdout
+        rmtree(repo)
+
+
+def test_an_origin_with_userinfo_it_cant_delimit_is_refused(make_repo, fake_gh):
+    env, _ = fake_gh
+    for origin in ("user:p@ss@host:a/b", "https://ab/cd@github.com/acme/web",
+                   "https://user:12/34@github.com/a/b", "https://ab/cd/ef@github.com/acme/web",
+                   "https://user:12/a/b@host/x", "user:p/ss@host:a/b",
+                   "user:p/ss@host:repo.git", "https://ab/cd@host/", "https://host/acme/w@b",
+                   "https://ab/cd#ef@github.com/acme/web", "https://user:12/a?b@host/x"):
+        repo = make_repo({}, origin=origin)
+        result = run_script("findings", "dir", repo, env=env)
+        assert result.returncode == 1 and result.stderr.startswith("error:"), origin
+        for secret in ("ss@", "ab", "cd", "ef@", "user", "34", "b@host"):
+            assert secret not in result.stdout + result.stderr.split(":", 1)[1], origin
+        rmtree(repo)
+
+
+def test_a_repo_with_no_origin_and_an_at_in_its_name_keeps_its_folder(tmp_path, fake_gh):
+    env, _ = fake_gh
+    repo = tmp_path / "me@work"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    result = run_script("findings", "dir", repo, env=env)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().replace("\\", "/").endswith("local/me@work/audit")
