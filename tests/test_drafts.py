@@ -338,3 +338,11 @@ def test_default_port_loopback_target_is_found_either_way():
     assert leaks("curl http://localhost:80/x", _target("http://localhost"))
     assert leaks("curl http://localhost/api", _target("http://localhost:80"))
     assert leaks("curl http://localhost/api", _target("http://localhost:3000")) == []
+
+
+def test_a_bad_origin_error_never_prints_the_url(make_repo):
+    repo = make_repo({}, origin="https://user:s3cret-token@github.com/acme/../web.git")
+    result = run_script("findings", "dir", repo)
+    assert result.returncode == 1 and result.stderr.startswith("error:"), result.stderr
+    assert "s3cret" not in result.stderr and "user" not in result.stderr
+    assert "origin" in result.stderr

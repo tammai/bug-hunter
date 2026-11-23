@@ -44,7 +44,9 @@ def drafts_dir(repo: str) -> Path:
     # One folder level per URL part, so acme-web/api and acme/web-api never share a folder;
     # a "." or ".." part would climb out of ~/.bug-hunter.
     if any(part in ("", ".", "..") for part in parts):
-        raise ValueError(f"origin URL can't name a drafts folder: {result.stdout.strip()}")
+        # Not the URL itself: it can carry a user name and token.
+        raise ValueError("origin URL can't name a drafts folder: one of its path parts is "
+                         "empty, '.' or '..'")
     return Path.home().joinpath(".bug-hunter", *parts, "drafts")
 
 
