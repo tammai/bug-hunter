@@ -42,12 +42,15 @@ ONE_SPOT = GOOD.replace("- `src/services/orders.js:30` (findById without owner f
 def test_a_lead_named_by_rule_id_or_disguised_word_needs_a_trace(tmp_path):
     leads = leads_dir(tmp_path)
     for mention in ("Rule python.lang.security.audit.formatted-sql-query fired.",
-                    "The formatted-sql-query hit.",
                     "Flagged by ｓemgrep.", "Flagged by sem​grep."):
         text = ONE_SPOT.replace("## Impact\n", f"## Impact\n{mention}\n")
         result = check_agent(tmp_path, text, leads)
         assert result.returncode == 1 and "lead" in result.stdout.lower(), mention
     assert check_agent(tmp_path, ONE_SPOT, leads).returncode == 0
+    # A word a rule is named after isn't a citation of that rule.
+    words = ONE_SPOT.replace("## Impact\n",
+                             "## Impact\nAn open-redirect and a formatted-sql-query.\n")
+    assert check_agent(tmp_path, words, leads).returncode == 0
 
 
 def test_a_finding_at_a_lead_spot_needs_a_second_spot(tmp_path):
@@ -115,6 +118,14 @@ def test_fix_version_is_above_the_installed_one(tmp_path):
     assert result.returncode == 0, result.stderr
     text = files[0].read_text(encoding="utf-8")
     assert "upgrade pkg to 4.1.8" in text and "3.2.20" not in text and "abc123" not in text
+    for installed, fixed, expected in (("4.1.5-rc.1", "4.1.5", "4.1.5"),
+                                       ("2.0.0rc1", "2.0.0", "2.0.0"),
+                                       ("v1.2.3", "v1.2.4", "v1.2.4")):
+        ranges = [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": fixed}]}]
+        name = installed.replace(".", "_")
+        result, files = osv_findings(tmp_path, osv_one(version=installed, ranges=ranges), name)
+        assert result.returncode == 0, result.stderr
+        assert f"upgrade pkg to {expected}" in files[0].read_text(encoding="utf-8"), installed
 
 
 def test_an_id_less_finding_stays_open_while_osv_reports_its_package(tmp_path):
@@ -177,6 +188,7 @@ def test_scope_ignores_a_tool_planted_in_the_repo(make_repo, tmp_path):
     planted.chmod(0o755)
     keep = dict.fromkeys(str(Path(p).parent) for p in (sys.executable, shutil.which("git")))
     env = dict(os.environ, PATH=os.pathsep.join(keep))
+    env.pop("NoDefaultCurrentDirectoryInExePath", None)
     result = run_script("scope", repo, "--focus", "security", cwd=repo, env=env)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["tools"]["osv-scanner"]["found"] is False
@@ -196,3 +208,34 @@ def test_audit_command_runs_only_scripted_steps():
         assert words in after_yes, words
     assert "every part's files" not in after_yes
     assert "add `--offline" not in text
+
+
+def test_a_fixed_advisory_moves_to_fixed_while_its_package_has_another(tmp_path):
+    scope, _, _ = clean_facts(tmp_path)
+    old = scripted(tmp_path, "from-npm-audit", {"vulnerabilities": {"pkg": {
+        "name": "pkg", "severity": "high", "range": "<2",
+        "via": [{"title": "old bug", "url": "https://github.com/advisories/GHSA-aaaa-bbbb-cccc",
+                 "range": "<2"}], "fixAvailable": True}}}, "old")
+    audit = audit_with(tmp_path, old)
+    found = tmp_path / "found"
+    path = tmp_path / "osv.json"
+    path.write_text(json.dumps(osv_one(severity="LOW", ids=("GHSA-dddd-eeee-ffff",))),
+                    encoding="utf-8")
+    assert run_script("findings", "from-osv-scanner", path, found, "--lockfile",
+                      "package-lock.json", "--exit", "1").returncode == 0
+    result = recheck(tmp_path, audit, scope, "--found", found, "--audited", "package-lock.json")
+    assert [f["number"] for f in result["fixed"]] == ["01"], result
+
+
+def test_odd_osv_shapes(tmp_path):
+    result, files = osv_findings(tmp_path, {"results": [{"packages": None}]}, "null")
+    assert result.returncode == 0 and files == [], result.stderr
+    no_groups = osv_one(severity="CRITICAL")
+    del no_groups["results"][0]["packages"][0]["groups"]
+    assert severity_of(tmp_path, no_groups, "nogroups") == "critical"
+    orphan = osv_one(severity="LOW")
+    orphan["results"][0]["packages"][0]["groups"].append({"ids": ["GHSA-zzzz-yyyy-xxxx"]})
+    result, files = osv_findings(tmp_path, orphan, "orphan")
+    texts = [f.read_text(encoding="utf-8") for f in files]
+    lone = next(t for t in texts if "GHSA-zzzz-yyyy-xxxx" in t)
+    assert "**Severity:** high" in lone and "GHSA-aaaa-bbbb-cccc" not in lone

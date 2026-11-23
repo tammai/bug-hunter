@@ -33,7 +33,7 @@ Show the owner, in a few lines:
 - the re-check of earlier findings: one verifier per `recheck` number at about 30k each, and how many earlier findings are `outside` this run's scope;
 - the parts left out by `--max` (`skipped`), with security-relevant parts already first;
 - the dependency audits that will run (`audits`), by each entry's `tool`:
-  - `osv-scanner`: it sends each lockfile's package names and versions to osv.dev (never code or secrets). Ask the owner to choose **online** or **offline**: offline runs each entry's `step_offline`, which reads only the local database; the owner downloads it once, themselves, with `osv-scanner scan source --offline-vulnerabilities --download-offline-databases -r "<repo>"` (a large download). Without it, those lockfiles fail their audit and stay gaps, never sent online;
+  - `osv-scanner`: it sends each lockfile's package names and versions to osv.dev (never code or secrets). Ask the owner to choose **online** or **offline**: offline runs each entry's `step_offline`, which reads only the local database; the owner downloads it once, themselves, with `osv-scanner scan source --offline-vulnerabilities --download-offline-databases --no-resolve -r "<repo>"` (a large download). Without it, those lockfiles fail their audit and stay gaps, never sent online;
   - `npm` or `composer` (only when `tools.osv-scanner.found` is false): they send the dependency list to the npm or Packagist registry;
   - lockfiles with no audit are listed;
 - Semgrep (`tools.semgrep.found`): it runs the semgrep.dev registry rulesets for each part's stacks with `--metrics=off`; the rules are downloaded, and no code leaves the machine. Its hits are only leads the auditors must confirm;

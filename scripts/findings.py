@@ -378,14 +378,22 @@ def _osv_fix(vulns: list[dict], package: str, installed: str) -> str:
                 for event in span.get("events") or []:
                     if isinstance(event, dict) and isinstance(event.get("fixed"), str):
                         fixed.append(event["fixed"])
-    if re.match(r"\d", installed):
+    if re.match(r"v?\d", installed):
         fixed = [v for v in fixed if _version_key(v) > _version_key(installed)]
     return f"upgrade {package} to {min(fixed, key=_version_key)}" if fixed else NO_FIX[0]
 
 
-def _version_key(version: str) -> list:
-    return [(0, int(part)) if part.isdigit() else (1, part)
-            for part in re.split(r"[.\-+]", version)]
+def _version_key(version: str) -> tuple:
+    """Release numbers, then a pre-release (rc1, -beta.2) below the release it leads to."""
+    found = re.match(r"v?(\d+(?:\.\d+)*)[.\-_]?(.*)", version)
+    if not found:
+        return ((), 0, [(1, version)])
+    release = tuple(int(n) for n in found[1].split("."))
+    rest = found[2].split("+", 1)[0]
+    final = 0 if rest and not rest.startswith("post") else 1
+    return (release, final, [(0, int(part)) if part.isdigit() else (1, part)
+                             for part in re.split(r"[.\-_]|(?<=\d)(?=\D)|(?<=\D)(?=\d)",
+                                                  rest) if part])
 
 
 def _from_osv_scanner(data: object, lockfile: str) -> list[str]:
@@ -397,9 +405,9 @@ def _from_osv_scanner(data: object, lockfile: str) -> list[str]:
         raise _Malformed("OSV-Scanner output must be an object with a results list")
     found = []
     for result in data["results"]:
-        if not isinstance(result, dict) or not isinstance(result.get("packages", []), list):
+        if not isinstance(result, dict) or not isinstance(result.get("packages") or [], list):
             raise _Malformed("an OSV-Scanner result must be an object with a packages list")
-        for entry in result.get("packages", []):
+        for entry in result.get("packages") or []:
             package = entry.get("package") if isinstance(entry, dict) else None
             if not isinstance(package, dict) or not isinstance(package.get("name"), str):
                 raise _Malformed("an OSV-Scanner package must name its package")
@@ -416,7 +424,7 @@ def _from_osv_scanner(data: object, lockfile: str) -> list[str]:
                 {"ids": [v.get("id"), *(v.get("aliases") or [])]} for v in vulns]
             for group in groups:
                 ids = [str(i) for i in group["ids"] if isinstance(i, str)]
-                members = [v for v in vulns if v.get("id") in ids] or vulns[:1]
+                members = [v for v in vulns if v.get("id") in ids]
                 for v in members:
                     ids += [str(a) for a in v.get("aliases") or [] if isinstance(a, str)]
                 ids = list(dict.fromkeys(ids))
@@ -432,7 +440,7 @@ def _from_osv_scanner(data: object, lockfile: str) -> list[str]:
                             and re.fullmatch(r"CWE-\d+", c)), "CWE-1395")
                 found.append(_npm_finding(
                     package["name"], _osv_severity(members, group, ids),
-                    str(primary.get("summary") or primary.get("id") or "advisory"), cwe,
+                    str(primary.get("summary") or primary.get("id") or ids[0]), cwe,
                     advisory, str(package.get("version", "?")),
                     _osv_fix(members, package["name"], str(package.get("version", ""))),
                     lockfile, OSV_SOURCE))
@@ -604,7 +612,7 @@ def _identities(text: str, new: bool = False) -> set[tuple]:
         spots = _spots(where[0]) if where else []
         if spots and "package" in lines and "advisory" in lines:
             lockfile = _lockfile(spots[0].rsplit(":", 1)[0])
-            ids = {i.upper() for i in ADVISORY_ID.findall(lines["advisory"])}
+            ids = set(ADVISORY_ID.findall(lines["advisory"]))
             return {("dependency", lockfile, lines["package"], i)
                     for i in ids or {lines["advisory"]}}
     return set()
@@ -1368,10 +1376,7 @@ def _leads(folder: Path | None) -> tuple[set[str], set[str]]:
     for path in sorted(folder.glob("*.txt")) if folder is not None else []:
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             if found := LEAD_LINE.match(line):
-                rule = found[1].casefold()
-                # The last segment too, when it's a name (`formatted-sql-query`), not a word.
-                last = rule.rsplit(".", 1)[-1]
-                rules |= {rule, last} if "-" in last else {rule}
+                rules.add(found[1].casefold())
                 spots.add(f"{_lockfile(found[2])}:{found[3]}")
     return rules, spots
 
@@ -1392,7 +1397,9 @@ def _agent_problems(text: str, leads: tuple[set[str], set[str]] = (set(), set())
              for line in sections.get("Where", []) for s in _spots(line)}
     plain = _plain(lines)
     rules, lead_spots = leads
-    if SEMGREP.search(plain) or any(r in plain for r in rules) or spots & lead_spots:
+    # A rule id only as a whole token: the words it is named after aren't a citation.
+    cited = any(re.search(rf"(?<![\w.-]){re.escape(r)}(?![\w-]|\.\w)", plain) for r in rules)
+    if SEMGREP.search(plain) or cited or spots & lead_spots:
         if fields.get("Proof") not in ("traced", "proven") or len(spots) < 2:
             found.append("cites a Semgrep lead: a lead is only a pointer; it needs Proof "
                          "traced or proven and a source-to-sink trace (two path:line spots "
