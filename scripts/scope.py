@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 from pathlib import Path, PurePosixPath
 
@@ -116,14 +117,31 @@ def _installs(files: list[str], rules: list[dict] | None = None) -> list[dict]:
             dir_, command = str(folder), rule["command"]
             step = command if dir_ == "." else f"(cd '{dir_}' && {command})"
             found[(dir_, command)] = {"dir": dir_, "lockfile": path.as_posix(),
-                                      "command": command, "step": step}
+                                      "command": command, "step": step,
+                                      **({"tool": rule["tool"]} if "tool" in rule else {})}
     return sorted(found.values(), key=lambda i: (_natural_key(i["dir"]), i["command"]))
 
 
 SECURITY = STACKS["security"]
 
 
-LOCKFILES = {rule["lockfile"] for rule in STACKS["installs"] + STACKS["audits"]}
+LOCKFILES = {rule["lockfile"] for rule in STACKS["installs"] + STACKS["audits"]} | set(
+    STACKS["osv"]["lockfiles"])
+
+
+def _tools() -> dict[str, dict]:
+    """Each optional audit tool: whether it's on PATH, and how the owner installs it."""
+    return {name: {"found": shutil.which(name) is not None, "install": info["install"]}
+            for name, info in STACKS["tools"].items()}
+
+
+def _audit_rules(tools: dict[str, dict]) -> list[dict]:
+    """OSV-Scanner for every lockfile it reads; without it, npm and composer audit."""
+    if not tools["osv-scanner"]["found"]:
+        return STACKS["audits"]
+    osv = STACKS["osv"]
+    return [{"lockfile": name, "command": osv["command"].format(lockfile=name),
+             "tool": "osv-scanner"} for name in osv["lockfiles"]]
 
 
 def _security_file(path: PurePosixPath) -> bool:
@@ -282,7 +300,7 @@ def _checklists(part: dict, root: Path, tracked: set[str]) -> tuple[list[str], l
     wanted = list(part["stacks"])
     for framework in rule["frameworks"]:
         if any(PurePosixPath(f).suffix in framework["extensions"] for f in part["files"]) or (
-            "node" in part["stacks"] and _depends_on(
+            "node" in part["stacks"] and "dependency" in framework and _depends_on(
                 root, tracked, PurePosixPath(part["dir"]), framework["dependency"])
         ):
             wanted.append(framework["name"])
@@ -324,7 +342,7 @@ def _blank_filters(repo: str) -> dict[str, str] | None:
 
 
 def _coverage(repo: str, files: list[str], paths: list[str], parts: list[dict],
-              unsafe: list[str]) -> dict:
+              unsafe: list[str], tools: dict[str, dict]) -> dict:
     """What a security audit of this scope can't vouch for, beyond its parts."""
     skip_dirs = TEST_DIRS | set(STACKS["fixture_dirs"])
     in_scope = [f for f in files if (not paths or _under(f, paths))
@@ -346,7 +364,7 @@ def _coverage(repo: str, files: list[str], paths: list[str], parts: list[dict],
             for folder in (path.parent, *path.parent.parents) for lock in locks
         ):
             manifests.append(name)
-    audited = {a["lockfile"] for a in _installs(files, STACKS["audits"])}
+    audited = {a["lockfile"] for a in _installs(files, _audit_rules(tools))}
     commit = _git_out(repo, "rev-parse", "--verify", "-q", "HEAD^{commit}")
     # Status re-hashes changed files through their clean filter, a program the target's config
     # can name: blanked, a filtered file reads dirty or a required one fails, both a gap.
@@ -476,8 +494,9 @@ def _main(argv: list[str] | None = None) -> int:
             part["checklists"], part["no_checklist"] = _checklists(part, root, tracked_set)
     # Only an audit names its lockfile: the report checks each one was audited.
     out["installs"] = [{k: v for k, v in i.items() if k != "lockfile"} for i in _installs(files)]
-    out["audits"] = _installs(files, STACKS["audits"])
-    lockfiles = {r["lockfile"] for r in STACKS["installs"] + STACKS["audits"]}
+    tools = _tools()
+    out["audits"] = _installs(files, _audit_rules(tools))
+    lockfiles = LOCKFILES
     unsafe = sorted({
         str(PurePosixPath(f).parent) for f in files
         if PurePosixPath(f).name in lockfiles and not _safe_folder(PurePosixPath(f).parent)
@@ -486,7 +505,8 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"warning: no install or audit for {folder!r}: unsafe folder name",
               file=sys.stderr)
     if focus:
-        out["coverage"] = _coverage(args.repo, files, paths, out["parts"], unsafe)
+        out["coverage"] = _coverage(args.repo, files, paths, out["parts"], unsafe, tools)
+        out["tools"] = tools
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 

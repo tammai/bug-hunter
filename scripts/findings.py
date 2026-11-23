@@ -29,6 +29,15 @@ SECTIONS = ["Where", "Evidence", "Impact", "Fix"]
 FIELD = re.compile(r"^\*\*(Severity|Category|CWE|Proof):\*\*\s*(.*?)\s*$")
 PATH_LINE = re.compile(r"[^\s`'\"()]+:\d+")
 QUOTED_PATH_LINE = re.compile(r"`([^`]+:\d+)[^`]*`")
+# Advisory ids across databases: one vulnerability is GHSA in npm, PKSA plus CVE in composer and
+# GHSA plus CVE in OSV, so a finding is known by every id it names.
+ADVISORY_ID = re.compile(r"(?<![\w-])(?:GHSA|CVE|PKSA|PYSEC|GO|RUSTSEC|OSV|GMS|MAL|RUBYSEC)"
+                         r"-[0-9A-Za-z][0-9A-Za-z-]*[0-9A-Za-z]|(?<![\w-])GHSA-[0-9A-Za-z]",
+                         re.I)
+OSV_SOURCE = "source: osv-scanner"
+SEMGREP = re.compile(r"\bsemgrep\b", re.I)
+LEAD_MAX = 500
+LEADS_PER_PART = 50
 NPM_SEVERITY = {"critical": "critical", "high": "high", "moderate": "medium", "medium": "medium",
                 "low": "low", "info": "low"}
 INVENTORY_COLUMNS = ["field", "defined", "logged", "returned", "sent to", "stored", "deletion"]
@@ -243,13 +252,14 @@ def _from_secrets_scan(data: object) -> list[str]:
 
 
 def _npm_finding(name: str, severity: str, title_text: str, cwe: str, advisory: str,
-                 affected: str, fix: str, lockfile: str) -> str:
+                 affected: str, fix: str, lockfile: str, source: str = "") -> str:
     name, title_text, advisory, affected, fix, lockfile = map(
         _printable, (name, title_text, advisory, affected, fix, lockfile))
     return _render(
         f"Vulnerable dependency {name}: {title_text}", severity, "dependency", cwe, "advisory",
         [f"`{lockfile}:1` ({name} {affected})"],
-        f"advisory: {advisory}\npackage: {name}\naffected: {affected}\nfix: {fix}",
+        f"advisory: {advisory}\npackage: {name}\naffected: {affected}\nfix: {fix}"
+        + (f"\n{source}" if source else ""),
         f"The deployed app includes {name} {affected}, which has a published advisory "
         f"({title_text}).",
         f"{fix[:1].upper()}{fix[1:]}, then re-run the audit.",
@@ -328,6 +338,124 @@ def _from_composer_audit(data: object, lockfile: str = "composer.lock") -> list[
                 " ".join(str(adv[k]) for k in ("advisoryId", "cve", "link") if adv.get(k)),
                 str(adv.get("affectedVersions", "?")), "see the advisory", lockfile))
     return found
+
+
+def _osv_severity(vulns: list[dict], group: dict) -> str:
+    for vuln in vulns:
+        rated = str((vuln.get("database_specific") or {}).get("severity", "")).lower()
+        if rated in NPM_SEVERITY:
+            return NPM_SEVERITY[rated]
+    try:
+        score = float(group.get("max_severity", ""))
+    except (TypeError, ValueError):
+        return "medium"
+    return "critical" if score >= 9 else "high" if score >= 7 else "medium" if score >= 4 else "low"
+
+
+def _osv_fix(vulns: list[dict], package: str) -> str:
+    fixed = []
+    for vuln in vulns:
+        for affected in vuln.get("affected") or []:
+            if not isinstance(affected, dict) or (
+                    (affected.get("package") or {}).get("name") not in (None, package)):
+                continue
+            for span in affected.get("ranges") or []:
+                for event in (span.get("events") or []) if isinstance(span, dict) else []:
+                    if isinstance(event, dict) and isinstance(event.get("fixed"), str):
+                        fixed.append(event["fixed"])
+    return f"upgrade {package} to {min(fixed, key=_version_key)}" if fixed else NO_FIX[0]
+
+
+def _version_key(version: str) -> list:
+    return [(0, int(part)) if part.isdigit() else (1, part)
+            for part in re.split(r"[.\-+]", version)]
+
+
+def _from_osv_scanner(data: object, lockfile: str) -> list[str]:
+    """One advisory finding per (package, vulnerability group) OSV-Scanner reports.
+
+    A package the lockfile marks dev-only is skipped, as npm audit --omit=dev did.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+        raise _Malformed("OSV-Scanner output must be an object with a results list")
+    found = []
+    for result in data["results"]:
+        if not isinstance(result, dict) or not isinstance(result.get("packages", []), list):
+            raise _Malformed("an OSV-Scanner result must be an object with a packages list")
+        for entry in result.get("packages", []):
+            package = entry.get("package") if isinstance(entry, dict) else None
+            if not isinstance(package, dict) or not isinstance(package.get("name"), str):
+                raise _Malformed("an OSV-Scanner package must name its package")
+            groups_of = entry.get("dependency_groups") or []
+            if isinstance(groups_of, list) and "dev" in groups_of:
+                continue
+            vulns = entry.get("vulnerabilities") or []
+            if not isinstance(vulns, list) or not all(isinstance(v, dict) for v in vulns):
+                raise _Malformed(f"OSV-Scanner vulnerabilities for {package['name']} must be "
+                                 "a list of objects")
+            groups = [g for g in entry.get("groups") or [] if isinstance(g, dict)
+                      and isinstance(g.get("ids"), list)] or [
+                {"ids": [v.get("id"), *(v.get("aliases") or [])]} for v in vulns]
+            for group in groups:
+                ids = [str(i) for i in group["ids"] if isinstance(i, str)]
+                members = [v for v in vulns if v.get("id") in ids] or vulns[:1]
+                for v in members:
+                    ids += [str(a) for a in v.get("aliases") or [] if isinstance(a, str)]
+                ids = list(dict.fromkeys(ids))
+                if not ids:
+                    continue
+                ghsa = next((i for i in ids if i.upper().startswith("GHSA-")), None)
+                head = (f"https://github.com/advisories/{ghsa}" if ghsa
+                        else f"https://osv.dev/vulnerability/{ids[0]}")
+                advisory = " ".join([head, *(i for i in ids if i != ghsa)])
+                primary = members[0] if members else {}
+                cwes = (primary.get("database_specific") or {}).get("cwe_ids") or []
+                cwe = next((c for c in cwes if isinstance(c, str)
+                            and re.fullmatch(r"CWE-\d+", c)), "CWE-1395")
+                found.append(_npm_finding(
+                    package["name"], _osv_severity(members, group),
+                    str(primary.get("summary") or primary.get("id") or "advisory"), cwe,
+                    advisory, str(package.get("version", "?")),
+                    _osv_fix(members, package["name"]), lockfile, OSV_SOURCE))
+    return found
+
+
+def _lead(item: object) -> tuple[str, str] | None:
+    """(path, one escaped line) for a Semgrep result."""
+    if not isinstance(item, dict) or not isinstance(item.get("path"), str) \
+            or not isinstance(item.get("check_id"), str):
+        raise _Malformed("a Semgrep result must have a check_id and a path")
+    start = item.get("start") or {}
+    line = start.get("line") if isinstance(start, dict) else None
+    if not isinstance(line, int):
+        raise _Malformed("a Semgrep result must have a start line")
+    extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
+    meta = extra.get("metadata") if isinstance(extra.get("metadata"), dict) else {}
+    cwe = re.search(r"CWE-\d+", json.dumps(meta.get("cwe", "")))
+    path = _lockfile(item["path"]).removeprefix("./")
+    text = (f"semgrep {_printable(item['check_id'])} {_printable(path)}:{line} "
+            f"{cwe.group() if cwe else 'CWE-?'} {_printable(extra.get('message', ''))}")
+    return path, text[:LEAD_MAX]
+
+
+def _from_semgrep(data: object, scope: dict, out: Path) -> dict[str, int]:
+    """One leads file per part: Semgrep results inside the part's files, escaped and capped."""
+    if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+        raise _Malformed("Semgrep output must be an object with a results list")
+    owner = {f: str(part.get("id", n)) for n, part in enumerate(scope["parts"], 1)
+             for f in part["files"]}
+    leads: dict[str, list[str]] = {}
+    for item in data["results"]:
+        path, text = _lead(item)
+        if path in owner and len(leads.setdefault(owner[path], [])) < LEADS_PER_PART:
+            leads[owner[path]].append(text)
+    for part_id, lines in leads.items():
+        _write_private(out / f"{_safe_name(part_id)}.txt", "\n".join(lines) + "\n")
+    return {k: len(v) for k, v in leads.items()}
+
+
+def _safe_name(value: str) -> str:
+    return re.sub(r"[^0-9A-Za-z_-]", "_", value) or "_"
 
 
 def _rows(lines: list[str], inside_only: bool) -> list[list[str]]:
@@ -456,8 +584,10 @@ def _identities(text: str, new: bool = False) -> set[tuple]:
         where = _where(text)
         spots = _spots(where[0]) if where else []
         if spots and "package" in lines and "advisory" in lines:
-            return {("dependency", _lockfile(spots[0].rsplit(":", 1)[0]), lines["package"],
-                     lines["advisory"])}
+            lockfile = _lockfile(spots[0].rsplit(":", 1)[0])
+            ids = {i.upper() for i in ADVISORY_ID.findall(lines["advisory"])}
+            return {("dependency", lockfile, lines["package"], i)
+                    for i in ids or {lines["advisory"]}}
     return set()
 
 
@@ -654,6 +784,8 @@ def _check_meta(meta: object) -> dict:
                          {"file": str, "problems": list}):
         _strings(item["problems"], "--meta check_failed problems")
     _strings(meta.get("history_unknown", []), "--meta history_unknown")
+    if not isinstance(meta.get("leads_run", True), bool):
+        raise _Malformed("--meta leads_run must be true or false")
     return meta
 
 
@@ -927,6 +1059,9 @@ def _report(folder: Path, meta: dict | None, scope: dict | None = None,
     if gaps:
         out += ["Coverage gaps (each keeps this from reading Safe to deploy):",
                 *[f"- {g}" for g in gaps], ""]
+    if (meta or {}).get("leads_run") is False:
+        out += ["Note: Semgrep leads not run (not installed or it failed); the auditors read "
+                "every part from its checklists alone. This doesn't change the verdict.", ""]
     if accepted:
         severity = {g[1]: g[2]["Severity"] for g in good}
 
@@ -1157,6 +1292,13 @@ def _recheck(audit: Path, scope: dict, found: Path | None, verdicts: dict[str, s
                     continue
             reason = ("no longer found by the secrets scan" if kind != "dependency" else
                       f"no longer reported by the dependency audit of {lockfile}")
+            if kind == "dependency" and not any(ADVISORY_ID.search(k[3]) for k in idents) \
+                    and any(OSV_SOURCE in t and k[1] == lockfile
+                            for t in produced_texts for k in _identities(t)):
+                # npm lists a package that only brings a vulnerable one in; OSV-Scanner
+                # reports the vulnerable package itself, as its own finding.
+                reason = ("superseded: OSV-Scanner reports the vulnerable package itself, not "
+                          "the one that brings it in")
             if kind == "secret-legacy" and number in rotated:
                 reason = "rotated (accepted.md)" + (
                     "; the key now at this path is a separate finding"
@@ -1197,7 +1339,15 @@ def _agent_problems(text: str) -> list[str]:
     """Marks only the scripts write: an agent's finding carrying one is posing as their output."""
     # Line breaks as _parse sees them: a form feed or U+2028 also starts a line there.
     lines = "\n".join(text.splitlines())
-    return [problem for pattern, problem in SCRIPT_ONLY if pattern.search(lines)]
+    found = [problem for pattern, problem in SCRIPT_ONLY if pattern.search(lines)]
+    if SEMGREP.search(lines):
+        fields, sections = _parse(text)
+        spots = [s for line in sections.get("Where", []) for s in PATH_LINE.findall(line)]
+        if fields.get("Proof") not in ("traced", "proven") or len(set(spots)) < 2:
+            found.append("cites a Semgrep lead: a lead is only a pointer; it needs Proof "
+                         "traced or proven and a source-to-sink trace (two path:line spots "
+                         "in ## Where)")
+    return found
 
 
 def _keep_suspects(src: Path, audit: Path) -> list[str]:
@@ -1243,11 +1393,16 @@ def _main(argv: list[str] | None = None) -> int:
     sub.choices["check"].add_argument("--repo")
     sub.choices["check"].add_argument("--agent", action="store_true",
                                       help="an agent wrote it: refuse marks only scripts write")
-    for name in ("from-secrets-scan", "from-npm-audit", "from-composer-audit"):
+    for name in ("from-secrets-scan", "from-npm-audit", "from-composer-audit",
+                 "from-osv-scanner"):
         p = sub.add_parser(name)
         p.add_argument("json")
         p.add_argument("out")
         p.add_argument("--lockfile")
+    p = sub.add_parser("from-semgrep", help="one leads file per part from Semgrep's JSON")
+    p.add_argument("json")
+    p.add_argument("out")
+    p.add_argument("--scope", required=True)
     p = sub.add_parser("inventory")
     p.add_argument("blocks")
     p.add_argument("dir")
@@ -1343,10 +1498,18 @@ def _main(argv: list[str] | None = None) -> int:
             for problem in _keep_suspects(Path(args.src), Path(args.dir)):
                 print(problem)
             return 0
+        if args.command == "from-semgrep":
+            counts = _from_semgrep(_load(args.json), _check_scope(_load(args.scope)),
+                                   Path(args.out))
+            for part_id, count in sorted(counts.items()):
+                print(f"part {_piece(part_id)}: {count} leads")
+            return 0
         if args.command.startswith("from-"):
             data = _load(args.json)
             if args.command == "from-secrets-scan":
                 prefix, found = "secret", _from_secrets_scan(data)
+            elif args.command == "from-osv-scanner":
+                prefix, found = "dep", _from_osv_scanner(data, args.lockfile or "lockfile")
             elif args.command == "from-npm-audit":
                 prefix, found = "dep", _from_npm_audit(data, args.lockfile or "package-lock.json")
             else:

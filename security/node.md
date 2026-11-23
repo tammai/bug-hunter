@@ -22,3 +22,9 @@ Use with the generic and PII checklists.
 ## Logging and errors
 - `console.log(req.body)`, `logger.info({ user })`, or logging whole request or response objects, which writes passwords, tokens and personal data to logs.
 - Error handlers that send `err.stack` or `err.message` from the database to the client.
+
+## Uploads, headers and outbound calls
+- **File uploads:** `multer` (or `busboy`, `formidable`, `express-fileupload`) with no `limits.fileSize` or `fileFilter`, a stored name taken from `file.originalname`, or uploads saved under a served static directory. Users can upload scripts or huge files, or overwrite other files. CWE-434.
+- **Process spawning:** `child_process.exec` or `execSync` building a shell string, where `execFile` or `spawn` with an argument array and no `shell: true` would avoid the shell. Also an `execFile` call whose first argument comes from input, or arguments starting with `-` that the target program reads as options. CWE-78.
+- **No security headers:** an Express app with no `helmet()` (or equivalent header middleware in Fastify and Nest), no `x-powered-by` removal and no CSP on pages that render user content. Hardening gap, not an exploit by itself. CWE-693.
+- **Outbound calls with user URLs:** `axios`, `got`, `node-fetch` or `http.request` fed a URL, host or redirect target from the request with no allow-list, no block on private and link-local addresses (`169.254.169.254`, `127.0.0.1`, `10.*`), and redirects followed automatically. Also `axios` or `fetch` calls with no timeout that a client can use to pin workers. CWE-918.

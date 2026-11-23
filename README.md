@@ -218,7 +218,9 @@ It audits the code, config, schema and deployment files, security-relevant folde
 - **Session and auth:** expiry, CSRF, rate limits, password hashing.
 - **Personal data:** logged, returned beyond need, sent to third parties, stored unencrypted, or kept with no way to delete it.
 
-It also runs `npm audit` or `composer audit` where the repo has those lockfiles. Like `/hunt`, it shows the cost and waits for your yes first.
+Checklists cover Node, React, Vue, TypeScript, Python, Go, Rust and PHP, plus generic items for every OWASP Top 10 2025 category and personal data.
+
+It also audits every lockfile with [OSV-Scanner](https://google.github.io/osv-scanner/) (npm, pnpm, Yarn, Bun, uv, Poetry, Pipenv, PDM, Go, Cargo, Bundler, Composer), leaving out packages the lockfile marks dev-only. It sends package names and versions to osv.dev, or nothing at all if you choose offline and have its database. Without OSV-Scanner it falls back to `npm audit` and `composer audit`, and other lockfiles stay gaps. If [Semgrep](https://semgrep.dev) is installed, it runs the registry rulesets for your stacks first, with metrics off (the rules are downloaded; no code leaves your machine), and hands the hits to the auditors as leads they must confirm with their own trace; a hit is never a finding on its own. The command never installs either tool: it names a missing one with its install command and lets you decide. Like `/hunt`, it shows the cost and waits for your yes first.
 
 Each finding has evidence at one of three levels:
 - **proven:** a repro or a script showed it;
@@ -231,7 +233,7 @@ Every finding an agent writes is checked by a second agent that gets only the fi
 - **Blocked:** a critical or high finding is open and not accepted. A secret or a dependency advisory counts too, even when no fixed version exists ("no fix known: replace the package or accept it with a date").
 - **Not verified:** nothing blocks, but something wasn't looked at. Each gap is named:
   - a part `--max` left out, or a `paths…` argument;
-  - a stack or framework with no checklist of its own (Python, Go, Rust, PHP and React today);
+  - a stack with no checklist of its own (JVM and Ruby today);
   - files in other languages;
   - a lockfile with no dependency audit, or an audit that failed;
   - a manifest with no lockfile;
@@ -269,7 +271,7 @@ Secret values never appear in any output. Every finding and report line is check
 
 Without it, an authorization finding that rests on an assumed rule says so and is capped at medium.
 
-**Not covered yet** (each shows as a gap, so the verdict says Not verified): dependency audits for pnpm, Yarn, Python, Go, Rust, JVM and Ruby; security checklists beyond generic, Node and Vue; running services (findings that need a live database or API are traced, not proven); scanning deployed environments.
+**Not covered yet** (each shows as a gap, so the verdict says Not verified): dependency audits without OSV-Scanner for anything but npm and Composer, and for `bun.lockb`; JVM and Ruby checklists; running services (findings that need a live database or API are traced, not proven); scanning deployed environments.
 
 ## Safety
 
