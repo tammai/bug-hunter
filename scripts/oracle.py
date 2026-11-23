@@ -319,7 +319,9 @@ def build(repo: str, spec: Path, live: bool = False) -> dict:
     features: dict[str, list[dict]] = {}
     for c in criteria:
         features.setdefault(c["feature"], []).append(c)
-    named, parents = _commits_by_change(repo)
+    # Only a record naming a change can be matched to commits: without one, the walk over
+    # every commit message (the costliest call on a large repo) can answer nothing.
+    named, parents = _commits_by_change(repo) if any(r["change"] for r in records) else ({}, {})
     plans = {}
     for feature, crits in features.items():
         ids = {c["id"] for c in crits}
