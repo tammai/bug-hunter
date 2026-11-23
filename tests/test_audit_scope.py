@@ -1,10 +1,23 @@
 import json
+import os
+import shutil
+import sys
+from pathlib import Path
 
 from conftest import commit, run_script
 
 
-def scope(repo, *args):
-    result = run_script("scope", repo, *args)
+def scope(repo, *args, osv=False):
+    """scope.py's JSON; OSV-Scanner on PATH only when osv is True, so results don't depend on
+    what this machine has installed."""
+    env = None
+    if not osv:
+        # Only python's and git's own folders (resolved, so a shared bin of links can't bring
+        # the tools back in).
+        keep = [str(Path(os.path.realpath(t)).parent) for t in (sys.executable,
+                                                               shutil.which("git")) if t]
+        env = dict(os.environ, PATH=os.pathsep.join(dict.fromkeys(keep)))
+    result = run_script("scope", repo, *args, env=env)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
 
@@ -116,21 +129,23 @@ def test_lockfiles_give_dependency_audit_steps(make_repo):
         "tests/fixtures/x/package-lock.json": "",
         "a$(id)/package-lock.json": "",
     })
-    result = run_script("scope", repo)
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["audits"] == [
+    # Without OSV-Scanner, npm and composer audit where they apply (the OSV steps are tested in
+    # test_audit_stack_coverage.py).
+    assert scope(repo)["audits"] == [
         {"dir": ".", "lockfile": "package-lock.json", "command": "npm audit --omit=dev --json",
-         "step": "npm audit --omit=dev --json"},
+         "step": "npm audit --omit=dev --json", "tool": "npm"},
         {"dir": "php app", "lockfile": "php app/composer.lock",
          "command": "composer audit --no-plugins --no-scripts --format=json",
-         "step": "(cd 'php app' && composer audit --no-plugins --no-scripts --format=json)"},
+         "step": "(cd 'php app' && composer audit --no-plugins --no-scripts --format=json)",
+         "tool": "composer"},
     ]
-    assert "unsafe folder name" in result.stderr
+    assert "unsafe folder name" in run_script("scope", repo).stderr
 
 
 def test_scope_reports_coverage_gaps(make_repo):
     repo = make_repo({
         "src/app.py": "",
+        "jvm/App.java": "",
         "web/src/App.jsx": "",
         "web/package.json": json.dumps({"dependencies": {"react": "^18"}}),
         "web/package-lock.json": "",
@@ -152,11 +167,12 @@ def test_scope_reports_coverage_gaps(make_repo):
     commit(repo)
     out = scope(repo, "--focus", "security")
     by_dir = {p["dir"]: p for p in out["parts"]}
-    assert by_dir["src"]["no_checklist"] == ["python"]
-    assert by_dir["web/src"]["no_checklist"] == ["react"]
-    assert "react" not in by_dir["web/src"]["checklists"]
+    assert by_dir["src"]["no_checklist"] == [] and "python" in by_dir["src"]["checklists"]
+    assert by_dir["jvm"]["no_checklist"] == ["jvm"]
+    assert by_dir["web/src"]["no_checklist"] == []
+    assert "react" in by_dir["web/src"]["checklists"]
     assert by_dir["api"]["no_checklist"] == []
-    assert by_dir["tool"]["no_checklist"] == ["go"]
+    assert by_dir["tool"]["no_checklist"] == [] and "go" in by_dir["tool"]["checklists"]
     coverage = out["coverage"]
     assert coverage["other_files"] == {".sh": 2}
     assert coverage["manifests_without_lockfile"] == ["tool/go.mod"]
