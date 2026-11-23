@@ -537,3 +537,25 @@ def test_a_git_timeout_is_cant_say_never_clean(make_repo, monkeypatch, capsys):
         assert main([str(repo)]) == 1
         err = capsys.readouterr().err
         assert err.startswith(f"error: git timed out on {repo}"), err
+
+
+def test_only_submodules_inside_the_runs_paths_are_a_gap(make_repo, tmp_path):
+    import subprocess
+
+    def run(repo, *args):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    run(sub, "init", "-q")
+    (sub / "lib.js").write_text("x\n", encoding="utf-8")
+    run(sub, "add", "-A")
+    run(sub, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i")
+    repo = make_repo({"api/app.js": "x\n", "web/app.js": "x\n"})
+    for where in ("api/vendor/lib", "web/vendor/lib"):
+        run(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(sub), where)
+    commit(repo)
+    assert scope(repo, "--focus", "security")["coverage"]["submodules"] == [
+        "api/vendor/lib", "web/vendor/lib"]
+    assert scope(repo, "api", "--focus", "security")["coverage"]["submodules"] == [
+        "api/vendor/lib"]
