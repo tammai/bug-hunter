@@ -20,15 +20,31 @@ MAX_SPELLINGS = 256
 
 SECTIONS = ["What happens", "Steps to reproduce", "Expected", "Root cause"]
 DRAFT_NAME = re.compile(r"^(\d+)\.md$")
-URL_ORIGIN = re.compile(r"^[a-z][a-z0-9+.-]*://(?:[^@/]*@)?([^/:]+)(?::\d+)?/(.+)$", re.I)
+# Userinfo runs to the last @ before the path: a password may hold an un-escaped @.
+URL_ORIGIN = re.compile(r"^[a-z][a-z0-9+.-]*://(?:[^/]*@)?([^/:@]+)(?::\d+)?/(.+)$", re.I)
 SCP_ORIGIN = re.compile(r"^(?:[^@/]*@)?([^/:]+):(?!/)(.+)$")
+
+
+# Never the URL itself: it can carry a user name and token.
+NO_FOLDER = ("origin URL can't name a drafts folder: a path part is empty, '.' or '..', or "
+             "it holds an @ that can't be placed")
 
 
 def _origin_parts(url: str) -> list[str] | None:
     match = URL_ORIGIN.match(url) or SCP_ORIGIN.match(url)
     if not match:
         return None
-    path = match[2].rstrip("/").removesuffix(".git")
+    # Any @ left after the user info the pattern took may be more of it (a password or token
+    # holding `@`, `/`, `?` or `#`), and a real path's @ can't be told apart: refused before
+    # anything is cut, since the folder name is printed.
+    if "@" in match[1] + match[2]:
+        raise ValueError(NO_FOLDER)
+    path = match[2]
+    if url.lower().startswith(("http://", "https://")):
+        # A query or fragment can carry a token and never names the repo; in SCP and ssh
+        # paths `?` and `#` are ordinary file-name characters.
+        path = re.split(r"[?#]", path, maxsplit=1)[0]
+    path = path.rstrip("/").removesuffix(".git")
     return [match[1], *path.split("/")]
 
 
@@ -39,14 +55,13 @@ def drafts_dir(repo: str) -> Path:
         capture_output=True, text=True, encoding="utf-8",
     )
     parts = _origin_parts(result.stdout.strip()) if result.returncode == 0 else None
+    # A repo with no origin names its folder from its own name, @ and all.
     if parts is None:
         parts = ["local", Path(repo).resolve().name]
     # One folder level per URL part, so acme-web/api and acme/web-api never share a folder;
     # a "." or ".." part would climb out of ~/.bug-hunter.
     if any(part in ("", ".", "..") for part in parts):
-        # Not the URL itself: it can carry a user name and token.
-        raise ValueError("origin URL can't name a drafts folder: one of its path parts is "
-                         "empty, '.' or '..'")
+        raise ValueError(NO_FOLDER)
     return Path.home().joinpath(".bug-hunter", *parts, "drafts")
 
 
