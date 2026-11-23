@@ -228,20 +228,40 @@ def _sdlc_records(repo: Path, tracked: list[str]) -> list[dict]:
     return records
 
 
-def _commits_by_change(repo: str) -> dict[str, list[str]]:
-    """The commits naming each change file the way sdlc does, newest first."""
-    fields = _git(repo, "log", "-z", "--format=%H%x00%B").split("\0")
+def _commits_by_change(repo: str) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """The commits naming each change file the way sdlc does, newest first; every parent link."""
+    fields = _git(repo, "log", "-z", "--format=%H%x00%P%x00%B").split("\0")
     named: dict[str, list[str]] = {}
-    for commit, message in zip(fields[0::2], fields[1::2], strict=False):
+    parents: dict[str, list[str]] = {}
+    for commit, links, message in zip(fields[0::3], fields[1::3], fields[2::3], strict=False):
         commit = commit.strip()
         if not HASH.fullmatch(commit):
             continue
+        parents[commit] = links.split()
         names = set(RECORD.findall(message))
         if subject := SUBJECT.search(message.split("\n", 1)[0]):
             names.add(subject[1])
         for name in names:
             named.setdefault(name, []).append(commit)
-    return named
+    return named, parents
+
+
+def _brought_in(commit: str, parents: dict[str, list[str]]) -> set[str]:
+    """The commits a merge brings in from its other parents, short of its first-parent line."""
+    if len(parents.get(commit, [])) < 2:
+        return set()
+    line, step = set(), parents[commit][0]
+    while step and step not in line:  # the first-parent line below the merge
+        line.add(step)
+        step = (parents.get(step) or [None])[0]
+    brought, todo = set(), list(parents[commit][1:])
+    while todo:
+        step = todo.pop()
+        if step in brought or step in line:
+            continue
+        brought.add(step)
+        todo.extend(parents.get(step, []))
+    return brought
 
 
 def _numstat(repo: str, *args: str, stdin: str | None = None,
@@ -299,13 +319,17 @@ def build(repo: str, spec: Path, live: bool = False) -> dict:
     features: dict[str, list[dict]] = {}
     for c in criteria:
         features.setdefault(c["feature"], []).append(c)
-    named = _commits_by_change(repo)
+    named, parents = _commits_by_change(repo)
     plans = {}
     for feature, crits in features.items():
         ids = {c["id"] for c in crits}
         mine = [r for r in records if r["criteria"] & ids]
         changes = sorted({r["change"] for r in mine if r["change"]})
         commits = list(dict.fromkeys(h for c in changes for h in named.get(c, [])))
+        # A merge's lines are its first-parent diff, which holds what it brings in: a commit
+        # it brings in that names the same change would be counted twice.
+        brought = {h for m in commits for h in _brought_in(m, parents)}
+        commits = [h for h in commits if h not in brought]
         plans[feature] = (commits, list(dict.fromkeys(
             f for r in mine for f in r["files"] if _hunted(f, tracked))))
     # One walk over every feature's commits (a merge as its first-parent diff), and one over

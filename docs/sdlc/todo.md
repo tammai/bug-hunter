@@ -15,7 +15,6 @@
   - `_repo_path` beside `scope._relative` (not equivalent: `_relative` resolves absolute paths and maps `docs_dir: "."` to the default);
   - the install warnings repeated from `scope._main`;
   - every commit message is read even when no record names a change (CR-9);
-  - a named merge and its named branch commits are counted twice (CR-10);
   - the all-history numstat walk's cost on large repos (R2-4);
   - the hunter's brief comes from the first criterion's story file only (R2-5);
   - contracts' `check_lock` and `check_criteria` read stories differently (R2-6).
