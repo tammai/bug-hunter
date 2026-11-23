@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import sys
 from pathlib import Path, PurePosixPath
@@ -115,14 +116,22 @@ def _installs(files: list[str], rules: list[dict] | None = None) -> list[dict]:
             if not _safe_folder(folder):
                 continue
             dir_, command = str(folder), rule["command"]
-            step = command if dir_ == "." else f"(cd '{dir_}' && {command})"
             found[(dir_, command)] = {"dir": dir_, "lockfile": path.as_posix(),
-                                      "command": command, "step": step,
-                                      **({"tool": rule["tool"]} if "tool" in rule else {})}
+                                      "command": command, "step": _in_dir(dir_, command),
+                                      **({"tool": rule["tool"]} if "tool" in rule else {}),
+                                      **({"step_offline": _in_dir(dir_, rule["offline"])}
+                                         if "offline" in rule else {})}
     return sorted(found.values(), key=lambda i: (_natural_key(i["dir"]), i["command"]))
 
 
+def _in_dir(dir_: str, command: str) -> str:
+    return command if dir_ == "." else f"(cd '{dir_}' && {command})"
+
+
 SECURITY = STACKS["security"]
+# Passed to every OSV-Scanner run: otherwise it reads the target's own osv-scanner.toml, whose
+# ignore entries would hide advisories past accepted.md.
+EMPTY_OSV_CONFIG = Path(__file__).resolve().parent / "osv-scanner-empty.toml"
 
 
 LOCKFILES = {rule["lockfile"] for rule in STACKS["installs"] + STACKS["audits"]} | set(
@@ -131,6 +140,8 @@ LOCKFILES = {rule["lockfile"] for rule in STACKS["installs"] + STACKS["audits"]}
 
 def _tools() -> dict[str, dict]:
     """Each optional audit tool: whether it's on PATH, and how the owner installs it."""
+    # Windows also searches the current folder, the target repo, unless this is set.
+    os.environ["NoDefaultCurrentDirectoryInExePath"] = "1"
     return {name: {"found": shutil.which(name) is not None, "install": info["install"]}
             for name, info in STACKS["tools"].items()}
 
@@ -140,8 +151,35 @@ def _audit_rules(tools: dict[str, dict]) -> list[dict]:
     if not tools["osv-scanner"]["found"]:
         return STACKS["audits"]
     osv = STACKS["osv"]
-    return [{"lockfile": name, "command": osv["command"].format(lockfile=name),
-             "tool": "osv-scanner"} for name in osv["lockfiles"]]
+    rules = []
+    for name in osv["lockfiles"]:
+        command = osv["command"].format(config=shlex.quote(str(EMPTY_OSV_CONFIG)),
+                                        scan=osv["scan_as"].get(name, name))
+        rules.append({"lockfile": name, "command": command, "tool": "osv-scanner",
+                      "offline": osv["offline"].format(
+                          cache=shlex.quote(str(_user_cache_dir())), command=command)})
+    return rules
+
+
+def _user_cache_dir() -> Path:
+    """Where OSV-Scanner keeps its offline databases by default (Go's os.UserCacheDir).
+
+    Read before isolation moves HOME, so an offline run finds the owner's download.
+    """
+    if os.name == "nt":
+        return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches"
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+
+
+def _semgrep_step(parts: list[dict]) -> str:
+    """Semgrep over the whole copy (`.`): from-semgrep keeps only the parts' files."""
+    rules = STACKS["semgrep"]
+    sets = dict.fromkeys(rules["rulesets"][name] for part in parts
+                         for name in part.get("checklists", []) if name in rules["rulesets"])
+    return " ".join([rules["command"], *(f"--config {s}" for s in [*sets, *rules["always"]]),
+                     "."])
 
 
 def _security_file(path: PurePosixPath) -> bool:
@@ -507,6 +545,7 @@ def _main(argv: list[str] | None = None) -> int:
     if focus:
         out["coverage"] = _coverage(args.repo, files, paths, out["parts"], unsafe, tools)
         out["tools"] = tools
+        out["semgrep"] = {"step": _semgrep_step(out["parts"])}
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 

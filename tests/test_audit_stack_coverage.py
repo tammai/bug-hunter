@@ -110,7 +110,8 @@ def test_every_supported_lockfile_gets_an_osv_audit(make_repo, tmp_path):
         entry = audited[f"l{n}/{name}"]
         assert entry["tool"] == "osv-scanner", entry
         assert "osv-scanner scan source" in entry["step"] and "--format json" in entry["step"]
-        assert name in entry["step"]
+        # OSV-Scanner can't read go.sum; go.mod beside it names the same modules.
+        assert (name if name != "go.sum" else "go.mod") in entry["step"]
     assert scope["coverage"]["unaudited_lockfiles"] == []
     assert scope["tools"]["osv-scanner"]["found"] is True
 
@@ -137,7 +138,8 @@ def osv_findings(tmp_path, data, name="osv", lockfile="package-lock.json"):
     path = tmp_path / f"{name}.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     out = tmp_path / f"out-{name}"
-    result = run_script("findings", "from-osv-scanner", path, out, "--lockfile", lockfile)
+    result = run_script("findings", "from-osv-scanner", path, out, "--lockfile", lockfile,
+                        "--exit", "1")
     return result, sorted(out.glob("*.md")) if out.is_dir() else []
 
 
@@ -156,7 +158,7 @@ def test_osv_json_becomes_advisory_findings(tmp_path):
         path = tmp_path / "bad.json"
         path.write_text(bad, encoding="utf-8")
         broken = run_script("findings", "from-osv-scanner", path, tmp_path / "o",
-                            "--lockfile", "package-lock.json")
+                            "--lockfile", "package-lock.json", "--exit", "1")
         assert broken.returncode == 1 and broken.stderr.startswith("error:"), bad
         assert "Traceback" not in broken.stderr
 
@@ -199,7 +201,7 @@ def test_npm_audit_findings_keep_their_number_under_osv(tmp_path):
         path = tmp_path / f"{lockfile}.osv.json"
         path.write_text(json.dumps(one), encoding="utf-8")
         assert run_script("findings", "from-osv-scanner", path, found,
-                          "--lockfile", lockfile).returncode == 0
+                          "--lockfile", lockfile, "--exit", "1").returncode == 0
     scope["audits"].append({"dir": ".", "lockfile": "composer.lock", "tool": "osv-scanner",
                             "step": "osv-scanner scan source --lockfile composer.lock"})
     result = recheck(tmp_path, audit, scope, "--found", found, "--audited", "package-lock.json",
