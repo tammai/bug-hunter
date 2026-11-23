@@ -565,3 +565,18 @@ def test_a_named_merge_and_its_named_branch_commits_count_once(make_repo):
     _, out = scope(repo)
     part = next(p for p in out["parts"] if p["feature"] == "F-TSK-04")
     assert part["files"] == ["src/merged.py"] and part["changed_lines"] == 3, part
+
+
+def test_commit_messages_are_not_read_when_no_record_names_a_change(make_repo, monkeypatch):
+    import oracle
+
+    repo = make_repo({})
+    plain = {k: v for k, v in {**SPEC, **CODE}.items()
+             if not k.startswith((".sdlc/", "docs/sdlc/"))}
+    commit(repo, plain, "base")
+    calls = []
+    real = oracle._git
+    monkeypatch.setattr(oracle, "_git", lambda *a, **k: calls.append(a) or real(*a, **k))
+    out = oracle.build(str(repo), repo / "spec")
+    assert len(out["not_hunted"]) == 4, out
+    assert not any("--format=%H%x00%P%x00%B" in a for a in calls), calls
