@@ -1772,3 +1772,23 @@ def test_the_report_explains_a_pre_id_secret_kept_open_by_a_same_shape_sibling(t
     result = rechecked([{**local, "id": "aaaa0000aaaa0000"}])
     assert result["still_open"] == ["01"] and result["unpaired"] == []
     assert "same shape" not in report_for(tmp_path, audit, scope, meta, result)
+
+
+def test_a_recheck_whose_scan_didnt_say_what_git_could_see_is_a_gap(tmp_path):
+    scope, meta, _ = clean_facts(tmp_path)
+    audit = audit_with(tmp_path)
+    found = tmp_path / "found"
+    found.mkdir()
+    result = recheck(tmp_path, audit, scope, "--found", found, "--secrets-scanned")
+    assert result["history_unknown"] is None
+    report = report_for(tmp_path, audit, scope, meta, result)
+    assert "whether git history holds the local secrets wasn't reported" in report
+    assert verdict(report) == "## Verdict: Not verified"
+
+    data = tmp_path / "s.json"
+    data.write_text("[]", encoding="utf-8")
+    assert run_script("findings", "from-secrets-scan", data, found).returncode == 0
+    result = recheck(tmp_path, audit, scope, "--found", found, "--secrets-scanned")
+    assert result["history_unknown"] == []
+    assert verdict(report_for(tmp_path, audit, scope, meta, result)) == (
+        "## Verdict: Safe to deploy")
