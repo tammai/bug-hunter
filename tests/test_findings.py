@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 
 import pytest
@@ -1743,3 +1744,31 @@ def test_a_report_or_recheck_run_without_the_seal_says_so(tmp_path):
     assert "re-check ran without --seal" in report
     rechecked = recheck(tmp_path, audit, scope, "--seal", seal)
     assert rechecked["sealed"] is True
+
+
+def test_the_report_explains_a_pre_id_secret_kept_open_by_a_same_shape_sibling(tmp_path):
+    legacy = {k: v for k, v in SECRET_SCAN[0].items() if k != "id"}
+    local = {**SECRET_SCAN[0], "committed": False}
+    scope, meta, _ = clean_facts(tmp_path)
+    audit = audit_with(tmp_path, scripted(tmp_path, "from-secrets-scan", [legacy], "a"))
+
+    def rechecked(produced):
+        found = tmp_path / "found"
+        shutil.rmtree(found, ignore_errors=True)
+        data = tmp_path / "s.json"
+        data.write_text(json.dumps(produced), encoding="utf-8")
+        assert run_script("findings", "from-secrets-scan", data, found).returncode == 0
+        return recheck(tmp_path, audit, scope, "--found", found, "--secrets-scanned")
+
+    # Two same-shape secrets, neither at its line: which one 01 was can't be told.
+    result = rechecked([{**local, "line": 7, "id": "bbbb0000bbbb0000"},
+                        {**local, "line": 9, "id": "cccc0000cccc0000"}])
+    assert result["still_open"] == ["01"] and result["unpaired"] == ["01"]
+    report = report_for(tmp_path, audit, scope, meta, result)
+    [note] = [line for line in report.splitlines() if "same shape" in line]
+    assert "01" in note and "`- 01 rotated:" in note and "accepted.md" in note
+
+    # The only secret with its key: paired, so nothing to explain.
+    result = rechecked([{**local, "id": "aaaa0000aaaa0000"}])
+    assert result["still_open"] == ["01"] and result["unpaired"] == []
+    assert "same shape" not in report_for(tmp_path, audit, scope, meta, result)
