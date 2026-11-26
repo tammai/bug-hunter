@@ -860,6 +860,7 @@ def _check_recheck(data: object) -> dict:
     _records(data.get("cannot_check", []), "--recheck cannot_check",
              {"number": str, "reason": str})
     _strings(data.get("not_rechecked", []), "--recheck not_rechecked")
+    _strings(data.get("unpaired", []), "--recheck unpaired")
     return data
 
 
@@ -1099,6 +1100,13 @@ def _report(folder: Path, meta: dict | None, scope: dict | None = None,
     if recheck is not None and recheck.get("sealed") is False:
         out += ["Note: the re-check ran without --seal, so an edit made before it moved "
                 "findings isn't ruled out.", ""]
+    if recheck is not None:
+        out += [f"Note: earlier finding {_piece(nn)} stays open: a secret of the same shape is "
+                "still in its file, and which one it was can't be told. Once its key is "
+                f"rotated, close it with `- {_piece(nn)} rotated: <note>` in accepted.md."
+                for nn in recheck.get("unpaired", [])]
+        if recheck.get("unpaired"):
+            out.append("")
     if meta is not None and meta.get("leads_run") is not True:
         out += ["Note: Semgrep leads not run (not installed or it failed); the auditors read "
                 "every part from its checklists alone. This doesn't change the verdict.", ""]
@@ -1281,7 +1289,7 @@ def _recheck(audit: Path, scope: dict, found: Path | None, verdicts: dict[str, s
     pairs = _legacy_pairs([(n, p.read_text(encoding="utf-8", errors="replace"))
                            for n, p in numbered(audit)], produced_texts, rotated)
     result: dict[str, list] = {"fixed": [], "still_open": [], "cannot_check": [],
-                               "not_rechecked": []}
+                               "not_rechecked": [], "unpaired": []}
     for number, path in numbered(audit):
         nn = f"{number:02d}"
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -1311,6 +1319,7 @@ def _recheck(audit: Path, scope: dict, found: Path | None, verdicts: dict[str, s
                 if number in pairs and pairs[number] is None:
                     # Same-shape secrets are there, but which one this is isn't clear.
                     result["still_open"].append(nn)
+                    result["unpaired"].append(nn)
                     continue
                 matches = [pairs[number]] if number in pairs else []
             if matches:
