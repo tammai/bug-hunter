@@ -439,12 +439,22 @@ def test_an_unknown_history_for_a_local_secret_is_a_gap(tmp_path, monkeypatch, c
     [item] = [f for f in json.loads(capsys.readouterr().out) if f["path"] == ".env"]
     assert item["committed"] is False and item["history_unknown"] is True
 
+    # The scan's answer reaches the report by script: converted, re-checked, reported.
+    data = tmp_path / "s.json"
+    data.write_text(json.dumps([item]), encoding="utf-8")
+    found = tmp_path / "found"
+    assert run_script("findings", "from-secrets-scan", data, found).returncode == 0
     audit = tmp_path / "audit"
     audit.mkdir()
+    scope = tmp_path / "scope.json"
+    scope.write_text(json.dumps({"parts": [], "skipped": [], "audits": []}), encoding="utf-8")
+    rechecked = tmp_path / "recheck.json"
+    assert run_script("findings", "recheck", audit, "--scope", scope, "--found", found,
+                      "--secrets-scanned", "--out", rechecked).returncode == 0
     meta = tmp_path / "meta.json"
-    meta.write_text(json.dumps({"secrets_scanned": True, "history_unknown": [".env"]}),
-                    encoding="utf-8")
-    assert run_script("findings", "report", audit, "--meta", meta).returncode == 0
+    meta.write_text(json.dumps({"secrets_scanned": True}), encoding="utf-8")
+    assert run_script("findings", "report", audit, "--meta", meta,
+                      "--recheck", rechecked).returncode == 0
     report = (audit / "REPORT.md").read_text(encoding="utf-8")
     assert "couldn't tell whether git history holds .env" in report
 

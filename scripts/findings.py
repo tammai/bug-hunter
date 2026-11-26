@@ -169,6 +169,9 @@ def _problems(text: str) -> list[str]:
     return found
 
 
+HISTORY_UNKNOWN = "history_unknown.json"  # from-secrets-scan's answer, beside its findings
+
+
 def _write_private(path: Path, text: str | bytes) -> None:
     """Write atomically with mode 0600: audit output describes vulnerabilities."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -815,7 +818,6 @@ def _check_meta(meta: object) -> dict:
     for item in _records(meta.get("check_failed", []), "--meta check_failed",
                          {"file": str, "problems": list}):
         _strings(item["problems"], "--meta check_failed problems")
-    _strings(meta.get("history_unknown", []), "--meta history_unknown")
     if not isinstance(meta.get("leads_run", True), bool):
         raise _Malformed("--meta leads_run must be true or false")
     return meta
@@ -861,6 +863,8 @@ def _check_recheck(data: object) -> dict:
              {"number": str, "reason": str})
     _strings(data.get("not_rechecked", []), "--recheck not_rechecked")
     _strings(data.get("unpaired", []), "--recheck unpaired")
+    if data.get("history_unknown") is not None:
+        _strings(data["history_unknown"], "--recheck history_unknown")
     return data
 
 
@@ -933,13 +937,16 @@ def _gaps(scope: dict | None, meta: dict | None, recheck: dict | None,
             gaps.append("secrets scan didn't run")
         gaps += [f"{p(f['file'])} failed the format check, so no verifier saw it: "
                  + "; ".join(map(p, f["problems"])) for f in meta.get("check_failed", [])]
-        gaps += [f"couldn't tell whether git history holds {p(name)}, so its secret may be "
-                 "committed" for name in meta.get("history_unknown", [])]
     if recheck is None:
         gaps.append("earlier findings' re-check not reported (no --recheck)")
     else:
         gaps += [f"earlier finding {p(c['number'])} couldn't be re-checked: {p(c['reason'])}"
                  for c in recheck.get("cannot_check", [])]
+        if "history_unknown" in recheck and recheck["history_unknown"] is None:
+            gaps.append("whether git history holds the local secrets wasn't reported: the "
+                        "scan's history_unknown.json is missing from --found")
+        gaps += [f"couldn't tell whether git history holds {p(name)}, so its secret may be "
+                 "committed" for name in recheck.get("history_unknown") or []]
         outside = recheck.get("not_rechecked", [])
         if outside:
             gaps.append(f"{len(outside)} earlier findings not re-checked: outside this run's "
@@ -1288,8 +1295,17 @@ def _recheck(audit: Path, scope: dict, found: Path | None, verdicts: dict[str, s
     rotated = _rotated(audit)
     pairs = _legacy_pairs([(n, p.read_text(encoding="utf-8", errors="replace"))
                            for n, p in numbered(audit)], produced_texts, rotated)
-    result: dict[str, list] = {"fixed": [], "still_open": [], "cannot_check": [],
-                               "not_rechecked": [], "unpaired": []}
+    result: dict[str, list | None] = {"fixed": [], "still_open": [], "cannot_check": [],
+                                      "not_rechecked": [], "unpaired": [],
+                                      "history_unknown": []}
+    if found is not None and secrets_scanned:
+        # Written by from-secrets-scan; missing or garbled, git's answer is unknown, not "none".
+        try:
+            names = json.loads((found / HISTORY_UNKNOWN).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError, RecursionError):
+            names = None
+        ok = isinstance(names, list) and all(isinstance(n, str) for n in names)
+        result["history_unknown"] = names if ok else None
     for number, path in numbered(audit):
         nn = f"{number:02d}"
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -1611,6 +1627,9 @@ def _main(argv: list[str] | None = None) -> int:
                 prefix, found = "dep", _from_composer_audit(data,
                                                            args.lockfile or "composer.lock")
             _save(Path(args.out), prefix, found)
+            if args.command == "from-secrets-scan":
+                _write_private(Path(args.out) / HISTORY_UNKNOWN, json.dumps(
+                    [_printable(d["path"]) for d in data if d.get("history_unknown") is True]))
             return 0
         if args.command == "inventory":
             text = Path(args.blocks).read_text(encoding="utf-8")
