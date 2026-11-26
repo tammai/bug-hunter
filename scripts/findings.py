@@ -1049,7 +1049,8 @@ def _suspects(folder: Path, rejected: list[dict]) -> list[str]:
 
 
 def _report(folder: Path, meta: dict | None, scope: dict | None = None,
-            recheck: dict | None = None, sealed: bool = True) -> str:
+            recheck: dict | None = None, sealed: bool = True,
+            dedupe: dict | None = None) -> str:
     today = datetime.date.today()
     good, skipped, written = [], [], {}
     for number, path in _open(folder):
@@ -1107,6 +1108,9 @@ def _report(folder: Path, meta: dict | None, scope: dict | None = None,
     if recheck is not None and recheck.get("sealed") is False:
         out += ["Note: the re-check ran without --seal, so an edit made before it moved "
                 "findings isn't ruled out.", ""]
+    if dedupe is not None and dedupe.get("sealed") is False:
+        out += ["Note: the dedupe ran without --seal, so an edit to accepted.md made before it "
+                "merged findings isn't ruled out.", ""]
     if recheck is not None:
         out += [f"Note: earlier finding {_piece(nn)} stays open: a secret of the same shape is "
                 "still in its file, and which one it was can't be told. Once its key is "
@@ -1517,6 +1521,7 @@ def _main(argv: list[str] | None = None) -> int:
     p.add_argument("--repo")
     p.add_argument("--seal", help="what `seal` printed: refuse if accepted.md or policy.md "
                                   "changed since")
+    p.add_argument("--out", help="write whether it ran sealed and what it dropped, as JSON")
     p = sub.add_parser("report")
     p.add_argument("dir")
     p.add_argument("--seal", help="what `seal` printed: refuse if accepted.md or policy.md "
@@ -1524,6 +1529,7 @@ def _main(argv: list[str] | None = None) -> int:
     p.add_argument("--meta")
     p.add_argument("--scope", help="scope.py's JSON for this run")
     p.add_argument("--recheck", help="recheck's JSON for this run")
+    p.add_argument("--dedupe", help="dedupe's --out JSON for this run")
     p.add_argument("--fingerprints")
     p = sub.add_parser("earlier", help="list open agent findings to re-check, and those outside")
     p.add_argument("dir")
@@ -1640,16 +1646,24 @@ def _main(argv: list[str] | None = None) -> int:
         if args.command == "dedupe":
             repo = Path(args.repo) if args.repo else None
             _check_seal(Path(args.audit), args.seal, whole=False)
-            for name in _dedupe(Path(args.new), Path(args.audit), repo):
+            dropped = _dedupe(Path(args.new), Path(args.audit), repo)
+            if args.out:
+                _write_private(Path(args.out), json.dumps(
+                    {"sealed": args.seal is not None, "dropped": dropped}, indent=2) + "\n")
+            for name in dropped:
                 print(f"dropped {_piece(name)}: already reported")
             return 0
         _check_seal(Path(args.dir), args.seal, whole=False)
         meta = _check_meta(_load(args.meta)) if args.meta else None
         scope = _check_scope(_load(args.scope)) if args.scope else None
         recheck = _check_recheck(_load(args.recheck)) if args.recheck else None
+        dedupe = _load(args.dedupe) if args.dedupe else None
+        if dedupe is not None and not (isinstance(dedupe, dict)
+                                       and isinstance(dedupe.get("sealed"), bool)):
+            raise _Malformed("--dedupe must be dedupe's --out JSON, with sealed true or false")
         _write_private(Path(args.dir) / "REPORT.md",
                        _report(Path(args.dir), meta, scope, recheck,
-                               sealed=args.seal is not None))
+                               sealed=args.seal is not None, dedupe=dedupe))
         return 0
     except _Malformed as exc:
         print(f"error: {_error_text(exc)}", file=sys.stderr)

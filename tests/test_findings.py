@@ -1746,6 +1746,36 @@ def test_a_report_or_recheck_run_without_the_seal_says_so(tmp_path):
     assert rechecked["sealed"] is True
 
 
+def test_a_dedupe_run_without_the_seal_says_so_in_the_report(tmp_path):
+    scope, meta, check = clean_facts(tmp_path)
+    audit = audit_with(tmp_path)
+    seal = run_script("findings", "seal", audit).stdout.strip()
+    new = tmp_path / "new"
+    new.mkdir()
+    out = tmp_path / "dedupe.json"
+
+    def deduped(*args):
+        result = run_script("findings", "dedupe", new, audit, "--out", out, *args)
+        assert result.returncode == 0, result.stderr
+        return json.loads(out.read_text(encoding="utf-8"))
+
+    assert deduped() == {"sealed": False, "dropped": []}
+    report = report_for(tmp_path, audit, scope, meta, check, extra=(
+        "--seal", seal, "--dedupe", out))
+    assert "dedupe ran without --seal" in report
+    assert verdict(report) == "## Verdict: Safe to deploy"
+
+    assert deduped("--seal", seal)["sealed"] is True
+    report = report_for(tmp_path, audit, scope, meta, check, extra=(
+        "--seal", seal, "--dedupe", out))
+    assert "without --seal" not in report
+
+    out.write_text('{"dropped": []}', encoding="utf-8")
+    result = run_script("findings", "report", audit, "--dedupe", out)
+    assert result.returncode == 1 and "--dedupe must be" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
 def test_the_report_explains_a_pre_id_secret_kept_open_by_a_same_shape_sibling(tmp_path):
     legacy = {k: v for k, v in SECRET_SCAN[0].items() if k != "id"}
     local = {**SECRET_SCAN[0], "committed": False}

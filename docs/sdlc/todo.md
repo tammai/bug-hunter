@@ -72,9 +72,8 @@
   1. **Verdict and report:** build 2026-11-20-m-audit-verdict. Define is done and its design is approved; it stopped before Build. Resume with `/sdlc:start`, check the 12 ACs in `docs/sdlc/changes/2026-11-20-m-audit-verdict.md`, then build. Done in 2026-11-20-m-audit-verdict (2026-11-22).
   2. **Stack coverage:** brainstorm it, then build it. It covers checklists for React, TypeScript, Go, Rust, Python and PHP; OSV-Scanner for every lockfile; and Semgrep hits as leads the auditors must confirm, asking the owner to install a missing tool when it's needed. It also adds checklist items for OWASP 2025 A04 and A06–A10. Done in 2026-11-23-l-audit-stack-coverage (2026-11-23).
   3. **Live `/audit --target`:** brainstorm it, then build it. It proves code findings and probes headers, CORS, rate limits and logout on dev or UAT through `live_proxy.py`, with two or more test users of different roles and writes allowed. Never production.
-- [ ] `/audit` verdict follow-ups, round 2: tickets from the reviews of 2026-11-22-m-audit-verdict-followups (2026-11-22; L-A and L-1 done in 2026-11-26-s-report-unpaired-finding; R3-L4 and M-2 in 2026-11-26-s-history-unknown-by-script):
+- [ ] `/audit` verdict follow-ups, round 2: tickets from the reviews of 2026-11-22-m-audit-verdict-followups (2026-11-22; L-A and L-1 done in 2026-11-26-s-report-unpaired-finding; R3-L4 and M-2 in 2026-11-26-s-history-unknown-by-script; L4 in 2026-11-23-s-report-unsealed-note and 2026-11-26-s-dedupe-unsealed-note):
   - this run's own files in `$RUN` (scope, converted findings, verdicts) aren't sealed (SEC-3);
-  - a `dedupe` run without `--seal` leaves no trace in the report (L4; `recheck` and `report` done in 2026-11-23-s-report-unsealed-note);
   - single-branch clones (R3-L3's submodule half done in 2026-11-23-s-scope-submodules-in-paths);
   - `GIT_NO_LAZY_FETCH`'s floor is kept at 2.45.1 as a margin until 2.44.0 is confirmed (L-B);
   - test gaps: the filter and transport tests are skipped on Windows (L7); simplifications (L5); L-4, L-5, L-6 (`drafts.drafts_dir` reads the environment).
